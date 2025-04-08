@@ -1,15 +1,16 @@
 # MADI3D-VTK
 Morphometric Anatomical Data Investigator in Stereographic 3D
 
+VTK and PyQt-based app to visualize, organize, and process surface data. It supports stereographic 3D visualization and precise segmentation of mesh data. Source code, as well as releases for Mac and Linux, are coming soon.
 
-VTK and Pyqt based app to visualize, organize and  process surface data, supports stereographics 3D and precise segmentation of mesh Data. Source code, Mac and Linux release are coming soon.
+![interface](https://github.com/sandorbx/MADI/blob/main/MADI-interface.png?raw=true)
 
-## Quickstart guide
+## Quickstart Guide
 
-- Drag and drop your data in OBJ fomrat into the tree widget, either files or (multiple)folder
+- Drag and drop your data in OBJ format into the tree widget. You can add individual files or whole folders (including multiple folders).
 
-- In the tree widget data can be freely organized, groups and subgroups are supported, also multiple selection(shift+left click for range selection, ctrl+left click for multiple items ), for annotation there are six free form comment filed are available.
+- Within the tree widget, data can be freely organized. Groups and subgroups are supported. Multiple selection is enabled (use Shift+Left Click for range selection and Ctrl+Left Click for selecting multiple items). For annotation, six free-form comment fields are available.
 
-- Checkmarks first load the data, later you can controll visibility with them. Checkstate functions are available on the right click or "Tree" menu
+- Checkmarks initially load the data. Later, you can control visibility using them. Check state functions are accessible via right-click or from the "Tree" menu.
 
-- You can save and load your project and progress, save files are csv based and can be edited easily with excel
+- You can save and load your project progress. Save files are CSV-based and can be easily edited with Excel.
