@@ -1,4 +1,4 @@
-# MADI3D-VTK
+# MADI
 Morphometric Anatomical Data Investigator in Stereographic 3D
 
 VTK and PyQt-based app to visualize, organize, and process surface data. It supports stereographic 3D visualization and precise segmentation of mesh data. Source code, as well as releases for Mac and Linux, are coming soon.
