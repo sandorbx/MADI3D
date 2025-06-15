@@ -7,7 +7,7 @@ VTK and PyQt-based app to visualize, organize, and process surface data. It supp
 
 ## Quickstart Guide
 
-- Drag and drop your data in OBJ format into the tree widget. You can add individual files or whole folders (including multiple folders).
+- Drag and drop your data in OBJ, NRRD or Tiff format into the tree widget(crectangular space on the left side of the interface). You can add individual files or whole folders (including multiple folders).
 
 - Within the tree widget, data can be freely organized. Groups and subgroups are supported. Multiple selection is enabled (use Shift+Left Click for range selection and Ctrl+Left Click for selecting multiple items). For annotation, six free-form comment fields are available.
 
