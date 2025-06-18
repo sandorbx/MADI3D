@@ -15,6 +15,8 @@ VTK and PyQt-based app to visualize, organize, and process 3D data, volumes and 
 
 ## Quickstart Guide
 
+- Download the latest release : https://github.com/sandorbx/MADI3D/releases/download/v25.02/MADI3D_v25.02.zip , unzip in a folder and run the exe file.
+
 - Drag and drop your data in OBJ, NRRD, Tiff or ZIP (for textured 3d scans package your individual scans in a zip file with the obj and texture files together) format into the render window or the tree widget( rectangular space on the left side of the interface). You can add individual files or whole folders (including multiple folders).
 
 - Within the tree widget, data can be freely organized. Groups and subgroups are supported. Multiple selection is enabled (use Shift+Left Click for range selection and Ctrl+Left Click for selecting multiple items). For annotation, six free-form comment fields are available.
