@@ -13,6 +13,8 @@ VTK and PyQt-based app to visualize, organize, and process 3D data, volumes and 
 
 ![interface](https://github.com/sandorbx/MADI/blob/main/MADI-interface.png?raw=true)
 
+![interface](https://github.com/sandorbx/MADI/blob/main/MADI3D_03.png?raw=true)
+
 ## Quickstart Guide
 
 - Download the latest release : https://github.com/sandorbx/MADI3D/releases/download/v25.02/MADI3D_v25.02.zip , unzip in a folder and run the exe file.
