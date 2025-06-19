@@ -5,7 +5,7 @@
      width="50%"/>
 
     
-Morphometric Anatomical Data Investigator in Stereographic 3D
+Morphometric Anatomical Data Investigator with Stereographic 3D
 
 VTK and PyQt-based app to visualize, organize, and process 3D data, volumes and surfaces. It supports stereographic 3D visualization and precise segmentation of mesh data, typical use case is  Neuromorphology research, LM to EM visual matching and preparing figures, you can also annotate organize and showcase textured 3d scans. Source code, as well as releases for Mac and Linux, are coming soon.
 
