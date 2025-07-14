@@ -7,7 +7,7 @@
     
 Morphometric Anatomical Data Investigator with Stereographic 3D
 
-VTK and PyQt-based app to visualize, organize, and process 3D data, volumes and surfaces. It supports stereographic 3D visualization and precise segmentation of mesh data, typical use case is  Neuromorphology research, LM to EM visual matching and preparing figures, you can also annotate organize and showcase textured 3d scans. Source code, as well as releases for Mac and Linux, are coming soon.
+VTK and PyQt-based app to visualize, organize, and process 3D data: fluorescenct microscopy stacks, volumes and surfaces. It supports stereographic 3D visualization and precise segmentation of mesh data. Rendering of fluorescence microscopy stacks are especially accurate because MADI3D uses a similar method descriped in this paper: https://bmcbioinformatics.biomedcentral.com/articles/10.1186/s12859-017-1694-9#Sec2. Typical use case is  Neuromorphology research, LM to EM visual matching and preparing figures, you can also annotate organize and showcase textured 3d scans. Source code, as well as releases for Mac and Linux, are coming soon.
 
 ![interface](https://github.com/sandorbx/MADI/blob/main/MADI3D_02.png?raw=true)
 
@@ -17,9 +17,9 @@ VTK and PyQt-based app to visualize, organize, and process 3D data, volumes and 
 
 ## Quickstart Guide
 
-- Download the latest release : https://github.com/sandorbx/MADI3D/releases/download/v25.092/MADI3D_v25.092.zip , unzip in a folder and run the exe file.
+- Download the latest release : https://github.com/sandorbx/MADI3D/releases/download/v25.092/MADI3D_v25.10.zip , unzip in a folder and run the exe file.
 
-- Drag and drop your data in OBJ, SWC, NRRD, Tiff or ZIP (for textured 3d scans package your individual scans in a zip file with the obj and texture files together) format into the render window or the tree widget( rectangular space on the left side of the interface). You can add individual files or whole folders (including multiple folders).
+- Drag and drop your data in OBJ, SWC, NRRD, Tiff, H5j or ZIP (for textured 3d scans package your individual scans in a zip file with the obj and texture files together) format into the render window or the tree widget( rectangular space on the left side of the interface). You can add individual files or whole folders (including multiple folders).
 
 - Within the tree widget, data can be freely organized. Groups and subgroups are supported. Multiple selection is enabled (use Shift+Left Click for range selection and Ctrl+Left Click for selecting multiple items). For annotation, six free-form comment fields are available.
 
