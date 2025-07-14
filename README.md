@@ -17,7 +17,7 @@ VTK and PyQt-based app to visualize, organize, and process 3D data: fluorescenct
 
 ## Quickstart Guide
 
-- Download the latest release : https://github.com/sandorbx/MADI3D/releases/download/v25.092/MADI3D_v25.10.zip , unzip in a folder and run the exe file.
+- Download the latest release : https://github.com/sandorbx/MADI3D/releases/download/v25.092/MADI3D_v26.10.zip , unzip in a folder and run the exe file.
 
 - Drag and drop your data in OBJ, SWC, NRRD, Tiff, H5j or ZIP (for textured 3d scans package your individual scans in a zip file with the obj and texture files together) format into the render window or the tree widget( rectangular space on the left side of the interface). You can add individual files or whole folders (including multiple folders).
 
