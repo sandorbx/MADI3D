@@ -1,56 +1,95 @@
 # License for MADI3D
 
-**Copyright (c) 2025-Present University of Cologne,  
-Sandor Kovacs, Jiajun Zhang, Thomas Riemensperger, Kei Ito**  
-_All rights reserved._
+Copyright (c) 2025–Present University of Cologne,
+Sandor Kovacs, Jiajun Zhang, Thomas Riemensperger, Kei Ito
+All rights reserved.
 
-Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
 
-1. Redistributions of source code must retain the above copyright notice,  
+1. Redistributions of source code must retain the above copyright notice,
    this list of conditions, and the following disclaimer.
-2. Redistributions in binary form must reproduce the above copyright notice,  
-   this list of conditions, and the following disclaimer in the documentation  
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions, and the following disclaimer in the documentation
    and/or other materials provided with the distribution.
-3. Neither the name of the University of Cologne nor the names of its contributors  
-   may be used to endorse or promote products derived from this software without  
-   specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND  
-ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES  
-OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL  
-THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,  
-EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE  
-GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED  
-AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE  
-OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE  
-POSSIBILITY OF SUCH DAMAGE.
-
----
-
-# Acknowledgment and License for the Visualization Toolkit (VTK)
-
-This software incorporates the Visualization Toolkit (VTK), which is licensed under the following terms:
-
-**Copyright (c) 2008-Present  
-Ken Martin, Will Schroeder, Bill Lorensen  
-All rights reserved.**
-
-Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
-
-1. Redistributions of source code must retain the above copyright notice,  
-   this list of conditions, and the following disclaimer.
-2. Redistributions in binary form must reproduce the above copyright notice,  
-   this list of conditions, and the following disclaimer in the documentation  
-   and/or other materials provided with the distribution.
-3. Neither the names of Ken Martin, Will Schroeder, or Bill Lorensen nor the names  
-   of any contributors may be used to endorse or promote products derived from this  
+3. Neither the name of the University of Cologne nor the names of its
+   contributors may be used to endorse or promote products derived from this
    software without specific prior written permission.
 
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND  
-ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES  
-OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL  
-THE AUTHORS OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,  
-OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;  
-LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,  
-WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY  
-OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+
+-------------------------------------------------------------------------
+
+Third-Party Software Notices
+============================
+
+FFmpeg
+------
+
+This application includes `ffmpeg.exe`, which is licensed under the GNU General
+Public License, version 3 (GPLv3). FFmpeg is copyright © the FFmpeg developers.
+
+Website: https://ffmpeg.org  
+License: see LICENSES/ffmpeg-gplv3.txt
+
+The FFmpeg binary is used unmodified and is invoked externally via subprocess.
+
+The FFmpeg source code can be obtained from https://ffmpeg.org/download.html
+
+NeuronBridge API
+----------------
+
+This application uses the NeuronBridge API to programmatically access and
+download neuron data (e.g., H5J volumes, SWC/OBJ reconstructions).
+
+NeuronBridge is provided by the Janelia Research Campus, HHMI:
+https://neuronbridge.janelia.org
+
+All data obtained via the API is owned by Janelia/HHMI and is intended for
+non-commercial, scientific, and educational use only. This application is not
+affiliated with or endorsed by HHMI or Janelia.
+
+-------------------------------------------------------------------------
+
+Acknowledgment and License for the Visualization Toolkit (VTK)
+==============================================================
+
+This software incorporates the Visualization Toolkit (VTK), which is
+licensed under the following terms:
+
+Copyright (c) 2008–Present Ken Martin, Will Schroeder, Bill Lorensen
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions, and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions, and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+3. Neither the names of Ken Martin, Will Schroeder, or Bill Lorensen nor the
+   names of any contributors may be used to endorse or promote products
+   derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE AUTHORS OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
