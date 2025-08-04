@@ -7,7 +7,7 @@
     
 Morphometric Anatomical Data Investigator with Stereographic 3D
 
-*Now you can drag and drop Neuronbridge Color MIP search results (https://neuronbridge.janelia.org/), downlodable in csv format, matched EM neurons and LM would be fetched automatically through the Neuronbridge API.
+*Now you can drag and drop Neuronbridge Color MIP search results (https://neuronbridge.janelia.org/), downloadable in csv format, matched EM neurons and LM would be fetched automatically through the Neuronbridge API.
 
 VTK and PyQt-based app to visualize, organize, and process 3D data: fluorescenct microscopy stacks, volumes and surfaces. It supports stereographic 3D visualization and precise segmentation of mesh data. Rendering of fluorescence microscopy stacks are especially accurate because MADI3D uses a similar method descriped in this paper: https://bmcbioinformatics.biomedcentral.com/articles/10.1186/s12859-017-1694-9#Sec2.  Typical use case is  Neuromorphology research, LM to EM visual matching and preparing figures, you can also annotate organize and showcase textured 3d scans. Source code, as well as releases for Mac and Linux, are coming soon.
 
