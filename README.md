@@ -16,9 +16,17 @@ VTK based app to visualize, organize, and process 3D data: fluorescenct microsco
 ![interface](https://github.com/sandorbx/MADI/blob/main/MADI-interface.png?raw=true)
 
 
+## Downloads
+
+Public binary releases are temporarily unavailable while the distribution
+package is being updated.
+
+New Windows, macOS, and Linux releases will be published here when ready.
+
 ## Quickstart Guide
 
-- Download the latest release: [MADI3D v29.58](https://github.com/sandorbx/MADI3D/releases/download/v29/MADI3D_v29.58.zip) , unzip and run the exe file.
+Once a current MADI3D release is available, download the package for your
+platform, extract it if required, and launch MADI3D.
 
 - Drag and drop your data in OBJ, SWC, NRRD, Tiff, NII, H5j or ZIP (for textured 3d scans package your individual scans in a zip file with the obj and texture files together) format into the render window or the tree widget( rectangular space on the left side of the interface). You can add individual files or whole folders (including multiple folders).
 
@@ -33,3 +41,8 @@ VTK based app to visualize, organize, and process 3D data: fluorescenct microsco
 - You can save and load your project progress. Save files are CSV-based and can be easily edited with Excel.
   
 - You can set animation and record and mp4 video through the Animation and recording panel.
+
+## License
+
+MADI3D is distributed as free-to-use proprietary software. See the
+[License](License) for the applicable terms.
