@@ -7,6 +7,9 @@
    
 Morphometric Anatomical Data Investigator with Stereographic 3D
 
+
+# Downloads are temporary disabled, a new redesigned version with a built in LM to EM matching workflow and integrated CMTK registration will debut at the  upcoming Neurofly 2026 conference  https://neurofly.org/y2026/
+
 *Now you can drag and drop Neuronbridge Color MIP search results (https://neuronbridge.janelia.org/), downloadable in csv format, matched EM neurons and LM would be fetched automatically through the Neuronbridge API.
 
 VTK based app to visualize, organize, and process 3D data: fluorescenct microscopy stacks, volumes and surfaces. It supports stereographic 3D visualization and precise segmentation of mesh data. Rendering of fluorescence microscopy stacks are especially accurate because MADI3D uses a similar method descriped in this paper: https://bmcbioinformatics.biomedcentral.com/articles/10.1186/s12859-017-1694-9#Sec2.  Typical use case is  Neuromorphology research, LM to EM visual matching and preparing figures, you can also annotate organize and showcase textured 3d scans. MADI3D is distributed as free-to-use proprietary software; its source code is maintained privately. Development contributions and research collaborations are welcome by arrangement.
