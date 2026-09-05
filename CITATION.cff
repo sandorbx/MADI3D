@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: >-
+  If you use MADI3D in research, please cite the software release and the
+  relevant scientific methods referenced in the project documentation.
+title: MADI3D
+type: software
+repository-code: https://github.com/sandorbx/MADI3D
+url: https://madi3d.org
+authors:
+  - family-names: Kovacs
+    given-names: Sandor
+  - family-names: Zhang
+    given-names: Jiajun
+  - family-names: Riemensperger
+    given-names: Thomas
+  - family-names: Ito
+    given-names: Kei

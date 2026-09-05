@@ -1,0 +1,190 @@
+MADI3D Mixed Distribution License
+Version 2.0 — 26 August 2026
+
+Copyright (c) 2025–Present Sandor Kovacs, Jiajun Zhang,
+Thomas Riemensperger, Kei Ito
+All rights reserved except where an express open-source or third-party license
+grants additional rights.
+
+1. Scope and license map
+
+MADI3D uses a mixed licensing model.
+
+Unless a file or component is expressly identified as open-source or
+third-party material, MADI3D source code, official executable releases,
+documentation, and project-owned assets are governed by the proprietary terms
+in this license.
+
+Selected reusable scientific components are separately offered under the GNU
+Affero General Public License version 3 only (AGPL-3.0-only). The authoritative
+scope of that grant is listed in OpenSource/README.md, and the AGPL license text
+is provided in OpenSource/LICENSE.
+
+Third-party software, libraries, data, icons, codecs, templates, and other
+components remain governed by their own licenses and notices. Nothing in this
+license overrides rights or obligations imposed by those third-party licenses.
+
+If a file-specific license or SPDX notice conflicts with this license, the
+file-specific notice controls for that file.
+
+2. Free right to use official MADI3D binary releases
+
+Subject to the proprietary terms below, the copyright holders grant each
+recipient a non-exclusive, worldwide, royalty-free right to install and use
+unmodified official MADI3D binary releases for any lawful purpose, including
+personal, academic, educational, nonprofit, governmental, research, and
+commercial internal use.
+
+A user may install MADI3D on multiple devices under that user's control. An
+organization may make reasonable copies of an official unmodified binary for
+internal deployment within the same legal entity.
+
+MADI3D places no claim on data processed with the software or on scientific
+results, figures, screenshots, videos, measurements, analyses, or other output
+created by a user with the software.
+
+3. Open-source scientific components
+
+The project may publish scientific algorithms and reusable scientific
+infrastructure when doing so directly benefits research and the wider
+scientific community.
+
+The initial open-source scope includes the project-owned registration,
+stitching, volumetric segmentation, and volume-rendering components identified
+in OpenSource/README.md.
+
+Those components are licensed to recipients under AGPL-3.0-only. The AGPL
+permits use, study, modification, redistribution, and commercial activity,
+including charging for copies or services, subject to its source-availability,
+copyleft, notice, and network-interaction requirements. No additional
+non-commercial or no-sale restriction is imposed on the AGPL-covered
+components.
+
+The MADI3D project may also use the same components in official proprietary
+MADI3D releases under separate rights held by, assigned to, or licensed to the
+project. This dual-licensing arrangement does not grant recipients a
+proprietary license to the AGPL-covered source.
+
+A private development checkout is not by itself a public source release.
+Public distribution of an AGPL-covered component must include the applicable
+source and license information required by the AGPL.
+
+4. Proprietary MADI3D source code
+
+Except for files expressly covered by OpenSource/README.md or by another
+open-source or third-party license, no public source-code license is granted.
+
+Private source access may be provided to approved contributors or collaborators
+under separate written authorization and the applicable contributor agreement.
+Access to proprietary source code does not grant a right to publish,
+redistribute, sublicense, disclose, or make that source code available to any
+third party.
+
+5. Restrictions applying to proprietary MADI3D
+
+Except where expressly permitted by this license or required by applicable law,
+you may not:
+
+(a) redistribute proprietary MADI3D binaries to third parties outside internal
+    deployment within one legal entity;
+(b) sell, rent, sublicense, repackage, or commercially redistribute the
+    proprietary MADI3D application;
+(c) provide the proprietary MADI3D application itself, or substantial
+    interactive access to its proprietary functionality, as a paid hosted or
+    managed software service for third parties without prior written
+    permission;
+(d) modify, adapt, translate, reverse engineer, decompile, or disassemble
+    proprietary MADI3D binaries;
+(e) remove or alter copyright, licensing, attribution, or proprietary notices;
+(f) use the MADI3D name or logo to imply endorsement, affiliation, or an
+    official derivative product without prior written permission.
+
+These restrictions do not limit rights granted under AGPL-3.0-only or another
+applicable license for separately licensed components, and do not limit rights
+that cannot lawfully be restricted in the user's jurisdiction.
+
+6. Support, sponsored development, and other services
+
+This license grants software rights only. Technical support, training,
+consulting, integration work, sponsored development, custom features, and other
+professional services may be offered separately under their own terms.
+
+Open-source publication does not prevent any person or organization from
+charging for lawful support, development, consulting, integration, hosting, or
+other services permitted by the applicable component license.
+
+7. Contributions and dual licensing
+
+Contributions are accepted under the current MADI3D Contributor and Source
+Access Agreement or another written agreement approved by the project.
+
+Contributions designated for the open-source scientific scope may be published
+under AGPL-3.0-only while also being used in official MADI3D releases under the
+separate rights granted to the project. Contributors retain copyright in their
+original work unless a separate agreement states otherwise.
+
+8. Project contributors and institutional acknowledgement
+
+Project contributors and acknowledgements include:
+
+Sandor Kovacs
+Jiajun Zhang
+Thomas Riemensperger
+Kei Ito
+Daniel Wickeroth
+
+Institutional acknowledgement:
+
+University of Cologne (Universität zu Köln)
+
+Listing a person or institution in this acknowledgement does not by itself
+assert copyright ownership, employment, endorsement, partnership, or
+responsibility for every part of MADI3D.
+
+9. Trademarks and project identity
+
+This license does not grant trademark rights in the MADI3D name, logo, or other
+project branding. Open-source rights in source files do not grant the right to
+present a modified application as an official MADI3D release.
+
+10. No warranty
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT, ACCURACY, RELIABILITY, OR FITNESS
+FOR SCIENTIFIC, CLINICAL, DIAGNOSTIC, OR OTHER HIGH-STAKES USE.
+
+Users remain responsible for validating results and determining whether MADI3D
+is suitable for their intended workflow.
+
+Separately licensed components remain subject to the warranty provisions of
+their respective licenses.
+
+11. Limitation of liability
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+SHALL NOT BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,
+OR CONSEQUENTIAL DAMAGES, INCLUDING LOSS OF DATA, LOSS OF PROFITS, BUSINESS
+INTERRUPTION, OR INVALID SCIENTIFIC RESULTS, ARISING FROM OR RELATED TO THE USE
+OF OR INABILITY TO USE MADI3D, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
+DAMAGE.
+
+Separately licensed components remain subject to the liability provisions of
+their respective licenses.
+
+12. Termination
+
+Rights granted for the proprietary portion of MADI3D terminate automatically
+if you materially violate this license. Upon termination, you must stop using
+and delete copies of the proprietary MADI3D material covered by this license,
+except to the extent retention is required by law.
+
+Rights relating to separately licensed open-source or third-party components
+are governed by their respective licenses.
+
+13. Earlier releases
+
+This license applies only to MADI3D releases explicitly distributed with it.
+Any earlier MADI3D release distributed under a different license remains
+subject to the license that accompanied that release. Nothing in this license
+revokes rights previously granted under an earlier license.
