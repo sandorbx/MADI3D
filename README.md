@@ -21,6 +21,37 @@ Pre-built packages are available for:
 
 ➡️ **[Download the latest MADI3D release](https://github.com/sandorbx/MADI3D/releases)**
 
+## Install MADI3D
+
+The four platform-specific MADI3D assets on the GitHub Releases page are the actual distributable archives. **Download the package for your platform and extract it exactly once.** There is no second MADI3D archive inside it. GitHub also generates separate `Source code` ZIP/TAR archives automatically; those are source snapshots, not runnable MADI3D packages.
+
+### Windows x64
+
+1. Download `MADI3D-Windows-x64.zip` from the latest release.
+2. Extract the ZIP once to a normal writable folder.
+3. Open the extracted `MADI3D` folder and run `MADI3D.exe`.
+4. The public beta is not currently code-signed, so Windows SmartScreen may show a first-run warning. Continue only when the file came from the official MADI3D release and its checksum matches `SHA256SUMS.txt`.
+
+### Ubuntu/Linux x64
+
+1. Download `MADI3D-Linux-x64.tar.gz`.
+2. Extract the archive once.
+3. Run `MADI3D/MADI3D` from the extracted folder.
+4. Optional: move the extracted `MADI3D` folder to its permanent location first, then run `MADI3D/install-launcher.sh` to add the desktop launcher for the current user.
+
+### macOS Apple Silicon
+
+1. Download `MADI3D-macOS-arm64.zip`.
+2. Extract the ZIP once.
+3. Move `MADI3D.app` to Applications if desired, then open it.
+4. The public beta is not currently Apple-notarized or code-signed. If Gatekeeper blocks the first launch, use macOS's standard user-approved Open / Privacy & Security override only after verifying that the package came from the official release and matches `SHA256SUMS.txt`.
+
+### macOS Intel
+
+Follow the same macOS procedure using `MADI3D-macOS-x64.zip`.
+
+Packaged releases are self-contained and do not require a separate Python environment. `SHA256SUMS.txt` on each release can be used to verify the downloaded archive before running it.
+
 ---
 
 ## What MADI3D can do
@@ -479,7 +510,7 @@ Multichannel and time-series microscopy data are also supported in relevant work
 
 Go to the **[Releases](https://github.com/sandorbx/MADI3D/releases)** page and download the package for your operating system.
 
-Extract the archive and start MADI3D.
+Extract the archive and start MADI3D. See **Install MADI3D** above for the exact package name and platform-specific first-run instructions.
 
 Packaged releases do not require a separate Python development environment.
 
