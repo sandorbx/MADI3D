@@ -23,7 +23,7 @@ Pre-built packages are available for:
 
 ## Install MADI3D
 
-The four platform-specific MADI3D assets on the GitHub Releases page are the actual distributable archives. **Download the package for your platform and extract it exactly once.** There is no second MADI3D archive inside it. GitHub also generates separate `Source code` ZIP/TAR archives automatically; those are source snapshots, not runnable MADI3D packages.
+The four platform-specific MADI3D assets on the GitHub Releases page are the actual distributable archives. Download the package for your platform and extract it. GitHub also generates separate `Source code` ZIP/TAR archives automatically; those are source snapshots, not runnable MADI3D packages.
 
 ### Windows x64
 
