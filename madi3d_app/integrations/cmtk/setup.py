@@ -7,6 +7,7 @@ import hashlib
 import os
 import platform
 import queue
+import shlex
 import shutil
 import subprocess
 import threading
@@ -46,6 +47,23 @@ UBUNTU_WSL_IMAGES = {
 }
 DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 MAX_WSL_IMAGE_BYTES = 2 * 1024 * 1024 * 1024
+
+NATIVE_OSASCRIPT = "/usr/bin/osascript"
+NATIVE_INSTALLER = "/usr/sbin/installer"
+CMTK_MACOS_PKG_NAME = "cmtk-3.4.0-dev-macos-arm64-gcd.pkg"
+CMTK_MACOS_ARM64_PKG_URL = (
+    "https://github.com/jefferis/cmtk/releases/download/natdev-latest/"
+    + CMTK_MACOS_PKG_NAME
+)
+# Pinned against the natdev-latest asset as published 2026-09-09. jefferis/cmtk has no
+# stable, versioned release with a macOS .pkg asset yet, so this is a rolling
+# pre-release tag that upstream can replace the file under. If that happens,
+# verification below fails closed with a clear error instead of installing something
+# unverified; update this hash (after re-verifying the new asset) when it does.
+CMTK_MACOS_ARM64_PKG_SHA256 = (
+    "003b827c49f36c06f6a431cd8ef4e2537c3dbe0a621c958d40640f68bfb3ef0f"
+)
+MAX_MACOS_PKG_BYTES = 200 * 1024 * 1024  # actual asset is ~52 MB; generous ceiling
 
 
 class _WSL2FeatureUnavailable(CMTKUnavailableError):
@@ -309,6 +327,37 @@ def _windows_wsl_architecture():
     raise CMTKUnavailableError(
         f"Automatic CMTK setup does not have an Ubuntu WSL image for architecture '{machine}'."
     )
+
+
+def _macos_architecture():
+    machine = str(platform.machine() or "").strip().lower()
+    if machine in ("arm64", "aarch64"):
+        return "arm64"
+    raise CMTKUnavailableError(
+        f"Automatic CMTK setup does not have a macOS package for architecture '{machine}'. "
+        "Intel Macs: install the contributed CMTK-3.4.0-contrib-MacOSX.zip from "
+        "https://www.nitrc.org/projects/cmtk/ (or build from source), then choose "
+        "'Use an existing CMTK installation'."
+    )
+
+
+def _macos_setup_unavailable_reason(manager):
+    if manager.platform_name() != "macos":
+        return "Automatic macOS package installation is available only on macOS."
+    try:
+        _macos_architecture()
+    except CMTKUnavailableError as exc:
+        return str(exc)
+    missing = [
+        label
+        for path, label in ((NATIVE_OSASCRIPT, "osascript"), (NATIVE_INSTALLER, "installer"))
+        if not _system_executable_available(path)
+    ]
+    if missing:
+        return (
+            "Required system tools are unavailable: " + ", ".join(missing) + "."
+        )
+    return ""
 
 
 def _managed_storage_root(manager):
@@ -816,6 +865,171 @@ def _automatic_windows_setup(
     return backend
 
 
+def _macos_pkg_cache_path(manager):
+    return _managed_storage_root(manager) / "Downloads" / CMTK_MACOS_PKG_NAME
+
+
+def _download_verified_macos_pkg(
+    destination, log, *, cancel_check=None, urlopen=request.urlopen
+):
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(destination.name + ".part")
+    if destination.exists() and not destination.is_file():
+        raise CMTKUnavailableError(
+            f"The CMTK package cache path is not a file: {destination}"
+        )
+
+    if destination.is_file():
+        log("Checking cached CMTK installer package.")
+        try:
+            cached_sha256 = _sha256_path(destination, cancel_check=cancel_check)
+        except CMTKSetupCancelled:
+            raise
+        except Exception as exc:
+            log(f"Cached CMTK package could not be verified and will be replaced: {exc}")
+            destination.unlink(missing_ok=True)
+        else:
+            if cached_sha256.lower() == CMTK_MACOS_ARM64_PKG_SHA256.lower():
+                log(f"Using cached verified CMTK package: {destination}")
+                log(f"Verified CMTK package SHA-256: {cached_sha256}")
+                return destination
+            log("Cached CMTK package failed SHA-256 verification and was discarded.")
+            destination.unlink(missing_ok=True)
+
+    temporary.unlink(missing_ok=True)
+    log(f"Downloading {CMTK_MACOS_PKG_NAME}.")
+    log(CMTK_MACOS_ARM64_PKG_URL)
+    digest = hashlib.sha256()
+    downloaded = 0
+    next_report = 16 * 1024 * 1024
+    http_request = request.Request(
+        CMTK_MACOS_ARM64_PKG_URL, headers={"User-Agent": "MADI3D-CMTK-setup"}
+    )
+
+    try:
+        with urlopen(http_request, timeout=60) as response, temporary.open("wb") as output:
+            raw_length = response.headers.get("Content-Length", "")
+            try:
+                content_length = int(raw_length)
+            except (TypeError, ValueError):
+                content_length = 0
+            if content_length > MAX_MACOS_PKG_BYTES:
+                raise CMTKUnavailableError(
+                    "The CMTK installer package is unexpectedly large."
+                )
+
+            while True:
+                if _cancel_requested(cancel_check):
+                    raise CMTKSetupCancelled("CMTK package download was cancelled.")
+                chunk = response.read(DOWNLOAD_CHUNK_SIZE)
+                if not chunk:
+                    break
+                downloaded += len(chunk)
+                if downloaded > MAX_MACOS_PKG_BYTES:
+                    raise CMTKUnavailableError(
+                        "The CMTK installer package exceeded the safety size limit."
+                    )
+                output.write(chunk)
+                digest.update(chunk)
+                if downloaded >= next_report:
+                    if content_length:
+                        percent = min(100, int(downloaded * 100 / content_length))
+                        log(f"Downloaded {downloaded // (1024 * 1024)} MiB ({percent}%).")
+                    else:
+                        log(f"Downloaded {downloaded // (1024 * 1024)} MiB.")
+                    next_report += 16 * 1024 * 1024
+    except (CMTKSetupCancelled, CMTKUnavailableError):
+        temporary.unlink(missing_ok=True)
+        raise
+    except Exception as exc:
+        temporary.unlink(missing_ok=True)
+        raise CMTKUnavailableError(
+            f"The CMTK installer package could not be downloaded: {exc}"
+        ) from exc
+
+    actual_sha256 = digest.hexdigest()
+    if actual_sha256.lower() != CMTK_MACOS_ARM64_PKG_SHA256.lower():
+        temporary.unlink(missing_ok=True)
+        raise CMTKUnavailableError(
+            "The downloaded CMTK package failed SHA-256 verification. The file was "
+            "discarded and was not installed. If jefferis/cmtk has published a new "
+            "build under the natdev-latest tag, MADI3D's pinned hash needs updating "
+            "(see the comment above CMTK_MACOS_ARM64_PKG_SHA256)."
+        )
+    os.replace(temporary, destination)
+    log(f"Verified CMTK package SHA-256: {actual_sha256}")
+    return destination
+
+
+def _run_elevated_macos_install(manager, pkg_path, log, *, timeout=1200, cancel_check=None):
+    """Run the CMTK .pkg installer elevated via the native macOS admin-password prompt."""
+    shell_cmd = f"{NATIVE_INSTALLER} -pkg {shlex.quote(str(pkg_path))} -target /"
+    # Escape for embedding inside an AppleScript double-quoted string literal.
+    escaped = shell_cmd.replace("\\", "\\\\").replace('"', '\\"')
+    script = f'do shell script "{escaped}" with administrator privileges'
+    log("macOS administrator approval is required for this setup step.")
+    return _run_command(
+        manager,
+        [NATIVE_OSASCRIPT, "-e", script],
+        log,
+        timeout=timeout,
+        description="Elevated CMTK installation",
+        cancel_check=cancel_check,
+        # A cancelled osascript can leave installer running under launchd as root;
+        # honour cancellation immediately after this protected step, as the
+        # Windows elevated-install path already does.
+        allow_terminate=False,
+    )
+
+
+def _automatic_macos_setup(
+    manager, tools, log, stage, cancel_check=None, *, reinstall=False
+):
+    unavailable_reason = _macos_setup_unavailable_reason(manager)
+    if unavailable_reason:
+        raise CMTKUnavailableError(
+            unavailable_reason + " Use an existing CMTK installation instead."
+        )
+
+    architecture = _macos_architecture()
+    pkg_path = _macos_pkg_cache_path(manager)
+
+    stage(f"Downloading CMTK for macOS ({architecture})")
+    pkg_path = _download_verified_macos_pkg(pkg_path, log, cancel_check=cancel_check)
+
+    if _cancel_requested(cancel_check):
+        raise CMTKSetupCancelled("CMTK setup was cancelled.")
+
+    stage("Reinstalling CMTK" if reinstall else "Installing CMTK")
+    log(
+        ("Reinstalling" if reinstall else "Installing")
+        + " CMTK from the verified installer package. macOS will prompt for an "
+        "administrator password."
+    )
+    _run_elevated_macos_install(manager, pkg_path, log, cancel_check=cancel_check)
+
+    if _cancel_requested(cancel_check):
+        raise CMTKSetupCancelled("CMTK setup was cancelled.")
+    stage("Validating CMTK tools")
+    manager.invalidate()
+    backend = manager.detect(tools)
+    if backend is None:
+        raise CMTKUnavailableError(
+            "CMTK installation completed but validation still failed.\n\n"
+            + manager.last_status.diagnostic_text()
+        )
+    if _cancel_requested(cancel_check):
+        raise CMTKSetupCancelled("CMTK setup was cancelled.")
+    log("CMTK validation passed: " + ", ".join(tools))
+    try:
+        pkg_path.unlink()
+        log("Removed the downloaded installer package after successful setup.")
+    except Exception as exc:
+        log(f"WARNING: Could not remove the downloaded installer package: {exc}")
+    return backend
+
+
 def _linux_distribution_id():
     try:
         for line in Path("/etc/os-release").read_text(
@@ -986,10 +1200,16 @@ def _choose_existing_backend(manager, parent):
             raise CMTKSetupCancelled()
         backend = WSLCMTKBackend(str(distro), runner=manager.runner)
     else:
+        if manager.platform_name() == "linux":
+            default_path = "/usr/bin/cmtk"
+        elif manager.platform_name() == "macos":
+            default_path = "/usr/local/bin/cmtk"
+        else:
+            default_path = ""
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
             parent,
             "Choose the CMTK launcher",
-            "/usr/bin/cmtk" if manager.platform_name() == "linux" else "",
+            default_path,
         )
         if not path:
             raise CMTKSetupCancelled()
@@ -1043,6 +1263,15 @@ def _setup_dialog(manager, tools, parent=None, *, force_setup=False):
                         )
                 elif manager.platform_name() == "windows":
                     backend = _automatic_windows_setup(
+                        manager,
+                        tools,
+                        self.log.emit,
+                        self.stage.emit,
+                        cancel_check=self.cancel_check,
+                        reinstall=self.reinstall,
+                    )
+                elif manager.platform_name() == "macos":
+                    backend = _automatic_macos_setup(
                         manager,
                         tools,
                         self.log.emit,
@@ -1168,6 +1397,23 @@ def _setup_dialog(manager, tools, parent=None, *, force_setup=False):
                         "cmtk package from configured repositories and may request "
                         "administrator authentication. MADI3D does not enable additional "
                         "repositories automatically."
+                    )
+            elif manager.platform_name() == "macos":
+                unavailable_reason = _macos_setup_unavailable_reason(manager)
+                if unavailable_reason:
+                    note_text = (
+                        unavailable_reason
+                        + " Choose an existing CMTK installation."
+                    )
+                    self.auto.setEnabled(False)
+                    self.existing.setChecked(True)
+                else:
+                    note_text = (
+                        "Automatic setup downloads the CMTK installer package from "
+                        "jefferis/cmtk, verifies its SHA-256 checksum, and runs it with "
+                        "macOS's installer tool. You will be prompted for an "
+                        "administrator password. Apple Silicon only; Intel Macs should "
+                        "choose an existing CMTK installation."
                     )
             else:
                 note_text = (
