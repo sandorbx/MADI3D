@@ -1023,8 +1023,10 @@ def _extract_macos_archive(archive_path, install_root, log, *, cancel_check=None
             f"The CMTK archive did not contain the expected launcher at "
             f"{CMTK_MACOS_LAUNCHER_RELPATH}."
         )
-    # `filter="data"` clears the executable bit on extracted files, so restore it for
-    # the launcher and the tools it dispatches to.
+    # The archive already carries mode 0755 and tarfile's data filter preserves
+    # execute bits (it only strips setuid/setgid/sticky and group/other write), so
+    # this is belt-and-braces: it keeps the install usable if a future upstream
+    # rebuild ships the tree without the executable bit set.
     for path in [launcher, *(staging / "usr/local/lib/cmtk/bin").glob("*")]:
         if path.is_file():
             try:
