@@ -570,8 +570,13 @@ class CMTKManager:
                 data["user"] = backend.user
             else:
                 data.pop("user", None)
+        else:
+            data.pop("distro", None)
+            data.pop("user", None)
+            data.pop("managed_distro", None)
         if managed is True:
-            data["managed_distro"] = True
+            if isinstance(backend, WSLCMTKBackend):
+                data["managed_distro"] = True
             data["selection_source"] = "managed"
         elif managed is False:
             data.pop("managed_distro", None)
@@ -753,7 +758,10 @@ class CMTKManager:
             backend = NativeCMTKBackend(runner=self.runner, cmtk_command=command)
             ok, probe_details = backend.probe(tools)
             if ok:
-                return self.accept_backend(backend, tools, probe_details)
+                return self.accept_backend(
+                    backend, tools, probe_details,
+                    managed=None if command == configured else False,
+                )
             details.extend(probe_details[-1:])
 
         self.mark_unavailable(
