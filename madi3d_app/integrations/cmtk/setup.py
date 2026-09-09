@@ -962,6 +962,28 @@ def _download_verified_macos_pkg(
     return destination
 
 
+def _macos_user_is_admin():
+    """Best-effort check of whether the current user is in the local 'admin' group.
+
+    Returns True/False, or None if it could not be determined. Never used to block
+    Automatic setup outright -- admin rights on managed Macs are often granted
+    dynamically by a separate self-service tool, so the user may gain them between
+    an initial check and the actual install step. Used only to make a subsequent
+    elevation failure's error message tell the user what actually went wrong,
+    instead of surfacing macOS's generic (and in this case misleading) "password
+    was incorrect" text.
+    """
+    try:
+        proc = subprocess.run(
+            ["/usr/bin/id", "-Gn"], capture_output=True, check=False, timeout=10, text=True,
+        )
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    return "admin" in proc.stdout.split()
+
+
 def _run_elevated_macos_install(manager, pkg_path, log, *, timeout=1200, cancel_check=None):
     """Run the CMTK .pkg installer elevated via the native macOS admin-password prompt."""
     shell_cmd = f"{NATIVE_INSTALLER} -pkg {shlex.quote(str(pkg_path))} -target /"
@@ -969,18 +991,40 @@ def _run_elevated_macos_install(manager, pkg_path, log, *, timeout=1200, cancel_
     escaped = shell_cmd.replace("\\", "\\\\").replace('"', '\\"')
     script = f'do shell script "{escaped}" with administrator privileges'
     log("macOS administrator approval is required for this setup step.")
-    return _run_command(
-        manager,
-        [NATIVE_OSASCRIPT, "-e", script],
-        log,
-        timeout=timeout,
-        description="Elevated CMTK installation",
-        cancel_check=cancel_check,
-        # A cancelled osascript can leave installer running under launchd as root;
-        # honour cancellation immediately after this protected step, as the
-        # Windows elevated-install path already does.
-        allow_terminate=False,
-    )
+    try:
+        return _run_command(
+            manager,
+            [NATIVE_OSASCRIPT, "-e", script],
+            log,
+            timeout=timeout,
+            description="Elevated CMTK installation",
+            cancel_check=cancel_check,
+            # A cancelled osascript can leave installer running under launchd as root;
+            # honour cancellation immediately after this protected step, as the
+            # Windows elevated-install path already does.
+            allow_terminate=False,
+        )
+    except CMTKUnavailableError as exc:
+        # macOS reports a bare "administrator username or password was incorrect"
+        # (-60007) both for a genuine bad password AND for having no admin
+        # credential to offer at all -- notably, on Macs where admin rights are
+        # granted temporarily by a separate tool (e.g. Privileges.app), rather than
+        # standing 'admin' group membership. The dialog never even renders in that
+        # second case. Distinguish them so the user isn't left chasing a typo that
+        # was never the problem (confirmed against a real managed Mac: see PR
+        # description).
+        if _macos_user_is_admin() is False:
+            raise CMTKUnavailableError(
+                "CMTK's installer needs administrator/root privileges, and this account is "
+                "not currently a member of the macOS 'admin' group -- so macOS never "
+                "actually offered a password prompt. On a managed/institutional Mac, admin "
+                "rights are often granted temporarily through a separate self-service tool "
+                "(e.g. Privileges.app, or your organization's equivalent); request them that "
+                "way and retry. Otherwise, ask an administrator to enter their credentials "
+                "at the prompt, or install CMTK yourself and choose 'Use an existing CMTK "
+                "installation' instead.\n\nOriginal error: " + str(exc)
+            ) from exc
+        raise
 
 
 def _automatic_macos_setup(
