@@ -966,7 +966,7 @@ def _download_verified_macos_archive(
     return destination
 
 
-def _safe_macos_archive_members(archive, log):
+def _safe_macos_archive_members(archive):
     """Reject anything that is not a plain file/directory under the expected prefix.
 
     The archive's SHA-256 is verified before this runs, so this is defence in depth
@@ -1002,9 +1002,11 @@ def _extract_macos_archive(archive_path, install_root, log, *, cancel_check=None
     log(f"Extracting CMTK into {install_root}")
     try:
         with tarfile.open(archive_path, "r:gz") as archive:
-            members = _safe_macos_archive_members(archive, log)
-            # data_filter additionally strips setuid/setgid bits and rejects links
-            # escaping the destination; available on all Python versions MADI3D ships.
+            members = _safe_macos_archive_members(archive)
+            # The data filter additionally strips setuid/setgid/sticky bits and
+            # rejects links escaping the destination. It exists on Python 3.12+ and
+            # in the backports to 3.8.17/3.9.17/3.10.12/3.11.4; the explicit member
+            # validation above is what carries the guarantee on older interpreters.
             if hasattr(tarfile, "data_filter"):
                 archive.extractall(staging, members=members, filter="data")
             else:  # pragma: no cover - only on interpreters predating the backport
