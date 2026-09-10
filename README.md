@@ -44,7 +44,7 @@ The four platform-specific MADI3D assets on the GitHub Releases page are the act
 1. Download `MADI3D-macOS-arm64.zip`.
 2. Extract the ZIP once.
 3. Move `MADI3D.app` to Applications if desired, then open it.
-4. The public beta is not currently Apple-notarized or code-signed. If Gatekeeper blocks the first launch, use macOS's standard user-approved Open / Privacy & Security override only after verifying that the package came from the official release and matches `SHA256SUMS.txt`.
+4. The public beta is ad-hoc signed, but not Developer ID signed or notarized. If Gatekeeper blocks the first launch, use macOS's standard user-approved Open / Privacy & Security override only after verifying that the package came from the official release and matches `SHA256SUMS.txt`.
 
 ### macOS Intel
 
