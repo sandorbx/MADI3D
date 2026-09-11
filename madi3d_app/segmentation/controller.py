@@ -998,7 +998,7 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
         output_box = QtWidgets.QGroupBox("Output", self)
         output_layout = QtWidgets.QGridLayout(output_box)
         self.extract = QtWidgets.QPushButton("Extract Selected Voxels", self)
-        self.extract.setToolTip("Create a normal MADI3D intensity volume containing the selected voxels of the current frame.")
+        self.extract.setToolTip("Create a full-size MADI3D intensity volume on the original source grid, with unselected voxels set to zero.")
         self.extract.clicked.connect(self.extractRequested)
         output_layout.addWidget(self.extract, 0, 0)
         self.delete_selected = QtWidgets.QPushButton("Delete Selected", self)
@@ -1007,7 +1007,7 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
         output_layout.addWidget(self.delete_selected, 0, 1)
         self.extract_original = QtWidgets.QPushButton("Extract Original Signal", self)
         self.extract_original.setToolTip(
-            "Copy original source intensities under the segmentation support plus the 3-D mask margin."
+            "Copy original source intensities under the segmentation support plus the 3-D mask margin into a full-size volume on the original source grid."
         )
         self.extract_original.clicked.connect(self.extractOriginalRequested)
         output_layout.addWidget(self.extract_original, 1, 0)
@@ -4517,17 +4517,19 @@ class VolumeSegmentationController(QtCore.QObject):
         source = target.image
 
         def work(report):
-            report(10, "Extract: cropping")
-            crop = vtk.vtkImageClip()
-            crop.SetInputData(source)
-            crop.ClipDataOn()
-            crop.SetOutputWholeExtent(*extent)
-            crop.Update()
-            report(65, "Extract: applying mask")
+            report(10, "Extract: copying source grid")
             output = vtk.vtkImageData()
-            output.DeepCopy(crop.GetOutput())
+            output.DeepCopy(source)
+            report(65, "Extract: applying mask")
             arr = _image_array_view(output)
-            arr[mask == 0] = 0
+            source_arr = _image_array_view(source)
+            roi_slices = extent_slices_zyx(extent, output.GetExtent())
+            output_roi = arr[roi_slices]
+            source_roi = source_arr[roi_slices]
+            if output_roi.shape != mask.shape:
+                raise RuntimeError("Extracted-selection ROI geometry mismatch.")
+            arr.fill(0)
+            np.copyto(output_roi, source_roi, where=(mask != 0))
             output.GetPointData().GetScalars().Modified()
             output.Modified()
             report(95, "Extract: finalizing")
@@ -5545,18 +5547,18 @@ class VolumeSegmentationController(QtCore.QObject):
             )
             roi[extent_slices_zyx(mask_extent, out_extent)] = mask
             roi = self._dilate_roi(roi, out_extent, source, margin)
-            report(45, "Original signal: cropping")
-            crop = vtk.vtkImageClip()
-            crop.SetInputData(source)
-            crop.ClipDataOn()
-            crop.SetOutputWholeExtent(*out_extent)
-            crop.Update()
+            report(45, "Original signal: copying source grid")
             output = vtk.vtkImageData()
-            output.DeepCopy(crop.GetOutput())
+            output.DeepCopy(source)
             arr = _image_array_view(output)
-            if arr.shape != roi.shape:
+            source_arr = _image_array_view(source)
+            roi_slices = extent_slices_zyx(out_extent, output.GetExtent())
+            output_roi = arr[roi_slices]
+            source_roi = source_arr[roi_slices]
+            if output_roi.shape != roi.shape:
                 raise RuntimeError("Original-signal ROI geometry mismatch.")
-            arr[roi == 0] = 0
+            arr.fill(0)
+            np.copyto(output_roi, source_roi, where=(roi != 0))
             output.GetPointData().GetScalars().Modified()
             output.Modified()
             report(95, "Original signal: finalizing")
