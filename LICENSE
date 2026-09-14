@@ -1,5 +1,9 @@
 MADI3D Mixed Distribution License
-Version 2.0 — 26 August 2026
+Version 2.1 — 13 September 2026
+
+Licensor and developer: Sandor Kovacs
+Contact: developer@madi3d.org
+Legal contact details: https://madi3d.org/impressum/
 
 Copyright (c) 2025–Present Sandor Kovacs, Jiajun Zhang,
 Thomas Riemensperger, Kei Ito
@@ -94,7 +98,9 @@ you may not:
     managed software service for third parties without prior written
     permission;
 (d) modify, adapt, translate, reverse engineer, decompile, or disassemble
-    proprietary MADI3D binaries;
+    proprietary MADI3D binaries, except as necessary to exercise rights granted
+    by LGPL-covered components, including debugging modifications to those
+    components and replacing or relinking those libraries;
 (e) remove or alter copyright, licensing, attribution, or proprietary notices;
 (f) use the MADI3D name or logo to imply endorsement, affiliation, or an
     official derivative product without prior written permission.
@@ -102,6 +108,17 @@ you may not:
 These restrictions do not limit rights granted under AGPL-3.0-only or another
 applicable license for separately licensed components, and do not limit rights
 that cannot lawfully be restricted in the user's jurisdiction.
+
+In particular, recipients may modify and replace LGPL-covered components,
+including Qt, PySide6, Shiboken6, pygame and linked codec libraries, and
+install and run MADI3D with compatible modified versions
+of those components. The unmodified-binary condition in section 2 and the
+restrictions in this section do not prohibit these activities or reverse
+engineering for debugging such modifications. No separate permission, fee, or
+MADI3D signing key is required. The LGPL-covered components remain governed by
+their own licenses; see LICENSES/Qt-PySide6-NOTICE.md and the accompanying license
+texts and replacement instructions. The other LGPL components and their
+replacement instructions are identified in LICENSES/THIRD-PARTY.md.
 
 6. Support, sponsored development, and other services
 

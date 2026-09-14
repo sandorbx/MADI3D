@@ -6,7 +6,7 @@
 
 **Morphometric Anatomical Data Investigator in Stereographic 3D**
 
-MADI3D is a cross-platform scientific 3D microscopy workbench for **visualization, segmentation, stitching, registration, time-series exploration, morphological comparison, and reproducible scientific figure preparation**.
+MADI3D is a cross-platform scientific 3D microscopy workbench for **visualization, segmentation, Color-Depth MIP generation and search, stitching, registration, time-series exploration, and reproducible scientific figure preparation**.
 
 Built with **VTK, PySide6, and Qt 6**, MADI3D was developed primarily for neuroscience and fluorescence microscopy, with particular emphasis on high-quality volumetric rendering, neuromorphology, light-microscopy to electron-microscopy comparison, and interactive work with complex 3D datasets.
 
@@ -20,6 +20,8 @@ Pre-built packages are available for:
 - **macOS Intel**
 
 ➡️ **[Download the latest MADI3D release](https://github.com/sandorbx/MADI3D/releases)**
+
+See the [changelog](CHANGELOG.md) for release changes. The capabilities below describe **0.32.0 beta**; check the Releases page for currently published packages.
 
 ## Install MADI3D
 
@@ -40,6 +42,8 @@ The four platform-specific MADI3D assets on the GitHub Releases page are the act
 4. Optional: move the extracted `MADI3D` folder to its permanent location first, then run `MADI3D/install-launcher.sh` to add the desktop launcher for the current user.
 
 ### macOS Apple Silicon
+
+Source builds with the PDFium backend require macOS 13 or newer (both Mac architectures).
 
 1. Download `MADI3D-macOS-arm64.zip`.
 2. Extract the ZIP once.
@@ -62,11 +66,13 @@ MADI3D brings a range of normally separate 3D imaging tasks into one workspace:
 - 3D and 4D/time-series visualization
 - Smart Brush volume segmentation
 - Mesh Brush painting and segmentation
+- Color-Depth MIP generation for Brain and VNC search spaces
+- offline Color-Depth search and NeuronBridge precomputed-result lookup
+- selective candidate loading for LM ↔ EM comparison in 3D
 - tiled 3D microscopy stitching
 - CMTK rigid, affine, and deformable registration
 - landmark-assisted registration
 - interactive transforms
-- LM ↔ EM neuron comparison through NeuronBridge
 - SWC and mesh visualization
 - stereoscopic 3D inspection
 - FreeFly navigation
@@ -158,6 +164,41 @@ This allows MADI3D to provide appropriate workflows for both forms of 3D biologi
 
 ---
 
+# Color-Depth MIP generation
+
+After segmentation, create a **Color-Depth MIP** in the NeuronBridge panel. Depth is encoded as color so a neuronal projection can be compared with compatible library images.
+
+- Generate from a microscopy signal, a binary mask, or the original signal restricted by its segmentation mask.
+- Select **Brain** or **VNC** and retain the chosen template mapping, depth interval, intensity conversion and alignment warnings.
+- Preview locally, then save the image with its generation evidence. Existing PNG, TIFF and JPEG Color MIPs can also be opened.
+- Use mesh geometry for exploratory binary occupancy. **SWC inputs use the rendered surface**, including its display-radius and tessellation choices; this is experimental and is not a canonical skeleton projection.
+
+Registration must establish the intended template placement. A matching image size or exploratory placement does not establish anatomical alignment. Saved query images retain the pixels and evidence used at generation; later source edits mark affected queries out of date.
+
+---
+
+# NeuronBridge and Color-Depth search
+
+The **[NeuronBridge](https://neuronbridge.janelia.org/)** workspace connects query preparation, morphology search, result review and candidate loading.
+
+- **Search locally:** install a supported public image library once, then search the installed snapshot offline without uploading the query. Installation is resumable, with download and disk requirements shown before it starts.
+- **Supported collections:** Hemibrain v1.2.1 and FlyWire FAFB v783 realigned for Brain; MANC v1.2.1 for VNC. The selected library must match the query profile.
+- **Public lookup and CSV import:** retrieve public precomputed results or import a NeuronBridge result CSV. Hosted custom-query submission is not included.
+- **Review and compare:** browse ranked results and thumbnails, check the candidates to add, and load their available LM volumes or EM SWC/OBJ geometry into the 3D scene. Loading selected candidates keeps the remaining result evidence available.
+- **Save and reopen:** retain query images, library and release identities, scores, warnings and scene associations in the project. Saved result review works without the installed search library or a network connection; retrieving uncached 3D assets still needs network access.
+
+EM results with a different sex label in the CSV and public metadata can still load thumbnails and uniquely identified geometry. Retrieval records both values and shows the discrepancy in result details and Object Info. The original CSV is preserved; conflicting library, neuron, image or alignment identities still prevent retrieval. LM image selection continues to check sex and acquisition details.
+
+Local search uses positive Color-Depth matching. Its scores are not interchangeable with every hosted NeuronBridge scoring method. Numerical reference tests do not establish biological matching accuracy or full-library performance; inspect candidates in 3D before drawing biological conclusions.
+
+![NeuronBridge result browser with a selected candidate loaded in the MADI3D 3D scene](img/neuronbridge-search.png)
+
+**Example:** register microscopy to the appropriate template → segment the neuronal signal → generate and save its Color-Depth MIP → search a compatible installed library → load selected candidates → compare their full 3D morphology and save the project.
+
+Method reference: [Clements et al., *NeuronBridge: an intuitive web application for neuronal morphology search across large data sets*](https://doi.org/10.1186/s12859-024-05732-7).
+
+---
+
 # 3D microscopy stitching
 
 MADI3D includes a native workflow for assembling tiled 3D microscopy acquisitions.
@@ -177,6 +218,7 @@ The stitching system supports:
 - smooth fusion of overlapping image data
 - editing and review of tile placement
 - processing of multiple stitching jobs
+- automatic 3D overlap discovery, with coarse-to-fine retries for weak supported candidates
 
 Rather than simply aligning tiles sequentially, MADI3D can determine a globally consistent configuration from the relationships between overlapping volumes.
 
@@ -207,6 +249,7 @@ Registration tools include:
 - deformable registration
 - reformatting of registered data
 - preservation and application of registration transforms
+- configurable QC thresholds with retained measurements and independent execution status
 
 The registration workflow is suitable for applications such as aligning fluorescence microscopy specimens into standardized anatomical coordinate spaces.
 
@@ -364,29 +407,6 @@ The Animation and Recording panel can be used to:
 - create material for presentations and publications
 
 Animation can be combined with the same rendering, photographic, stereoscopic, and scene-organization tools used for normal interactive visualization.
-
----
-
-# NeuronBridge and LM ↔ EM comparison
-
-MADI3D integrates with **[NeuronBridge](https://neuronbridge.janelia.org/)** for light-microscopy to electron-microscopy neuron matching.
-
-NeuronBridge Color MIP search results can be dragged into MADI3D, and associated LM and EM data can be retrieved automatically through the NeuronBridge API.
-
-This allows a workflow such as:
-
-**LM microscopy → registration → segmentation → morphology search → candidate retrieval → high-resolution 3D comparison**
-
-Candidate neurons can then be inspected together with the original microscopy data instead of being evaluated solely from 2D projections.
-
-This is particularly important for neuronal morphology, where two candidates that appear similar in projection may differ clearly when their complete arborization is examined in 3D.
-
-MADI3D is therefore especially useful for the final verification stage of an LM ↔ EM matching workflow.
-
-NeuronBridge, its morphology-search architecture, and its public APIs are described in:
-
-> Clements et al., *NeuronBridge: an intuitive web application for neuronal morphology search across large data sets*  
-> https://doi.org/10.1186/s12859-024-05732-7
 
 ---
 
@@ -555,7 +575,15 @@ The two tools provide dedicated workflows appropriate to their respective data t
 
 ---
 
-## 6. Stitch tiled microscopy
+## 6. Generate a Color-Depth MIP and search
+
+For neuron comparison, first establish the appropriate Brain or VNC template alignment. Add the signal or segmentation to the **NeuronBridge → Color-Depth MIP** sources, preview it, and save the query image.
+
+In **Search**, install a compatible public library and search locally. Review the results, check the candidates to add, and load selected 3D sources for comparison. Save the project to retain the query and result evidence.
+
+---
+
+## 7. Stitch tiled microscopy
 
 Select overlapping 3D microscopy tiles and use the Stitching workflow to estimate their relative positions and produce a fused volume.
 
@@ -563,7 +591,7 @@ Multichannel datasets can retain consistent tile geometry across channels.
 
 ---
 
-## 7. Register data
+## 8. Register data
 
 Use the Registration panel for rigid, affine, or deformable registration.
 
@@ -573,7 +601,7 @@ Registered transforms can subsequently be used to reformat related data.
 
 ---
 
-## 8. Explore
+## 9. Explore
 
 Use the standard camera controls, clipping tools, stereoscopic rendering, or **FreeFly** to inspect the dataset.
 
@@ -581,7 +609,7 @@ For time-series data, navigate through time while preserving the surrounding 3D 
 
 ---
 
-## 9. Prepare figures
+## 10. Prepare figures
 
 Configure:
 
@@ -597,7 +625,7 @@ Then use **Save View** to save the figure together with the corresponding MADI3D
 
 ---
 
-## 10. Save your project
+## 11. Save your project
 
 Save the project to retain your organization, properties, annotations, transforms, and processing state for later work.
 
@@ -671,6 +699,16 @@ text is provided in [`OpenSource/LICENSE`](OpenSource/LICENSE).
 
 Third-party components retain their own licenses and notices under
 [`LICENSES/`](LICENSES/).
+
+MADI3D uses Qt, PySide6 and Shiboken6 6.9.3 under **LGPLv3**. See the
+[Qt notice](LICENSES/Qt-PySide6-NOTICE.md), [LGPLv3](LICENSES/LGPL-3.0.txt),
+[GPLv3](LICENSES/GPL-3.0.txt), and [library replacement instructions](LICENSES/Qt-REPLACEMENT.md).
+Releases carrying this notice provide the exact Qt and Qt for Python source
+archives as free assets alongside the binaries in the
+[MADI3D release repository](https://github.com/sandorbx/MADI3D/releases).
+The license expressly permits compatible library replacement and reverse
+engineering for debugging those modifications. Store/MSIX distribution requires
+a separate review of replacement and execution rights.
 
 ---
 

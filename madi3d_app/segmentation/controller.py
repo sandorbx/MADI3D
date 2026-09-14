@@ -29,6 +29,7 @@ from vtkmodules.util import numpy_support
 
 from madi3d_storage import atomic_write_json, config_file, read_json_object
 from madi3d_version import MADI3D_VERSION
+from madi3d_app.scene.object_metadata import inherit_object_origin
 from madi3d_app.scene.tree_roles import (
     ROLE_BACKING_SOURCE_ID,
     ROLE_CHANNEL_ORDER,
@@ -101,6 +102,17 @@ def _sanitize_settings(raw):
     data["seed_radius"] = int(round(_clamp(raw.get("seed_radius", data["seed_radius"]), 2, 260)))
     data["growth_radius"] = int(round(_clamp(raw.get("growth_radius", data["growth_radius"]), 5, 1600)))
     data["growth_radius"] = max(data["seed_radius"], data["growth_radius"])
+    stored_radii = raw.get("brush_radii", {})
+    if not isinstance(stored_radii, dict):
+        stored_radii = {}
+    data["brush_radii"] = {}
+    for mode in ("select", "unselect", "diffuse"):
+        radii = stored_radii.get(mode, {})
+        if not isinstance(radii, dict):
+            radii = {}
+        seed = int(round(_clamp(radii.get("seed_radius", data["seed_radius"]), 2, 260)))
+        growth = int(round(_clamp(radii.get("growth_radius", data["growth_radius"]), 5, 1600)))
+        data["brush_radii"][mode] = {"seed_radius": seed, "growth_radius": max(seed, growth)}
     try:
         color = [float(v) for v in raw.get("mask_color", data["mask_color"])[:3]]
         if len(color) != 3:
@@ -560,6 +572,8 @@ class SegmentationTargetSnapshot:
     target_vc: object = field(repr=False, compare=False)
     target_item: object = field(repr=False, compare=False)
     source_image: object = field(repr=False, compare=False)
+    source_scalars: object = field(repr=False, compare=False)
+    source_scalars_mtime: int
     acquisition_id: str
     channel_id: str
     backing_source_id: str
@@ -651,10 +665,59 @@ class SegmentationState:
         return self.frame_states[index]
 
 
+def _mask_patch(frame_state, extent):
+    result = np.zeros(extent_shape_zyx(extent), dtype=np.uint8)
+    if frame_state is None or frame_state.mask is None:
+        return result
+    inter = extent_intersection(frame_state.mask_extent, extent)
+    if inter is None:
+        return result
+    src = _image_array_view(frame_state.mask)
+    result[extent_slices_zyx(inter, extent)] = src[
+        extent_slices_zyx(inter, frame_state.mask_extent)
+    ]
+    return result
+
+
+
+
 class _JobSignals(QtCore.QObject):
     progress = QtCore.Signal(int, int, str)
     finished = QtCore.Signal(int, object)
     failed = QtCore.Signal(int, str, str)
+    cancelled = QtCore.Signal(int)
+
+
+class SegmentationCancelled(RuntimeError):
+    """Cooperative cancellation; no mask or output has been committed."""
+
+
+class _SegmentationProgress:
+    def __init__(self, cancel_event, emit):
+        self.cancel_event = cancel_event
+        self.emit = emit
+
+    def check_cancelled(self):
+        if self.cancel_event.is_set():
+            raise SegmentationCancelled()
+
+    def __call__(self, value, text=""):
+        self.check_cancelled()
+        self.emit(max(0, min(100, int(value))), str(text))
+
+    def update(self, algorithm):
+        self.check_cancelled()
+
+        def check_abort(caller, _event):
+            if self.cancel_event.is_set():
+                caller.AbortExecuteOn()
+
+        observer = algorithm.AddObserver(vtk.vtkCommand.ProgressEvent, check_abort)
+        try:
+            algorithm.Update()
+        finally:
+            algorithm.RemoveObserver(observer)
+        self.check_cancelled()
 
 
 class _SegmentationJob(QtCore.QRunnable):
@@ -663,29 +726,24 @@ class _SegmentationJob(QtCore.QRunnable):
         self.job_id = int(job_id)
         self.function = function
         self.signals = _JobSignals()
-        self.done_event = threading.Event()
-        self.result = None
-        self.error = None
-        self.error_details = ""
+        self.cancel_event = threading.Event()
 
     @QtCore.Slot()
     def run(self):
         try:
-            def report(value, text=""):
-                self.signals.progress.emit(
-                    self.job_id,
-                    max(0, min(100, int(value))),
-                    str(text or ""),
-                )
-            self.result = self.function(report)
+            report = _SegmentationProgress(
+                self.cancel_event,
+                lambda value, text: self.signals.progress.emit(self.job_id, value, text),
+            )
+            report.check_cancelled()
+            result = self.function(report)
+            report.check_cancelled()
+        except SegmentationCancelled:
+            self.signals.cancelled.emit(self.job_id)
         except Exception as exc:
-            self.error = str(exc)
-            self.error_details = traceback.format_exc()
-            self.signals.failed.emit(self.job_id, self.error, self.error_details)
-        finally:
-            self.done_event.set()
-        if self.error is None:
-            self.signals.finished.emit(self.job_id, self.result)
+            self.signals.failed.emit(self.job_id, str(exc), traceback.format_exc())
+        else:
+            self.signals.finished.emit(self.job_id, result)
 
 
 class VolumeSegmentationPanel(QtWidgets.QWidget):
@@ -694,10 +752,12 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
     THRESHOLD_SLIDER_STEPS = 4096
     THRESHOLD_SLIDER_POWER = 2.0
 
+    controlsChanged = QtCore.Signal()
     enabledToggled = QtCore.Signal(bool)
     modeChanged = QtCore.Signal(str)
     brushInteractionChanged = QtCore.Signal(bool)
     newSelectionRequested = QtCore.Signal()
+    cancelOperationRequested = QtCore.Signal()
     clearRequested = QtCore.Signal()
     seedRadiusChanged = QtCore.Signal(int)
     growthRadiusChanged = QtCore.Signal(int)
@@ -722,14 +782,13 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
         self.setSizePolicy(panel_policy)
         self.setMinimumWidth(0)
         self.settings = _sanitize_settings(settings or load_settings())
+        self.settings.update(self.settings["brush_radii"]["select"])
         self._threshold_min = 0.0
         self._threshold_max = 1.0
         self._syncing = False
         self._speck_sync = False
         self._background_busy = False
-        self._speck_busy = False
         self._last_brush_mode = "select"
-        self._mode_buttons_locked = False
 
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(6, 6, 6, 6)
@@ -737,9 +796,13 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
 
         self.quick_help = QtWidgets.QLabel(
             "Select a loaded volume, enable Segmentation, then choose a brush. "
-            "Select adds threshold-passing signal, Unselect removes selected voxels, and Diffuse grows connected signal inside the Growth radius. "
-            "With a brush active: left-drag paints, right-drag rotates, middle-drag pans, and Ctrl+wheel changes the active brush radius. "
-            "Click the active brush again to return to normal navigation without ending the segmentation session.",
+            "Select adds signal at or above Signal Threshold under the seed brush. "
+            "Diffuse grows from threshold-passing seeds through connected eligible signal within Growth Radius. "
+            "Unselect removes selected voxels and ignores Signal Threshold. "
+            "Live Threshold recalculates the latest edit, when it is Select or Diffuse, as you adjust the threshold. "
+            "Recover faint signal lets Diffuse follow somewhat dimmer connected signal while keeping seeds stricter. "
+            "With a brush active: left-drag paints, right-drag rotates, middle-drag pans, and Ctrl+wheel changes radius. "
+            "Click the active brush again for normal navigation; the session stays enabled.",
             self,
         )
         self.quick_help.setWordWrap(True)
@@ -822,21 +885,9 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
         brush_layout.addWidget(
             self._labeled_row("Growth radius", self.growth_slider, self.growth_spin, "px")
         )
-        root.addWidget(self.brush_box)
-
-        selection_row = QtWidgets.QHBoxLayout()
-        self.new_selection = QtWidgets.QPushButton("New Selection", self)
-        self.new_selection.setToolTip("Clear the current mask as one undoable edit and switch to Select.")
-        self.new_selection.clicked.connect(self.newSelectionRequested)
-        selection_row.addWidget(self.new_selection)
-        self.clear = QtWidgets.QPushButton("Clear", self)
-        self.clear.setToolTip("Clear the current frame's segmentation mask. This can be undone.")
-        self.clear.clicked.connect(self.clearRequested)
-        selection_row.addWidget(self.clear)
-        root.addLayout(selection_row)
-
-        threshold_frame = QtWidgets.QFrame(self)
-        threshold_frame.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
+        self.threshold_box = QtWidgets.QGroupBox("Signal Threshold", self.brush_box)
+        threshold_frame = self.threshold_box
+        threshold_frame.setStyleSheet("QGroupBox { font-weight: 600; }")
         threshold_layout = QtWidgets.QVBoxLayout(threshold_frame)
         threshold_layout.setContentsMargins(6, 6, 6, 6)
         threshold_layout.setSpacing(4)
@@ -857,15 +908,10 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
         self.threshold_spin.setKeyboardTracking(False)
         self.threshold_spin.setMinimumWidth(100)
         threshold_tip = (
-            "Signal below this intensity is treated as background for Select and Diffuse. "
-            "The slider gives extra travel to low intensities so faint-signal thresholds "
-            "are easier to tune precisely. "
-            "Changing it recalculates only the latest applied Select/Diffuse stroke. "
-            "By default, dragging updates the displayed number immediately and recalculates the 3-D "
-            "segmentation only once when you release the handle. Enable Live threshold preview below "
-            "for throttled cached feedback while dragging; release still performs one exact update. "
-            "The value box applies an exact update when its edit is committed. "
-            "Undo to revisit an earlier stroke, adjust the threshold, then Redo later strokes."
+            "Minimum seed signal for Select and Diffuse. Unselect ignores this value. "
+            "Changing it recalculates the latest edit when that edit is Select or Diffuse. "
+            "Dragging applies the change on release; Live Threshold also recalculates while dragging. "
+            "Undo to revisit an earlier edit, adjust the threshold, then Redo later edits."
         )
         self.threshold_slider.setToolTip(threshold_tip)
         self.threshold_spin.setToolTip(threshold_tip)
@@ -883,9 +929,8 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
         # floor as well; selecting a volume immediately replaces this with a
         # target-range-aware value.
         self.configure_threshold(0.0, 1.0, 0.05)
-        threshold_layout.addWidget(
-            self._labeled_row("Signal threshold", self.threshold_slider, self.threshold_spin, "")
-        )
+        threshold_layout.addWidget(self.threshold_slider)
+        threshold_layout.addWidget(self.threshold_spin, 0, Qt.AlignmentFlag.AlignRight)
 
         self.live_threshold_preview = QtWidgets.QCheckBox("Live threshold", self)
         self.live_threshold_preview.setChecked(self.settings["live_threshold_preview"])
@@ -894,7 +939,28 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
         )
         self.live_threshold_preview.toggled.connect(self._live_threshold_toggled)
         threshold_layout.addWidget(self.live_threshold_preview)
-        root.addWidget(threshold_frame)
+        brush_layout.addWidget(threshold_frame)
+
+        self.operation_row = QtWidgets.QWidget(self.brush_box)
+        selection_row = QtWidgets.QHBoxLayout(self.operation_row)
+        selection_row.setContentsMargins(0, 0, 0, 0)
+        self.cancel_operation = QtWidgets.QPushButton("Cancel Operation", self.operation_row)
+        self.cancel_operation.setEnabled(False)
+        self.cancel_operation.setToolTip(
+            "Stop the current calculation and keep the last completed mask. No output volume is created."
+        )
+        self.cancel_operation.clicked.connect(self.cancelOperationRequested)
+        selection_row.addWidget(self.cancel_operation)
+        self.clear = QtWidgets.QPushButton("Clear Mask", self.operation_row)
+        self.clear.setToolTip("Clear the current frame's segmentation mask. This can be undone.")
+        self.clear.clicked.connect(self.clearRequested)
+        selection_row.addWidget(self.clear)
+        brush_layout.addWidget(self.operation_row)
+        self.new_selection = QtWidgets.QPushButton("New Selection", self.brush_box)
+        self.new_selection.setToolTip("Clear the current mask as one undoable edit and switch to Select.")
+        self.new_selection.clicked.connect(self.newSelectionRequested)
+        brush_layout.addWidget(self.new_selection)
+        root.addWidget(self.brush_box)
 
         smart_box = QtWidgets.QGroupBox("Smart helpers", self)
         self.smart_box = smart_box
@@ -1013,7 +1079,7 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
         output_layout.addWidget(self.extract_original, 1, 0)
         self.extract_margin = QtWidgets.QSpinBox(self)
         self.extract_margin.setRange(0, 20)
-        self.extract_margin.setValue(1)
+        self.extract_margin.setValue(0)
         self.extract_margin.setPrefix("Margin ")
         self.extract_margin.setSuffix(" vox")
         self.extract_margin.setToolTip("3-D voxel margin used by Extract Original Signal.")
@@ -1043,7 +1109,7 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
         self.speck_spin.setToolTip(cleanup.toolTip())
         cleanup_layout.addWidget(self.speck_slider, 1)
         cleanup_layout.addWidget(self.speck_spin, 0)
-        root.addWidget(cleanup)
+        threshold_layout.addWidget(cleanup)
 
         # Keep one progress-row height permanently so background work never
         # moves the panel contents under the pointer. Hide only the progress bar
@@ -1066,7 +1132,7 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
         )
         self.progress_slot.setMinimumWidth(0)
         self.work_progress.hide()
-        root.addWidget(self.progress_slot)
+        brush_layout.addWidget(self.progress_slot)
 
         self.status = QtWidgets.QLabel("Select a loaded volume, then enable segmentation.", self)
         self.status.setWordWrap(True)
@@ -1134,7 +1200,7 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
             self._speck_sync = False
         self.speckThresholdChanged.emit(int(value))
 
-    def set_background_busy(self, busy, label="Working", preserve_threshold=False):
+    def set_background_busy(self, busy, label="Working", preserve_threshold=False, preserve_specks=False):
         busy = bool(busy)
         self._background_busy = busy
         if busy:
@@ -1144,9 +1210,9 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
                 and (focus_widget is self or self.isAncestorOf(focus_widget))
             ):
                 focus_widget.clearFocus()
-        self.toggle.setEnabled(not busy and not self._speck_busy)
+        self.toggle.setEnabled(not busy)
         if busy:
-            self.set_controls_active(False, preserve_threshold=preserve_threshold)
+            self.set_controls_active(False, preserve_threshold=preserve_threshold, preserve_specks=preserve_specks)
             self.work_progress.setTextVisible(True)
             self.work_progress.setValue(0)
             self.work_progress.setFormat(f"{label} — %p%")
@@ -1156,24 +1222,16 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
             self.work_progress.setFormat("")
             self.work_progress.setTextVisible(False)
             self.work_progress.hide()
-            self.toggle.setEnabled(not self._speck_busy)
-            if not self._speck_busy:
-                self.set_controls_active(self.toggle.isChecked())
-        self.set_mode_buttons_locked(self._background_busy or self._speck_busy)
+            self.toggle.setEnabled(True)
+            self.set_controls_active(self.toggle.isChecked())
+        # Mode toggles keep their normal mouse-ownership semantics during work.
+        self.cancel_operation.setEnabled(self._background_busy)
 
     def set_progress(self, value, label=""):
         self.work_progress.setValue(max(0, min(100, int(value))))
         if label:
             self.work_progress.setFormat(f"{label} — %p%")
 
-    def set_speck_busy(self, busy):
-        self._speck_busy = bool(busy)
-        self.toggle.setEnabled(not self._background_busy and not self._speck_busy)
-        if self._speck_busy:
-            self.set_controls_active(False, preserve_specks=True)
-        elif not self._background_busy:
-            self.set_controls_active(self.toggle.isChecked())
-        self.set_mode_buttons_locked(self._background_busy or self._speck_busy)
 
     def _integer_control(self, lo, hi, value):
         slider = QtWidgets.QSlider(Qt.Orientation.Horizontal, self)
@@ -1229,6 +1287,7 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
             )
         else:
             self.toggle.setStyleSheet("")
+        self.controlsChanged.emit()
 
     def set_controls_active(self, active, *, preserve_threshold=False, preserve_specks=False):
         active = bool(active)
@@ -1256,6 +1315,7 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
                 continue
             widget.setEnabled(active)
         self._update_mode_button_enabled()
+        self.controlsChanged.emit()
 
     def set_target_name(self, name):
         self.target_label.setText(str(name or "None"))
@@ -1263,6 +1323,15 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
 
     def set_status(self, text):
         self.status.setText(str(text or ""))
+
+    def set_radii(self, seed, growth):
+        controls = (self.seed_slider, self.seed_spin, self.growth_slider, self.growth_spin)
+        blockers = [QtCore.QSignalBlocker(control) for control in controls]
+        try:
+            for control, value in zip(controls, (seed, seed, growth, growth)):
+                control.setValue(int(value))
+        finally:
+            del blockers
 
     def set_mode(self, mode):
         mode = str(mode or "").lower()
@@ -1272,18 +1341,16 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
         if self.toggle.isChecked():
             self._set_only_mode_checked(mode)
 
-    def set_mode_buttons_locked(self, locked):
-        self._mode_buttons_locked = bool(locked)
-        self._update_mode_button_enabled()
 
     def _has_target(self):
         text = str(self.target_label.text()).strip()
         return bool(text and text.lower() != "none")
 
     def _update_mode_button_enabled(self):
-        enabled = self._has_target() and not self._mode_buttons_locked
+        enabled = self._has_target()
         for button in self.mode_buttons.values():
             button.setEnabled(enabled)
+        self.controlsChanged.emit()
 
     def _set_only_mode_checked(self, mode):
         blockers = [
@@ -1295,6 +1362,7 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
                 button.setChecked(key == mode)
         finally:
             del blockers
+        self.controlsChanged.emit()
 
     def _sync_mode_checks(self, enabled):
         if enabled:
@@ -1337,6 +1405,7 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
             self.threshold_slider.setValue(self._threshold_to_slider(value))
         finally:
             del blockers
+        self.controlsChanged.emit()
 
     def _threshold_to_slider(self, value):
         lo, hi = self._threshold_min, self._threshold_max
@@ -1491,14 +1560,16 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
         self.maskColorChanged.emit(list(self.settings["mask_color"]))
 
     def set_history_available(self, can_undo, can_redo):
-        active = self.toggle.isChecked()
+        active = self.toggle.isChecked() and not self._background_busy
         self.undo.setEnabled(bool(active and can_undo))
         self.redo.setEnabled(bool(active and can_redo))
+        self.controlsChanged.emit()
 
     def settings_payload(self):
         return _sanitize_settings({
             "seed_radius": self.seed_spin.value(),
             "growth_radius": self.growth_spin.value(),
+            "brush_radii": self.settings["brush_radii"],
             "mask_color": self.settings["mask_color"],
             "mask_opacity": self.opacity_spin.value(),
             "history_limit": self.settings.get("history_limit", 40),
@@ -1829,14 +1900,13 @@ class VolumeSegmentationController(QtCore.QObject):
         # retained to avoid turning a convenience cache into a memory problem.
         self._boundary_gradient_cache_key = None
         self._boundary_gradient_cache = None
-        self._boundary_gradient_cache_limit_bytes = 256 * 1024 * 1024
 
         self._pool = QtCore.QThreadPool.globalInstance()
         self._job_serial = 0
         self._worker_refs = {}
-        self._blocking_job = None
-        self._deferred_target_sync = False
-        self._threshold_recompute_active = False
+        self._operation_job = None
+        self._operation = None
+        self._operation_generation = 0
         self._pending_exact_threshold = None
         self._threshold_drain_scheduled = False
         self._speck_generation = 0
@@ -1847,9 +1917,7 @@ class VolumeSegmentationController(QtCore.QObject):
         self._speck_history_anchor = None
         self._speck_history_depth = 0
         self._speck_history_entry = None
-        self._speck_job = None
         self._speck_pending = None
-        self._speck_context = None
         self._install_connections()
         self.overlay.set_radii(self.settings["seed_radius"], self.settings["growth_radius"])
         self._apply_preview_property()
@@ -1864,6 +1932,7 @@ class VolumeSegmentationController(QtCore.QObject):
         p.modeChanged.connect(self.set_mode)
         p.brushInteractionChanged.connect(self.set_brush_interaction_active)
         p.newSelectionRequested.connect(self.new_selection)
+        p.cancelOperationRequested.connect(self.cancel_operation)
         p.clearRequested.connect(self.clear)
         p.seedRadiusChanged.connect(self.set_seed_radius)
         p.growthRadiusChanged.connect(self.set_growth_radius)
@@ -1881,13 +1950,20 @@ class VolumeSegmentationController(QtCore.QObject):
         p.extractOriginalRequested.connect(self.extract_original_signal)
         p.speckThresholdChanged.connect(self.remove_specks)
 
+    @QtCore.Slot()
+    def _schedule_target_validation(self):
+        self._target_validation_timer.start(0)
+
     def _install_tree_guards(self):
         if self._tree_connections_installed:
             return
         try:
             model = self.main.tree.model()
-            model.rowsRemoved.connect(lambda *_: QtCore.QTimer.singleShot(0, self.validate_target))
-            model.modelReset.connect(lambda *_: QtCore.QTimer.singleShot(0, self.validate_target))
+            self._target_validation_timer = QtCore.QTimer(self)
+            self._target_validation_timer.setSingleShot(True)
+            self._target_validation_timer.timeout.connect(self.validate_target)
+            model.rowsRemoved.connect(self._schedule_target_validation)
+            model.modelReset.connect(self._schedule_target_validation)
             # A tree item's load state can change without the selection changing.
             # This matters for the common lazy-load sequence: select an unloaded
             # volume, then load it.  Once ROLE_LOADED becomes true the same selected
@@ -2020,9 +2096,6 @@ class VolumeSegmentationController(QtCore.QObject):
         return None, None
 
     def sync_target_to_latest_selection(self):
-        if self._target_locked():
-            self._deferred_target_sync = True
-            return self.target_vc is not None
         vc, item = self._latest_selected_volume()
         if vc is None or item is None:
             return False
@@ -2080,7 +2153,7 @@ class VolumeSegmentationController(QtCore.QObject):
     def set_enabled(self, enabled):
         enabled = bool(enabled)
         if enabled == self.active:
-            self.panel._on_toggle_visual(enabled)
+            self.panel.set_enabled_checked(enabled)
             return
         if enabled:
             self.sync_target_to_latest_selection()
@@ -2117,6 +2190,7 @@ class VolumeSegmentationController(QtCore.QObject):
         return float(candidate)
 
     def _set_target(self, vc, item, announce=True):
+        self._invalidate_operation()
         self._reset_speck_adjustment()
         self._session_target_snapshot = None
         if vc is None or getattr(vc, "image", None) is None:
@@ -2161,11 +2235,12 @@ class VolumeSegmentationController(QtCore.QObject):
             self._stop_for_authoritative_error(exc)
             return False
 
+        self._invalidate_operation()
         self.active = True
         self.brush_interaction_active = False
         self.render_window._volume_segmentation_active = False
-        self.panel._on_toggle_visual(True)
-        self.panel.set_controls_active(True)
+        self.panel.set_enabled_checked(True)
+        self.panel.set_controls_active(not self._target_locked())
         self._update_history_ui()
 
         timer = getattr(self.main, "volume_time_play_timer", None)
@@ -2194,6 +2269,7 @@ class VolumeSegmentationController(QtCore.QObject):
         return True
 
     def _deactivate_session(self, keep_target=True):
+        self._invalidate_operation()
         self._reset_speck_adjustment()
         self.set_brush_interaction_active(False, render=False)
         self._remove_target_observers()
@@ -2203,7 +2279,7 @@ class VolumeSegmentationController(QtCore.QObject):
         self._session_target_snapshot = None
         self.brush_interaction_active = False
         self.render_window._volume_segmentation_active = False
-        self.panel._on_toggle_visual(False)
+        self.panel.set_enabled_checked(False)
         self.panel.set_controls_active(False)
         self.panel.set_history_available(False, False)
         if not keep_target:
@@ -2325,22 +2401,9 @@ class VolumeSegmentationController(QtCore.QObject):
         }.get(self.mode, "Segmentation brush active."))
 
     def _disable_competing_mouse_tools(self):
-        brush_button = getattr(self.main, "brushModeBtn", None)
-        if brush_button is not None and brush_button.isChecked():
-            blocker = QtCore.QSignalBlocker(brush_button)
-            brush_button.setChecked(False)
-            del blocker
-            try:
-                self.main.toggle_brush_mode(False)
-            except Exception:
-                pass
+        from madi3d_app.controllers.interaction import claim_mouse_tool
 
-        ff = getattr(self.render_window, "freefly", None)
-        if ff is not None and getattr(ff, "enabled", False):
-            try:
-                ff.disable()
-            except Exception:
-                pass
+        claim_mouse_tool(self.main, "segmentation")
 
     def set_brush_interaction_active(self, enabled, render=True):
         """Give or release mouse ownership without ending segmentation itself."""
@@ -2353,6 +2416,7 @@ class VolumeSegmentationController(QtCore.QObject):
             return
 
         if enabled:
+            self._disable_competing_mouse_tools()
             self._previous_cursor_mode = getattr(
                 self.render_window, "current_cursor_mode", None
             )
@@ -2363,7 +2427,6 @@ class VolumeSegmentationController(QtCore.QObject):
             except Exception:
                 self._previous_style = None
 
-            self._disable_competing_mouse_tools()
             self.brush_interaction_active = True
             self.render_window._volume_segmentation_active = True
             self.interactor.SetInteractorStyle(self.style)
@@ -2415,6 +2478,7 @@ class VolumeSegmentationController(QtCore.QObject):
                 "Choose Select, Unselect or Diffuse to resume editing."
             )
 
+        self.panel._set_only_mode_checked(self.mode if enabled else None)
         if render:
             self.render_once()
 
@@ -2490,6 +2554,14 @@ class VolumeSegmentationController(QtCore.QObject):
         mode = str(mode or "select").lower()
         if mode not in {"select", "unselect", "diffuse"}:
             return
+        if mode != self.mode:
+            self.settings["brush_radii"][self.mode] = {
+                key: self.settings[key] for key in ("seed_radius", "growth_radius")
+            }
+            self.settings.update(self.settings["brush_radii"][mode])
+            self.panel.set_radii(self.settings["seed_radius"], self.settings["growth_radius"])
+            self.overlay.set_radii(self.settings["seed_radius"], self.settings["growth_radius"])
+            self._persist_settings()
         self.mode = mode
         self.panel.set_mode(mode)
         self.overlay.set_growth_visible(mode == "diffuse")
@@ -2518,12 +2590,19 @@ class VolumeSegmentationController(QtCore.QObject):
         self.settings["seed_radius"] = int(_clamp(value, 2, 260))
         if self.settings["growth_radius"] < self.settings["seed_radius"]:
             self.settings["growth_radius"] = self.settings["seed_radius"]
+        self.settings["brush_radii"][self.mode] = {
+            key: self.settings[key] for key in ("seed_radius", "growth_radius")
+        }
+        self.panel.set_radii(self.settings["seed_radius"], self.settings["growth_radius"])
         self.overlay.set_radii(self.settings["seed_radius"], self.settings["growth_radius"])
         self._persist_settings()
         self.render_once()
 
     def set_growth_radius(self, value):
         self.settings["growth_radius"] = max(self.settings["seed_radius"], int(_clamp(value, 5, 1600)))
+        self.settings["brush_radii"][self.mode] = {
+            key: self.settings[key] for key in ("seed_radius", "growth_radius")
+        }
         self.overlay.set_radii(self.settings["seed_radius"], self.settings["growth_radius"])
         self._persist_settings()
         self.render_once()
@@ -2548,72 +2627,75 @@ class VolumeSegmentationController(QtCore.QObject):
     def set_threshold(self, value):
         try:
             value = float(value)
-        except Exception:
+        except (TypeError, ValueError):
             return
-        if self._blocking_job is not None:
-            self._pending_exact_threshold = value
+        if not math.isfinite(value):
             return
-        self._threshold_recompute_active = True
-        try:
-            self._apply_threshold(value)
-        finally:
-            self._threshold_recompute_active = False
-        self._schedule_pending_exact_threshold()
+        if self._target_locked() or self._threshold_drain_scheduled:
+            worker = self._worker_refs.get(self._operation_job)
+            if worker is None or not worker.cancel_event.is_set():
+                self._pending_exact_threshold = (
+                    self._operation_generation, self.state, self.current_frame_index(), value
+                )
+            return
+        self._apply_threshold(value)
 
     def _apply_threshold(self, value):
         lo, hi = self._scalar_range(self.target_vc) if self.target_vc is not None else (0.0, 1.0)
         new_value = max(lo, min(hi, float(value)))
-        changed = abs(new_value - float(self.signal_threshold)) > max(1e-12, abs(hi-lo)*1e-12)
+        previous_value = float(self.signal_threshold)
+        changed = abs(new_value - previous_value) > max(1e-12, abs(hi-lo)*1e-12)
         self.signal_threshold = new_value
         self.upper_threshold = hi
         if self.state is not None:
-            self.state.ui_threshold = float(new_value)
+            self.state.ui_threshold = new_value
+        self.panel.configure_threshold(lo, hi, new_value)
         if not changed or not self.active:
             return
-
-        fs = self._frame_state()
-        if fs is None or not fs.undo_stack:
-            self.set_status(f"Signal threshold {self.signal_threshold:.6g}. No applied stroke to recalculate.")
+        frame = self._frame_state()
+        if frame is None or not frame.undo_stack:
+            self.set_status(f"Signal threshold {new_value:.6g}. No applied stroke to recalculate.")
             return
-
-        entry = fs.undo_stack[-1]
+        entry = frame.undo_stack[-1]
         if entry.mode not in {"select", "diffuse"}:
-            self.set_status(
-                f"Signal threshold {self.signal_threshold:.6g}. "
-                f"The latest stroke ({entry.mode.title()}) is not threshold-sensitive."
-            )
+            self.set_status(f"Signal threshold {new_value:.6g}. The latest stroke ({entry.mode.title()}) is not threshold-sensitive.")
             return
-
-        feedback_started = self._start_brush_feedback()
-        feedback_success = False
+        state = self.state
+        frame_index = self.current_frame_index()
+        def rollback():
+            if self.state is state and self.current_frame_index() == frame_index:
+                self.signal_threshold = previous_value
+                state.ui_threshold = previous_value
+                self.panel.configure_threshold(lo, hi, previous_value)
         try:
-            old_patch = entry.unpack("old")
-            new_patch = self._recompute_history_entry(entry, old_patch, threshold_override=new_value)
-            entry.rebase(old_patch, new_patch, threshold=new_value)
-            self._write_mask_patch(fs, entry.extent, new_patch)
-            self._sync_current_frame_preview(render=True)
-            self.set_status(
-                f"Signal threshold {self.signal_threshold:.6g}: latest {entry.mode.title()} stroke recalculated exactly."
-            )
-            feedback_success = True
+            snapshot = self._preflight_authoritative_target("Threshold update start validation")
+            computation = self._capture_computation(frame)
+            def work(report):
+                computation.report = report
+                report(10, "Threshold: recalculating latest edit")
+                old = entry.unpack("old")
+                patch = computation._recompute_history_entry(entry, old, threshold_override=new_value)
+                updated = copy.copy(entry)
+                report(85, "Threshold: preparing history")
+                updated.rebase(old, patch, threshold=new_value)
+                return updated, patch
+            def publish(result):
+                updated, patch = result
+                self._write_mask_patch(frame, entry.extent, patch)
+                frame.undo_stack[-1] = updated
+                self._adopt_computation_cache(computation)
+                self._sync_current_frame_preview(render=True)
+                self.set_status(f"Signal threshold {new_value:.6g}: latest {entry.mode.title()} stroke recalculated exactly.")
+            self._start_brush_feedback()
+            self._run_background("Threshold", work, publish, operation_snapshot=snapshot,
+                                 preserve_threshold=True, rollback=rollback)
+        except SegmentationPreflightError as exc:
+            rollback()
+            self._stop_for_authoritative_error(exc)
         except Exception as exc:
-            print(f"[VolumeSegmentation] Threshold stroke update failed: {exc}")
-            traceback.print_exc()
+            rollback()
+            self._finish_brush_feedback(False)
             self.set_status(f"Threshold update failed: {exc}")
-        finally:
-            if feedback_started:
-                self._finish_brush_feedback(feedback_success)
-
-
-
-
-
-
-
-
-
-
-
 
     def set_mask_opacity(self, value):
         self.settings["mask_opacity"] = _clamp(value, 0.0, 1.0)
@@ -2710,6 +2792,8 @@ class VolumeSegmentationController(QtCore.QObject):
                 target_vc=target,
                 target_item=identity.item,
                 source_image=image,
+                source_scalars=image.GetPointData().GetScalars(),
+                source_scalars_mtime=int(image.GetPointData().GetScalars().GetMTime()),
                 acquisition_id=str(identity.acquisition_id),
                 channel_id=str(identity.channel_id),
                 backing_source_id=str(modeled.channel.backing_source_id or ""),
@@ -2804,6 +2888,10 @@ class VolumeSegmentationController(QtCore.QObject):
         image_changed = previous.source_image is not current.source_image
         if image_changed and (require_same_frame or not frame_changed):
             incompatible("the target source image changed while the operation was running.")
+        if require_same_frame:
+            if (previous.source_scalars is not current.source_scalars
+                    or previous.source_scalars_mtime != current.source_scalars_mtime):
+                incompatible("the source voxel data changed while the operation was running.")
         if previous.extent != current.extent:
             incompatible("the target VTK extent/index mapping changed.")
         if previous.dimensions != current.dimensions:
@@ -2824,6 +2912,8 @@ class VolumeSegmentationController(QtCore.QObject):
             previous.provenance_payload() if previous is not None else None
         )
         current_payload = current.provenance_payload()
+        if previous is not None and previous_payload != current_payload:
+            self._invalidate_operation()
         self._session_target_snapshot = current
         state = getattr(self, "state", None)
         if state is not None:
@@ -2878,6 +2968,13 @@ class VolumeSegmentationController(QtCore.QObject):
             stage=f"{label} result validation",
             require_same_frame=True,
         )
+        if any(getattr(operation_snapshot, key) != getattr(current, key) for key in (
+            "world_index_affine", "geometry_revision", "acquisition_geometry_revision",
+            "coordinate_space_id", "physical_units",
+        )):
+            raise SegmentationPreflightError(
+                f"{label} result validation: the target geometry changed while the operation was running."
+            )
         return self._adopt_session_snapshot(
             current, stage=f"{label} result validation"
         )
@@ -3023,28 +3120,6 @@ class VolumeSegmentationController(QtCore.QObject):
         poly.Modified()
         return poly
 
-    def _poly_stencil(self, poly, source_extent):
-        bounds = poly.GetBounds()
-        if bounds is None or any(not math.isfinite(float(v)) for v in bounds):
-            return None, None
-        e = (
-            math.floor(bounds[0])-1, math.ceil(bounds[1])+1,
-            math.floor(bounds[2])-1, math.ceil(bounds[3])+1,
-            math.floor(bounds[4])-1, math.ceil(bounds[5])+1,
-        )
-        e = extent_intersection(e, source_extent)
-        if e is None:
-            return None, None
-        raster = vtk.vtkPolyDataToImageStencil()
-        raster.SetInputData(poly)
-        raster.SetOutputOrigin(0.0, 0.0, 0.0)
-        raster.SetOutputSpacing(1.0, 1.0, 1.0)
-        raster.SetOutputWholeExtent(*e)
-        raster.SetTolerance(0.0)
-        raster.Update()
-        stencil = vtk.vtkImageStencilData()
-        stencil.DeepCopy(raster.GetOutput())
-        return stencil, e
 
     def _capture_stroke_geometry(self, points, radius, snap, depth_range):
         """Capture renderer-dependent brush solids without rasterizing them."""
@@ -3054,25 +3129,6 @@ class VolumeSegmentationController(QtCore.QObject):
             for cx, cy in points
         ]
 
-    def _rasterize_stroke_geometry(self, geometry, source_extent):
-        """Rasterize captured brush solids; safe to run in a segmentation worker."""
-        combined = None
-        combined_extent = None
-        for poly in geometry or ():
-            stencil, extent = self._poly_stencil(poly, source_extent)
-            if stencil is None:
-                continue
-            if combined is None:
-                combined = vtk.vtkImageStencilData()
-                combined.DeepCopy(stencil)
-            else:
-                combined.Add(stencil)
-            combined_extent = extent_union(combined_extent, extent)
-        return combined, combined_extent
-
-    def _stroke_stencil(self, points, radius, snap, depth_range):
-        geometry = self._capture_stroke_geometry(points, radius, snap, depth_range)
-        return self._rasterize_stroke_geometry(geometry, snap["extent"])
 
     # ------------------------------------------------------------------
     # clipping and compiled VTK image operations
@@ -3094,139 +3150,6 @@ class VolumeSegmentationController(QtCore.QObject):
                 continue
         return tuple(plane_coeffs)
 
-    def _clipping_inside_mask(self, extent, vtk_ijk_to_world, plane_coeffs=None):
-        shape = extent_shape_zyx(extent)
-        if any(v <= 0 for v in shape):
-            return np.zeros(shape, dtype=bool)
-        if plane_coeffs is None:
-            plane_coeffs = self._clipping_plane_coeffs(vtk_ijk_to_world)
-        if not plane_coeffs:
-            return np.ones(shape, dtype=bool)
-
-        x = np.arange(extent[0], extent[1]+1, dtype=np.float64)[None, None, :]
-        y = np.arange(extent[2], extent[3]+1, dtype=np.float64)[None, :, None]
-        total = extent_voxel_count(extent)
-        if total <= 8_000_000:
-            z = np.arange(extent[4], extent[5]+1, dtype=np.float64)[:, None, None]
-            inside = np.ones(shape, dtype=bool)
-            for a, b, c, d in plane_coeffs:
-                inside &= (a*x + b*y + c*z + d) >= -1e-8
-            return inside
-
-        # Large local ROI: retain vectorized XY work but chunk Z to limit temporaries.
-        inside = np.ones(shape, dtype=bool)
-        plane_xy = max(1, shape[1]*shape[2])
-        chunk_z = max(1, min(shape[0], int(2_000_000/plane_xy)))
-        for z0 in range(0, shape[0], chunk_z):
-            z1 = min(shape[0], z0+chunk_z)
-            z = np.arange(extent[4]+z0, extent[4]+z1, dtype=np.float64)[:, None, None]
-            block = inside[z0:z1]
-            for a, b, c, d in plane_coeffs:
-                block &= (a*x + b*y + c*z + d) >= -1e-8
-        return inside
-
-    def _restrict_stencil_to_clipping(self, stencil, operation_extent, snap, inside_mask=None):
-        if stencil is None:
-            if inside_mask is None:
-                inside_mask = np.zeros(extent_shape_zyx(operation_extent), dtype=bool)
-            return None, inside_mask
-        inside = inside_mask
-        if inside is None:
-            inside = self._clipping_inside_mask(operation_extent, snap["vtk_ijk_to_world_affine"])
-        if np.all(inside):
-            return stencil, inside
-        outside_stencil = _stencil_from_binary((~inside).astype(np.uint8), operation_extent, inside_value=1)
-        result = vtk.vtkImageStencilData()
-        result.DeepCopy(stencil)
-        result.Subtract(outside_stencil)
-        return result, inside
-
-    def _threshold_source_extent(self, extent, threshold_value=None, upper_threshold=None):
-        """Threshold only ``extent`` directly from the persistent source image.
-
-        ``vtkImageThreshold`` honors UPDATE_EXTENT, so there is no need to create
-        an intermediate ``vtkImageClip`` copy for every brush operation.  The
-        output is UCHAR 0/1 so downstream connectivity also runs on the smallest
-        practical scalar type.
-        """
-        e = _extent_tuple(extent)
-        if e is None:
-            raise ValueError("Invalid threshold extent")
-        threshold = vtk.vtkImageThreshold()
-        threshold.SetInputData(self.target_vc.image)
-        lower = self.signal_threshold if threshold_value is None else float(threshold_value)
-        upper = self.upper_threshold if upper_threshold is None else float(upper_threshold)
-        threshold.ThresholdBetween(float(lower), float(upper))
-        threshold.ReplaceInOn()
-        threshold.ReplaceOutOn()
-        threshold.SetInValue(1)
-        threshold.SetOutValue(0)
-        threshold.SetOutputScalarTypeToUnsignedChar()
-        threshold.UpdateInformation()
-        try:
-            info = threshold.GetOutputInformation(0)
-            info.Set(vtk.vtkStreamingDemandDrivenPipeline.UPDATE_EXTENT(), e, 6)
-        except Exception:
-            # Older VTK builds still work correctly; they may simply request the
-            pass
-        threshold.Update()
-        return threshold
-
-
-    @staticmethod
-    def _apply_stencil_to_binary(input_connection, stencil):
-        filt = vtk.vtkImageStencil()
-        filt.SetInputConnection(input_connection)
-        filt.SetStencilData(stencil)
-        filt.ReverseStencilOff()
-        filt.SetBackgroundValue(0)
-        filt.Update()
-        return filt
-
-    def _seed_points_from_candidates(self, candidates, extent):
-        """Return cheap seed points using one seed per contiguous X run.
-
-        Every non-empty 3-D connected component contains at least one X run, so
-        this guarantees coverage without generating a full int32 component-label
-        image and scanning it with ``np.unique``.  The VTK connectivity filter
-        itself de-duplicates overlapping flood fronts through its visited mask.
-        """
-        candidates = np.asarray(candidates, dtype=bool)
-        if candidates.size == 0 or not np.any(candidates):
-            return vtk.vtkPoints(), 0
-
-        starts = np.empty_like(candidates, dtype=bool)
-        starts[..., 0] = candidates[..., 0]
-        if candidates.shape[2] > 1:
-            np.logical_and(
-                candidates[..., 1:],
-                np.logical_not(candidates[..., :-1]),
-                out=starts[..., 1:],
-            )
-        zz, yy, xx = np.nonzero(starts)
-        count = int(xx.size)
-        if count <= 0:
-            return vtk.vtkPoints(), 0
-
-        # vtkImageThresholdConnectivity converts seed points back to indices with
-        # (point-origin)/spacing and currently ignores vtkImageData direction.
-        # Feed exactly that coordinate convention, vectorized, so non-identity
-        # image directions do not corrupt seed indexing.
-        origin = np.asarray(self.target_vc.image.GetOrigin(), dtype=np.float64)
-        spacing = np.asarray(self.target_vc.image.GetSpacing(), dtype=np.float64)
-        ijk = np.column_stack((
-            xx.astype(np.float64, copy=False) + float(extent[0]),
-            yy.astype(np.float64, copy=False) + float(extent[2]),
-            zz.astype(np.float64, copy=False) + float(extent[4]),
-        ))
-        points_xyz = origin[None, :] + ijk * spacing[None, :]
-        vtk_points_array = numpy_to_vtk(
-            np.ascontiguousarray(points_xyz, dtype=np.float64),
-            deep=True,
-        )
-        vtk_points = vtk.vtkPoints()
-        vtk_points.SetData(vtk_points_array)
-        return vtk_points, count
 
     # ------------------------------------------------------------------
     # persistent cropped mask + stroke-local history
@@ -3257,60 +3180,26 @@ class VolumeSegmentationController(QtCore.QObject):
         return frame_state.mask
     # brush domains inside each HistoryEntry rather than in one global domain.
 
-    def _mask_patch(self, frame_state, extent):
-        result = np.zeros(extent_shape_zyx(extent), dtype=np.uint8)
-        if frame_state is None or frame_state.mask is None:
-            return result
-        inter = extent_intersection(frame_state.mask_extent, extent)
-        if inter is None:
-            return result
-        src = _image_array_view(frame_state.mask)
-        result[extent_slices_zyx(inter, extent)] = src[
-            extent_slices_zyx(inter, frame_state.mask_extent)
-        ]
-        return result
 
-    def _write_mask_patch(self, frame_state, extent, patch):
+    def _write_mask_patch(self, frame_state, extent, patch, *, remove_only=False):
         patch = np.ascontiguousarray(np.asarray(patch, dtype=np.uint8))
         if tuple(patch.shape) != extent_shape_zyx(extent):
             raise RuntimeError("Segmentation patch extent mismatch")
+        if remove_only:
+            # Removal cannot introduce selected voxels outside the stored mask.
+            # Keep the full seed domain in history for exact Redo rebasing, but
+            # avoid expanding and uploading an otherwise empty mask region.
+            overlap = extent_intersection(extent, frame_state.mask_extent)
+            if frame_state.mask is None or overlap is None:
+                return
+            patch = patch[extent_slices_zyx(overlap, extent)]
+            extent = overlap
         self._ensure_mask_extent(frame_state, extent)
         target = _image_array_view(frame_state.mask)
         target[extent_slices_zyx(extent, frame_state.mask_extent)] = patch
         frame_state.mask.GetPointData().GetScalars().Modified()
         frame_state.mask.Modified()
 
-    def _source_patch_view(self, extent):
-        source_extent = _extent_tuple(self.target_vc.image.GetExtent())
-        e = _extent_tuple(extent)
-        if source_extent is None or e is None or extent_intersection(e, source_extent) != e:
-            raise ValueError("Smart-brush extent lies outside the target image")
-        return _image_array_view(self.target_vc.image)[extent_slices_zyx(e, source_extent)]
-
-    @staticmethod
-    def _sample_masked_values(array, mask, max_samples=500_000):
-        """Return a bounded deterministic sample without first copying all masked voxels."""
-        values = np.asarray(array)
-        domain = np.asarray(mask, dtype=bool)
-        if values.shape != domain.shape or values.size == 0:
-            return np.empty(0, dtype=values.dtype)
-
-        selected_count = int(np.count_nonzero(domain))
-        if selected_count <= 0:
-            return np.empty(0, dtype=values.dtype)
-        max_samples = max(64, int(max_samples))
-        if selected_count <= max_samples:
-            return values[domain]
-
-        # Spatially sample the complete ROI. This bounds both the temporary index
-        # array and the gathered values even when a very large brush contains
-        # millions of eligible voxels.
-        flat_values = values.reshape(-1)
-        flat_domain = domain.reshape(-1)
-        sample_count = min(max_samples, flat_values.size)
-        indices = np.linspace(0, flat_values.size - 1, sample_count, dtype=np.intp)
-        sampled_domain = flat_domain[indices]
-        return flat_values[indices[sampled_domain]]
 
     def _visible_seed_projection_snapshot(self, snap):
         """Capture the center-camera projection used to reproduce visible seeding.
@@ -3366,437 +3255,6 @@ class VolumeSegmentationController(QtCore.QObject):
             print(f"[VolumeSegmentation] Could not capture Visible Seeds view: {exc}")
             return None
 
-    def _visible_seed_domain(
-        self,
-        extent,
-        seed_domain,
-        intensity_allowed,
-        *,
-        visible_ijk_to_clip=None,
-        visible_depth_coeff=None,
-        visible_viewport_px=None,
-    ):
-        """Keep the front-most threshold-passing seed layer for each screen bin.
-
-        This is intentionally a seed filter, not a visibility-constrained region
-        grow. The first pass builds a small depth buffer in two-pixel screen bins;
-        the second keeps candidates close to the nearest signal in each bin. A
-        several-voxel depth tolerance provides robust seed thickness while still
-        rejecting clearly separate structures farther behind the painted target.
-        """
-        seed = np.asarray(seed_domain, dtype=bool)
-        allowed = np.asarray(intensity_allowed, dtype=bool)
-        if seed.shape != allowed.shape or seed.size == 0:
-            return seed
-        candidates = seed & allowed
-        candidate_count = int(np.count_nonzero(candidates))
-        if candidate_count <= 0:
-            return np.zeros_like(seed, dtype=bool)
-
-        try:
-            ijk_to_clip = np.asarray(visible_ijk_to_clip, dtype=float).reshape(4, 4)
-            depth_coeff = np.asarray(visible_depth_coeff, dtype=float).reshape(4)
-            vx0, vy0, vx1, vy1 = (float(v) for v in visible_viewport_px)
-        except Exception:
-            # Fail open if an old in-memory history entry lacks projection data.
-            return seed
-
-        viewport_w = max(1.0, vx1 - vx0)
-        viewport_h = max(1.0, vy1 - vy0)
-        if not (
-            np.all(np.isfinite(ijk_to_clip))
-            and np.all(np.isfinite(depth_coeff))
-            and all(math.isfinite(v) for v in (vx0, vy0, vx1, vy1))
-        ):
-            return seed
-
-        # Two-pixel bins are more stable than exact raster pixels for discrete
-        # voxel centers and halve the depth-buffer dimensions in each direction.
-        bin_size = 2.0
-        bins_x = max(1, int(math.ceil(viewport_w / bin_size)))
-        bins_y = max(1, int(math.ceil(viewport_h / bin_size)))
-        front_depth = np.full(bins_x * bins_y, np.inf, dtype=np.float32)
-
-        e = _extent_tuple(extent)
-        if e is None:
-            return seed
-        shape = candidates.shape
-        nz, ny, nx = (int(v) for v in shape)
-        flat_candidates = candidates.reshape(-1)
-        block_voxels = 500_000
-
-        def projected_block(start, stop):
-            local = np.flatnonzero(flat_candidates[start:stop])
-            if local.size == 0:
-                return None
-            flat_index = local.astype(np.int64, copy=False) + int(start)
-            xx = flat_index % nx
-            tmp = flat_index // nx
-            yy = tmp % ny
-            zz = tmp // ny
-
-            coords = np.empty((flat_index.size, 4), dtype=np.float64)
-            coords[:, 0] = xx + float(e[0])
-            coords[:, 1] = yy + float(e[2])
-            coords[:, 2] = zz + float(e[4])
-            coords[:, 3] = 1.0
-
-            clip = coords @ ijk_to_clip.T
-            w = clip[:, 3]
-            valid = np.isfinite(w) & (np.abs(w) > 1e-12)
-            if not np.any(valid):
-                return None
-            ndc_x = np.empty_like(w)
-            ndc_y = np.empty_like(w)
-            ndc_x.fill(np.nan)
-            ndc_y.fill(np.nan)
-            ndc_x[valid] = clip[valid, 0] / w[valid]
-            ndc_y[valid] = clip[valid, 1] / w[valid]
-            px = vx0 + 0.5 * (ndc_x + 1.0) * viewport_w
-            py = vy0 + 0.5 * (ndc_y + 1.0) * viewport_h
-            bx_float = np.floor((px - vx0) / bin_size)
-            by_float = np.floor((py - vy0) / bin_size)
-            valid &= (
-                np.isfinite(px) & np.isfinite(py)
-                & np.isfinite(bx_float) & np.isfinite(by_float)
-                & (bx_float >= 0) & (bx_float < bins_x)
-                & (by_float >= 0) & (by_float < bins_y)
-            )
-            indices = np.flatnonzero(valid)
-            if indices.size == 0:
-                return None
-            depth = coords[indices] @ depth_coeff
-            depth_valid = np.isfinite(depth) & (depth >= -1e-9)
-            if not np.any(depth_valid):
-                return None
-            indices = indices[depth_valid]
-            depth = depth[depth_valid]
-            bx = bx_float[indices].astype(np.int64, copy=False)
-            by = by_float[indices].astype(np.int64, copy=False)
-            return (
-                flat_index[indices].astype(np.intp, copy=False),
-                (by * bins_x + bx).astype(np.intp, copy=False),
-                depth.astype(np.float32, copy=False),
-            )
-
-        # First pass: nearest threshold-passing seed signal in each screen bin.
-        for start in range(0, flat_candidates.size, block_voxels):
-            stop = min(flat_candidates.size, start + block_voxels)
-            projected = projected_block(start, stop)
-            if projected is None:
-                continue
-            _flat_index, pixels, depth = projected
-            np.minimum.at(front_depth, pixels, depth)
-
-        if not np.any(np.isfinite(front_depth)):
-            return seed
-
-        # Approximate four source-voxel layers along the camera direction. This
-        # gives the seed enough thickness for connectivity without admitting a
-        # clearly separated structure farther down the same viewing ray.
-        one_voxel_depth = float(np.max(np.abs(depth_coeff[:3])))
-        if not math.isfinite(one_voxel_depth) or one_voxel_depth <= 1e-12:
-            one_voxel_depth = 1e-6
-        depth_tolerance = max(1e-6, 4.0 * one_voxel_depth)
-
-        visible_flat = np.zeros(flat_candidates.size, dtype=bool)
-        for start in range(0, flat_candidates.size, block_voxels):
-            stop = min(flat_candidates.size, start + block_voxels)
-            projected = projected_block(start, stop)
-            if projected is None:
-                continue
-            flat_index, pixels, depth = projected
-            keep = depth <= (front_depth[pixels] + depth_tolerance)
-            if np.any(keep):
-                visible_flat[flat_index[keep]] = True
-
-        return visible_flat.reshape(shape)
-
-    def _estimate_local_threshold(self, extent, domain):
-        """Return a deterministic Otsu-like threshold from the painted 3-D domain.
-
-        The stroke frustum naturally contains foreground plus local background
-        along the viewing rays, which makes it a useful local intensity sample.
-        Sampling is bounded before masked values are materialized so very large
-        screen-space brushes cannot create an equally large temporary array.
-        """
-        mask = np.asarray(domain, dtype=bool)
-        if mask.size == 0 or np.count_nonzero(mask) < 64:
-            return None
-        source = np.asarray(self._source_patch_view(extent))
-        values = self._sample_masked_values(source, mask)
-        if values.size < 64:
-            return None
-        values = np.asarray(values, dtype=np.float64)
-        values = values[np.isfinite(values)]
-        if values.size < 64:
-            return None
-
-        lo = float(np.percentile(values, 1.0))
-        hi = float(np.percentile(values, 99.5))
-        if not math.isfinite(lo) or not math.isfinite(hi) or hi <= lo:
-            return None
-
-        hist, edges = np.histogram(values, bins=256, range=(lo, hi))
-        hist = hist.astype(np.float64, copy=False)
-        total = float(hist.sum())
-        if total < 64.0 or np.count_nonzero(hist) < 2:
-            return None
-        centers = 0.5 * (edges[:-1] + edges[1:])
-        weight_left = np.cumsum(hist)
-        sum_left = np.cumsum(hist * centers)
-        total_sum = float(sum_left[-1])
-        weight_right = total - weight_left
-
-        valid = (weight_left > 0.0) & (weight_right > 0.0)
-        if not np.any(valid):
-            return None
-        mean_left = np.zeros_like(centers)
-        mean_right = np.zeros_like(centers)
-        mean_left[valid] = sum_left[valid] / weight_left[valid]
-        mean_right[valid] = (total_sum - sum_left[valid]) / weight_right[valid]
-        between = np.full_like(centers, -1.0)
-        between[valid] = (
-            weight_left[valid] * weight_right[valid]
-            * np.square(mean_left[valid] - mean_right[valid])
-        )
-        index = int(np.argmax(between))
-        value = float(centers[index])
-        scalar_lo, scalar_hi = self._scalar_range(self.target_vc)
-        return max(float(scalar_lo), min(float(scalar_hi), value))
-
-    def _faint_growth_threshold(self, seed_threshold):
-        """Relax a confident seed threshold toward the target's background floor."""
-        lo, hi = self._scalar_range(self.target_vc)
-        seed_threshold = max(float(lo), min(float(hi), float(seed_threshold)))
-        # Keep roughly 72% of the distance above the scalar floor. This is
-        # intentionally conservative: faint connected branches become available
-        # without turning Diffuse into an unrestricted low-threshold flood fill.
-        return max(float(lo), min(seed_threshold, float(lo) + 0.72 * (seed_threshold - float(lo))))
-
-    def _boundary_guard_domain(self, extent, growth_domain, intensity_allowed, seed_domain):
-        """Remove the strongest local signal gradients from the Diffuse domain."""
-        growth_domain = np.asarray(growth_domain, dtype=bool)
-        intensity_allowed = np.asarray(intensity_allowed, dtype=bool)
-        seed_domain = np.asarray(seed_domain, dtype=bool)
-        eligible = growth_domain & intensity_allowed
-        if np.count_nonzero(eligible) < 128:
-            return growth_domain, None
-
-        # Stream only the requested ROI directly from the persistent source image.
-        # Avoid vtkImageClip here: its extra cropped source allocation is expensive
-        # for the large screen-space growth radii supported by MADI3D. Reuse the
-        # gradient while repeatedly adjusting the threshold of the same latest
-        # stroke; only the intensity eligibility/cutoff changes between updates.
-        image = self.target_vc.image
-        try:
-            image_mtime = int(image.GetMTime())
-        except Exception:
-            image_mtime = -1
-        cache_key = (id(image), image_mtime, tuple(int(v) for v in extent))
-        magnitude = None
-        if cache_key == self._boundary_gradient_cache_key:
-            cached = self._boundary_gradient_cache
-            if cached is not None and cached.shape == growth_domain.shape:
-                magnitude = cached
-
-        if magnitude is None:
-            gradient = vtk.vtkImageGradientMagnitude()
-            gradient.SetInputData(image)
-            gradient.SetDimensionality(3)
-            gradient.HandleBoundariesOn()
-            gradient.UpdateInformation()
-            try:
-                gradient.GetOutputInformation(0).Set(
-                    vtk.vtkStreamingDemandDrivenPipeline.UPDATE_EXTENT(), extent, 6
-                )
-            except Exception:
-                pass
-            gradient.Update()
-            magnitude = np.array(
-                _image_array_view(gradient.GetOutput()), dtype=np.float32, copy=True
-            )
-            if magnitude.shape != growth_domain.shape:
-                return growth_domain, None
-            if magnitude.nbytes <= int(self._boundary_gradient_cache_limit_bytes):
-                self._boundary_gradient_cache_key = cache_key
-                self._boundary_gradient_cache = magnitude
-            else:
-                self._boundary_gradient_cache_key = None
-                self._boundary_gradient_cache = None
-
-        values = self._sample_masked_values(magnitude, eligible)
-        values = values[np.isfinite(values)]
-        if values.size < 128:
-            return growth_domain, None
-        cutoff = float(np.percentile(values, 95.0))
-        if not math.isfinite(cutoff) or cutoff <= 0.0:
-            return growth_domain, None
-
-        guarded = growth_domain & (magnitude <= cutoff)
-        # Never let the boundary test erase the user's confident seed itself.
-        guarded |= growth_domain & seed_domain
-        return guarded, cutoff
-
-    def _threshold_allowed_patch(self, extent, threshold_value):
-        """Fast Boolean threshold for consumers that do not need a VTK pipeline."""
-        source = np.asarray(self._source_patch_view(extent))
-        lower = float(threshold_value)
-        upper = float(self.upper_threshold)
-        allowed = np.greater_equal(source, lower)
-        if math.isfinite(upper):
-            np.logical_and(allowed, np.less_equal(source, upper), out=allowed)
-        return allowed
-
-    def _compute_diffuse_patch(
-        self,
-        extent,
-        old_patch,
-        seed_domain,
-        growth_domain,
-        threshold_value,
-        growth_stencil=None,
-        *,
-        smart_faint_recovery=False,
-        smart_boundary_guard=False,
-        smart_visible_seeds=False,
-        visible_ijk_to_clip=None,
-        visible_depth_coeff=None,
-        visible_viewport_px=None,
-    ):
-        old = np.asarray(old_patch, dtype=bool)
-        seed_domain = np.asarray(seed_domain, dtype=bool)
-        growth_domain = np.asarray(growth_domain, dtype=bool)
-
-        seed_threshold = float(threshold_value)
-        growth_threshold = (
-            self._faint_growth_threshold(seed_threshold)
-            if smart_faint_recovery else seed_threshold
-        )
-
-        # Seeds remain strict even when faint recovery is enabled. Connectivity
-        # may then traverse the lower growth threshold inside the outer domain.
-        seed_filter = self._threshold_source_extent(extent, seed_threshold, self.upper_threshold)
-        seed_allowed = np.asarray(_image_array_view(seed_filter.GetOutput()), dtype=bool)
-
-        effective_seed_domain = seed_domain
-        if smart_visible_seeds:
-            effective_seed_domain = self._visible_seed_domain(
-                extent,
-                seed_domain,
-                seed_allowed,
-                visible_ijk_to_clip=visible_ijk_to_clip,
-                visible_depth_coeff=visible_depth_coeff,
-                visible_viewport_px=visible_viewport_px,
-            )
-
-        if abs(growth_threshold - seed_threshold) <= max(1e-12, abs(self.upper_threshold) * 1e-12):
-            growth_filter = seed_filter
-            growth_allowed = seed_allowed
-        else:
-            growth_filter = self._threshold_source_extent(extent, growth_threshold, self.upper_threshold)
-            growth_allowed = np.asarray(_image_array_view(growth_filter.GetOutput()), dtype=bool)
-
-        if smart_boundary_guard:
-            growth_domain, _cutoff = self._boundary_guard_domain(
-                extent, growth_domain, growth_allowed, effective_seed_domain
-            )
-            # The original screen-space stencil no longer represents the guarded
-            # Boolean domain, so rebuild the local stencil once.
-            growth_stencil = None
-
-        # Existing selected voxels remain valid Diffuse starting points even when
-        # Visible Seeds is enabled. Visibility filtering applies only to new seed
-        # material from this stroke; it must not invalidate deliberate prior work.
-        candidates = ((old & seed_allowed) | (effective_seed_domain & seed_allowed)) & growth_domain
-        seed_points, seed_count = self._seed_points_from_candidates(candidates, extent)
-        if seed_count <= 0:
-            return old.astype(np.uint8), 0
-
-        if growth_stencil is None:
-            growth_stencil = _stencil_from_binary(
-                growth_domain.astype(np.uint8), extent, inside_value=1
-            )
-
-        grow = vtk.vtkImageThresholdConnectivity()
-        grow.SetInputConnection(growth_filter.GetOutputPort())
-        grow.ThresholdBetween(1.0, 1.0)
-        grow.SetSeedPoints(seed_points)
-        grow.SetStencilData(growth_stencil)
-        grow.ReplaceInOn()
-        grow.ReplaceOutOn()
-        grow.SetInValue(1)
-        grow.SetOutValue(0)
-        # vtkImageThresholdConnectivity otherwise requests the full upstream
-        # WHOLE_EXTENT even when vtkImageThreshold was previously updated only
-        # for this ROI. Constrain both its flood-fill slice range and output
-        # UPDATE_EXTENT so the source threshold remains strictly local.
-        grow.SetSliceRangeX(int(extent[0]), int(extent[1]))
-        grow.SetSliceRangeY(int(extent[2]), int(extent[3]))
-        grow.SetSliceRangeZ(int(extent[4]), int(extent[5]))
-        grow.UpdateInformation()
-        try:
-            grow.GetOutputInformation(0).Set(
-                vtk.vtkStreamingDemandDrivenPipeline.UPDATE_EXTENT(), extent, 6
-            )
-        except Exception:
-            pass
-        grow.Update()
-
-        result = np.asarray(_image_array_view(grow.GetOutput()), dtype=bool)
-        result &= growth_domain
-        return (old | result).astype(np.uint8), seed_count
-
-    def _recompute_history_entry(self, entry, old_patch, threshold_override=None):
-        old = np.ascontiguousarray(np.asarray(old_patch, dtype=np.uint8))
-        mode = str(entry.mode).lower()
-        if mode == "clear":
-            return np.zeros_like(old, dtype=np.uint8)
-
-        seed = entry.domain("seed")
-        if seed is None:
-            seed = np.zeros_like(old, dtype=np.uint8)
-        seed = np.asarray(seed, dtype=bool)
-        if mode == "unselect":
-            return (np.asarray(old, dtype=bool) & ~seed).astype(np.uint8)
-
-        threshold_value = entry.threshold if threshold_override is None else float(threshold_override)
-        if threshold_value is None:
-            threshold_value = float(self.signal_threshold)
-        if mode == "select":
-            allowed = self._threshold_allowed_patch(entry.extent, threshold_value)
-            effective_seed = seed
-            if bool(entry.smart_visible_seeds):
-                effective_seed = self._visible_seed_domain(
-                    entry.extent,
-                    seed,
-                    allowed,
-                    visible_ijk_to_clip=entry.visible_ijk_to_clip,
-                    visible_depth_coeff=entry.visible_depth_coeff,
-                    visible_viewport_px=entry.visible_viewport_px,
-                )
-            return (np.asarray(old, dtype=bool) | (effective_seed & allowed)).astype(np.uint8)
-        if mode == "diffuse":
-            growth = entry.domain("growth")
-            if growth is None:
-                growth = seed
-            new_patch, _components = self._compute_diffuse_new_patch(
-                entry.extent,
-                old,
-                seed,
-                growth,
-                threshold_value,
-                smart_faint_recovery=bool(entry.smart_faint_recovery),
-                smart_boundary_guard=bool(entry.smart_boundary_guard),
-                smart_visible_seeds=bool(entry.smart_visible_seeds),
-                visible_ijk_to_clip=entry.visible_ijk_to_clip,
-                visible_depth_coeff=entry.visible_depth_coeff,
-                visible_viewport_px=entry.visible_viewport_px,
-            )
-            return new_patch
-        if mode == "specks":
-            return np.array(entry.unpack("new"), copy=True, dtype=np.uint8)
-        raise ValueError(f"Unsupported segmentation history mode: {mode}")
 
     def _push_history(self, frame_state, entry, clear_redo=True):
         if str(entry.mode).lower() != "specks":
@@ -3813,69 +3271,86 @@ class VolumeSegmentationController(QtCore.QObject):
         frame_state.mask = None
         frame_state.mask_extent = None
 
-    def _commit_history_entry(self, frame_state, entry, clear_redo=True):
+    def _commit_history_entry(self, frame_state, entry, clear_redo=True, *, patch=None):
         if str(entry.mode).lower() == "clear":
             self._clear_frame_mask_storage(frame_state)
         else:
-            self._write_mask_patch(frame_state, entry.extent, entry.unpack("new"))
+            self._write_mask_patch(frame_state, entry.extent,
+                                   entry.unpack("new") if patch is None else patch,
+                                   remove_only=entry.mode == "unselect")
         self._push_history(frame_state, entry, clear_redo=clear_redo)
 
-    def _apply_history_entry(self, frame_state, entry, which):
-        if str(entry.mode).lower() == "clear" and which == "new":
-            self._clear_frame_mask_storage(frame_state)
-            return
-        self._write_mask_patch(frame_state, entry.extent, entry.unpack(which))
 
     def undo(self):
+        if not self.active or self._target_locked():
+            return
+        frame = self._frame_state()
+        if frame is None or not frame.undo_stack:
+            return
         self._reset_speck_adjustment()
-        if not self.active:
-            return
-        fs = self._frame_state()
-        if fs is None or not fs.undo_stack:
-            return
-        entry = fs.undo_stack.pop()
-        self._apply_history_entry(fs, entry, "old")
-        fs.redo_stack.append(entry)
-        self._update_history_ui()
-        self._sync_current_frame_preview(render=True)
-        self.set_status(f"Undo {entry.mode.title()} stroke. Threshold unchanged at {self.signal_threshold:.6g}.")
+        entry = frame.undo_stack[-1]
+        def work(report):
+            report(20, "Undo: restoring mask")
+            return entry.unpack("old")
+        def publish(patch):
+            self._write_mask_patch(frame, entry.extent, patch)
+            frame.undo_stack.pop()
+            frame.redo_stack.append(entry)
+            self._sync_current_frame_preview(render=True)
+            self.set_status(f"Undo {entry.mode.title()} stroke. Threshold unchanged at {self.signal_threshold:.6g}.")
+        self._run_background("Undo", work, publish)
 
     def redo(self):
+        if not self.active or self._target_locked():
+            return
+        frame = self._frame_state()
+        if frame is None or not frame.redo_stack:
+            return
         self._reset_speck_adjustment()
-        if not self.active:
-            return
-        fs = self._frame_state()
-        if fs is None or not fs.redo_stack:
-            return
-        entry = fs.redo_stack.pop()
-        # Rebase Redo on the current mask. This is essential after the user undoes
-        # to an older stroke and changes only that stroke's threshold.
-        old_patch = self._mask_patch(fs, entry.extent)
-        new_patch = self._recompute_history_entry(entry, old_patch)
-        entry.rebase(old_patch, new_patch)
-        if str(entry.mode).lower() == "clear":
-            self._clear_frame_mask_storage(fs)
-        else:
-            self._write_mask_patch(fs, entry.extent, new_patch)
-        fs.undo_stack.append(entry)
-        self._update_history_ui()
-        self._sync_current_frame_preview(render=True)
-        self.set_status(f"Redo {entry.mode.title()} stroke. Threshold unchanged at {self.signal_threshold:.6g}.")
+        entry = frame.redo_stack[-1]
+        computation = self._capture_computation(frame)
+        def work(report):
+            computation.report = report
+            report(10, "Redo: recalculating edit")
+            old = _mask_patch(computation.frame_state, entry.extent)
+            patch = computation._recompute_history_entry(entry, old)
+            updated = copy.copy(entry)
+            report(85, "Redo: preparing history")
+            updated.rebase(old, patch)
+            return updated, patch
+        def publish(result):
+            updated, patch = result
+            if entry.mode == "clear":
+                self._clear_frame_mask_storage(frame)
+            else:
+                self._write_mask_patch(frame, entry.extent, patch, remove_only=entry.mode == "unselect")
+            frame.redo_stack.pop()
+            frame.undo_stack.append(updated)
+            self._adopt_computation_cache(computation)
+            self._sync_current_frame_preview(render=True)
+            self.set_status(f"Redo {entry.mode.title()} stroke. Threshold unchanged at {self.signal_threshold:.6g}.")
+        self._run_background("Redo", work, publish)
 
     def clear(self):
-        if not self.active:
+        if not self.active or self._target_locked():
             return
-        fs = self._frame_state()
-        if fs is None or fs.mask is None:
+        frame = self._frame_state()
+        if frame is None or frame.mask is None:
             return
-        old = np.array(_image_array_view(fs.mask), copy=True, dtype=np.uint8)
-        if not np.any(old):
-            return
-        new = np.zeros_like(old, dtype=np.uint8)
-        entry = HistoryEntry.make(fs.mask_extent, old, new, mode="clear")
-        self._commit_history_entry(fs, entry)
-        self._sync_current_frame_preview(render=True)
-        self.set_status("Segmentation cleared.")
+        mask = self._detached_image(frame.mask)
+        extent = frame.mask_extent
+        def work(report):
+            report(20, "Clear Mask: preparing history")
+            old = np.array(_image_array_view(mask), copy=True, dtype=np.uint8)
+            if not np.any(old):
+                return None
+            return HistoryEntry.make(extent, old, np.zeros_like(old), mode="clear")
+        def publish(entry):
+            if entry is not None:
+                self._commit_history_entry(frame, entry)
+                self._sync_current_frame_preview(render=True)
+            self.set_status("Segmentation cleared.")
+        self._run_background("Clear Mask", work, publish)
 
     def new_selection(self):
         self.clear()
@@ -3888,298 +3363,59 @@ class VolumeSegmentationController(QtCore.QObject):
     # ------------------------------------------------------------------
     # Select / Unselect / Diffuse
     # ------------------------------------------------------------------
-    def _process_diffuse_stroke(self, points, frame_index, snap, depth_range):
-        """Capture view state on the GUI thread, then defer 3-D Diffuse work."""
-        smart_local = bool(self.settings.get("smart_local_threshold", False))
-        smart_faint = bool(self.settings.get("smart_faint_recovery", False))
-        smart_boundary = bool(self.settings.get("smart_boundary_guard", False))
-        smart_visible = bool(self.settings.get("smart_visible_seeds", False))
-        visible_projection = None
-        visible_fallback = False
-
-        if smart_visible:
-            visible_projection = self._visible_seed_projection_snapshot(snap)
-            if visible_projection is None:
-                smart_visible = False
-                visible_fallback = True
-                self.set_status(
-                    "Visible Seeds could not read the current camera projection; "
-                    "this stroke will use normal seeding."
-                )
-
-        # Display->world unprojection belongs to the renderer thread. Capture
-        # only the small immutable brush solids here; expensive 3-D stencil
-        # rasterization and domain materialization happen in the worker below.
-        seed_geometry = self._capture_stroke_geometry(
-            points, self.settings["seed_radius"], snap, depth_range
-        )
-        growth_geometry = self._capture_stroke_geometry(
-            points, self.settings["growth_radius"], snap, depth_range
-        )
-        clipping_plane_coeffs = self._clipping_plane_coeffs(
-            snap["vtk_ijk_to_world_affine"]
-        )
-
-        fs = self._frame_state(frame_index)
-        result = self._compute_diffuse_stroke(
-            seed_geometry,
-            growth_geometry,
-            snap,
-            fs,
-            frame_index,
-            float(self.signal_threshold),
-            clipping_plane_coeffs=clipping_plane_coeffs,
-            smart_local_threshold=smart_local,
-            smart_faint_recovery=smart_faint,
-            smart_boundary_guard=smart_boundary,
-            smart_visible_seeds=smart_visible,
-            visible_ijk_to_clip=(visible_projection or {}).get("ijk_to_clip"),
-            visible_depth_coeff=(visible_projection or {}).get("depth_coeff"),
-            visible_viewport_px=(visible_projection or {}).get("viewport_px"),
-        )
-        if result is None:
-            self.set_status("The stroke did not intersect the target volume.")
-            return
-
-        operation_extent = result["operation_extent"]
-        old_patch = result["old_patch"]
-        new_patch = result["new_patch"]
-        seed_domain = result["seed_domain"]
-        growth_domain = result["growth_domain"]
-        threshold_value = float(result["threshold_value"])
-        used_local_threshold = bool(result["used_local_threshold"])
-        component_count = int(result["component_count"])
-
-        if used_local_threshold:
-            # The UI must show the threshold actually used by this stroke, but
-            # updating it here must not trigger a second threshold recomputation.
-            lo, hi = self._scalar_range(self.target_vc)
-            self.signal_threshold = threshold_value
-            self.upper_threshold = float(hi)
-            if self.state is not None:
-                self.state.ui_threshold = threshold_value
-            self.panel.configure_threshold(lo, hi, threshold_value)
-
-        entry = HistoryEntry.make(
-            operation_extent,
-            old_patch,
-            new_patch,
-            mode="diffuse",
-            threshold=threshold_value,
-            seed_domain=seed_domain,
-            growth_domain=growth_domain,
-            smart_local_threshold=used_local_threshold,
-            smart_faint_recovery=smart_faint,
-            smart_boundary_guard=smart_boundary,
-            smart_visible_seeds=smart_visible,
-            visible_ijk_to_clip=(visible_projection or {}).get("ijk_to_clip"),
-            visible_depth_coeff=(visible_projection or {}).get("depth_coeff"),
-            visible_viewport_px=(visible_projection or {}).get("viewport_px"),
-        )
-        changed = not np.array_equal(old_patch, new_patch)
-        detail = (
-            f"Diffuse ({component_count} seed run"
-            f"{'s' if component_count != 1 else ''})"
-        )
-
-        helper_labels = []
-        if used_local_threshold:
-            helper_labels.append("local threshold")
-        if smart_faint:
-            helper_labels.append("faint recovery")
-        if smart_boundary:
-            helper_labels.append("boundary guard")
-        if smart_visible:
-            helper_labels.append("visible seeds")
-        elif visible_fallback:
-            helper_labels.append("visible seeds unavailable for this stroke")
-        helper_text = f" Smart: {', '.join(helper_labels)}." if helper_labels else ""
-
-        self._commit_history_entry(fs, entry)
-        self._sync_current_frame_preview(render=True)
-        dims = extent_shape_zyx(operation_extent)
-        if changed:
-            self.set_status(
-                f"{detail} updated the mask at threshold {threshold_value:.6g}."
-                f"{helper_text} Local extent: {dims[2]}×{dims[1]}×{dims[0]} voxels."
-            )
-        else:
-            self.set_status(
-                f"{detail}: this stroke did not add voxels at threshold {threshold_value:.6g}."
-                f"{helper_text} Adjust the threshold to recalculate this stroke only."
-            )
 
     def process_stroke(self, raw_points, frame_index):
-        if not self.active or not raw_points:
+        if not self.active or not raw_points or self._target_locked():
             return
-        feedback_started = False
-        feedback_success = False
         try:
             context = self._validate_source_geometry()
             if int(frame_index) != self.current_frame_index():
                 return
-            spacing_radius = self.settings["seed_radius"]
-            points = self.resample_stroke(raw_points, spacing_radius)
+            points = self.resample_stroke(raw_points, self.settings["seed_radius"])
             if not points:
                 return
-            feedback_started = self._start_brush_feedback()
+            mode = self.mode
             snap = self._geometry_snapshot(context)
-            depth_range = self._target_display_depth_range()
-
-            if self.mode == "diffuse":
-                self._process_diffuse_stroke(points, frame_index, snap, depth_range)
-                feedback_success = True
-                return
-
-            seed_stencil, seed_extent = self._stroke_stencil(
-                points, self.settings["seed_radius"], snap, depth_range
-            )
-            if seed_stencil is None or seed_extent is None:
-                self.set_status("The stroke did not intersect the target volume.")
-                feedback_success = True
-                return
-
-            operation_extent = extent_intersection(seed_extent, snap["extent"])
-            if operation_extent is None:
-                feedback_success = True
-                return
-            inside_clip = self._clipping_inside_mask(
-                operation_extent, snap["vtk_ijk_to_world_affine"]
-            )
-            seed_stencil, _inside_clip = self._restrict_stencil_to_clipping(
-                seed_stencil, operation_extent, snap, inside_mask=inside_clip
-            )
-
-            fs = self._frame_state(frame_index)
-            old_patch = self._mask_patch(fs, operation_extent)
-            seed_domain = _stencil_to_bool(seed_stencil, operation_extent)
-            threshold_value = float(self.signal_threshold)
-            used_local_threshold = False
-            smart_local = bool(self.settings.get("smart_local_threshold", False))
-            smart_visible = bool(self.settings.get("smart_visible_seeds", False))
-            visible_projection = None
-            visible_fallback = False
-
-            if self.mode == "select" and smart_local:
-                local_threshold = self._estimate_local_threshold(
-                    operation_extent, seed_domain
-                )
-                if local_threshold is not None:
-                    threshold_value = float(local_threshold)
-                    used_local_threshold = True
-                    # The threshold widget must represent the threshold actually
-                    # used by this stroke. Otherwise the next tiny manual slider
-                    # movement would jump from the old global value and radically
-                    # change a locally-thresholded result. Update without emitting
-                    # thresholdChanged/recomputing the stroke a second time.
-                    lo, hi = self._scalar_range(self.target_vc)
-                    self.signal_threshold = threshold_value
-                    self.upper_threshold = float(hi)
-                    if self.state is not None:
-                        self.state.ui_threshold = threshold_value
-                    self.panel.configure_threshold(lo, hi, threshold_value)
-
-            if self.mode == "select" and smart_visible:
-                visible_projection = self._visible_seed_projection_snapshot(snap)
-                if visible_projection is None:
-                    # Keep the stroke usable if a renderer/backend cannot provide
-                    # the required projection matrix; report it and fall back to
-                    # normal seeding for this stroke only.
-                    smart_visible = False
-                    visible_fallback = True
-                    self.set_status(
-                        "Visible Seeds could not read the current camera projection; "
-                        "this stroke will use normal seeding."
-                    )
-
-            if self.mode == "unselect":
-                new_patch = (
-                    np.asarray(old_patch, dtype=bool) & ~seed_domain
-                ).astype(np.uint8)
-                entry = HistoryEntry.make(
-                    operation_extent,
-                    old_patch,
-                    new_patch,
-                    mode="unselect",
-                    seed_domain=seed_domain,
-                )
-                detail = "Unselect"
-                changed = not np.array_equal(old_patch, new_patch)
-                if not changed:
-                    self.set_status("Unselect: no selected voxels changed.")
-                    feedback_success = True
+            depth = self._target_display_depth_range()
+            seed = self._capture_stroke_geometry(points, self.settings["seed_radius"], snap, depth)
+            growth = (self._capture_stroke_geometry(points, self.settings["growth_radius"], snap, depth)
+                      if mode == "diffuse" else ())
+            planes = self._clipping_plane_coeffs(snap["vtk_ijk_to_world_affine"])
+            settings = dict(self.settings)
+            projection = None
+            if mode != "unselect" and settings.get("smart_visible_seeds", False):
+                projection = self._visible_seed_projection_snapshot(snap)
+            frame = self._frame_state(frame_index)
+            computation = self._capture_computation(frame)
+            threshold = float(self.signal_threshold)
+            def work(report):
+                computation.report = report
+                return computation.stroke(mode, seed, growth, snap, planes, threshold, settings, projection)
+            def publish(result):
+                if result is None:
+                    self.set_status("The stroke did not intersect the target volume.")
                     return
-            else:
-                allowed = self._threshold_allowed_patch(
-                    operation_extent, threshold_value
-                )
-                effective_seed = seed_domain
-                if smart_visible:
-                    effective_seed = self._visible_seed_domain(
-                        operation_extent,
-                        seed_domain,
-                        allowed,
-                        visible_ijk_to_clip=visible_projection["ijk_to_clip"],
-                        visible_depth_coeff=visible_projection["depth_coeff"],
-                        visible_viewport_px=visible_projection["viewport_px"],
-                    )
-                new_patch = (
-                    np.asarray(old_patch, dtype=bool) | (effective_seed & allowed)
-                ).astype(np.uint8)
-                entry = HistoryEntry.make(
-                    operation_extent,
-                    old_patch,
-                    new_patch,
-                    mode="select",
-                    threshold=threshold_value,
-                    seed_domain=seed_domain,
-                    smart_local_threshold=used_local_threshold,
-                    smart_visible_seeds=smart_visible,
-                    visible_ijk_to_clip=(visible_projection or {}).get("ijk_to_clip"),
-                    visible_depth_coeff=(visible_projection or {}).get("depth_coeff"),
-                    visible_viewport_px=(visible_projection or {}).get("viewport_px"),
-                )
-                detail = "Select"
-                changed = not np.array_equal(old_patch, new_patch)
-                # Keep even a currently-empty thresholded Select stroke. Lowering
-                # the threshold immediately afterward must be able to reveal it.
-
-            helper_labels = []
-            if used_local_threshold:
-                helper_labels.append("local threshold")
-            if self.mode == "select" and smart_visible:
-                helper_labels.append("visible seeds")
-            elif visible_fallback:
-                helper_labels.append("visible seeds unavailable for this stroke")
-            helper_text = f" Smart: {', '.join(helper_labels)}." if helper_labels else ""
-
-            self._commit_history_entry(fs, entry)
-            self._sync_current_frame_preview(render=True)
-            dims = extent_shape_zyx(operation_extent)
-            if changed:
-                self.set_status(
-                    f"{detail} updated the mask at threshold {threshold_value:.6g}."
-                    f"{helper_text} Local extent: {dims[2]}×{dims[1]}×{dims[0]} voxels."
-                )
-            else:
-                self.set_status(
-                    f"{detail}: this stroke did not add voxels at threshold {threshold_value:.6g}."
-                    f"{helper_text} Adjust the threshold to recalculate this stroke only."
-                )
-            feedback_success = True
+                entry, patch, changed, detail = result
+                if mode == "unselect" and not changed:
+                    self.set_status("Unselect: no selected voxels changed.")
+                    return
+                self._commit_history_entry(frame, entry, patch=patch)
+                self._adopt_computation_cache(computation)
+                if entry.smart_local_threshold:
+                    lo, hi = computation.scalar_range
+                    self.signal_threshold = entry.threshold
+                    self.state.ui_threshold = entry.threshold
+                    self.panel.configure_threshold(lo, hi, entry.threshold)
+                self._sync_current_frame_preview(render=True)
+                self.set_status(detail)
+            self._start_brush_feedback()
+            self._run_background(mode.title(), work, publish, operation_snapshot=context)
         except SegmentationPreflightError as exc:
-            print(f"[VolumeSegmentation] Preflight failed: {exc}")
             self._stop_for_authoritative_error(exc)
         except Exception as exc:
-            print(f"[VolumeSegmentation] Stroke failed: {exc}")
-            traceback.print_exc()
+            self._finish_brush_feedback(False)
             self.set_status(f"Segmentation operation failed: {exc}")
-            QtWidgets.QMessageBox.warning(self.main, "Volume Segmentation", str(exc))
-        finally:
-            if feedback_started:
-                self._finish_brush_feedback(feedback_success)
-    # _compute_diffuse_new_patch so the same code can be reused by threshold edit
-    # and Redo rebasing.
+            traceback.print_exc()
 
     # ------------------------------------------------------------------
     # preview volume
@@ -4410,6 +3646,7 @@ class VolumeSegmentationController(QtCore.QObject):
     def _on_target_modified(self, caller=None, _event=None):
         if not self.active or self._sync_guard:
             return
+        self._invalidate_operation()
         # Pose and voxel-size transactions update several runtime/model fields
         # synchronously. Validate once on the next event-loop turn, after the
         # transaction has either committed or rolled back.
@@ -4469,144 +3706,13 @@ class VolumeSegmentationController(QtCore.QObject):
     # Phase 4 outputs
     # ------------------------------------------------------------------
     def create_mask_volume(self):
-        if not self.active:
-            return
-        fs = self._frame_state()
-        if fs is None or fs.mask is None or not np.any(_image_array_view(fs.mask)):
-            QtWidgets.QMessageBox.information(self.main, "Volume Segmentation", "The current frame has no selected voxels.")
-            return
-        try:
-            operation_snapshot = self._preflight_authoritative_target(
-                "Create Mask Volume start validation"
-            )
-        except SegmentationPreflightError as exc:
-            self._stop_for_authoritative_error(exc)
-            return
-        output = vtk.vtkImageData()
-        output.DeepCopy(fs.mask)
-        name = self._derived_name("mask")
-        try:
-            self._add_derived_volume(
-                output,
-                name,
-                mask_volume=True,
-                operation="segmentation_mask",
-                operation_snapshot=operation_snapshot,
-            )
-        except SegmentationPreflightError as exc:
-            self._stop_for_authoritative_error(exc)
-            return
-        self.set_status(f"Created mask volume: {name}")
+        self._create_output("Create Mask Volume", "mask", "segmentation_mask", mask_volume=True)
 
     def extract_selection(self):
-        fs = self._output_mask()
-        if fs is None:
-            return
-        try:
-            operation_snapshot = self._preflight_authoritative_target(
-                "Extract Selected Voxels start validation"
-            )
-        except SegmentationPreflightError as exc:
-            self._stop_for_authoritative_error(exc)
-            return
-        extent = tuple(int(v) for v in fs.mask_extent)
-        mask = np.array(
-            _image_array_view(fs.mask), copy=True, dtype=np.uint8
-        )
-        target = self.target_vc
-        source = target.image
-
-        def work(report):
-            report(10, "Extract: copying source grid")
-            output = vtk.vtkImageData()
-            output.DeepCopy(source)
-            report(65, "Extract: applying mask")
-            arr = _image_array_view(output)
-            source_arr = _image_array_view(source)
-            roi_slices = extent_slices_zyx(extent, output.GetExtent())
-            output_roi = arr[roi_slices]
-            source_roi = source_arr[roi_slices]
-            if output_roi.shape != mask.shape:
-                raise RuntimeError("Extracted-selection ROI geometry mismatch.")
-            arr.fill(0)
-            np.copyto(output_roi, source_roi, where=(mask != 0))
-            output.GetPointData().GetScalars().Modified()
-            output.Modified()
-            report(95, "Extract: finalizing")
-            return output
-
-        output = self._run_output_background(
-            "Extract Selected Voxels",
-            work,
-            operation_snapshot=operation_snapshot,
-        )
-        if output is None:
-            return
-        name = self._derived_name("selection")
-        try:
-            self._add_derived_volume(
-                output,
-                name,
-                mask_volume=False,
-                operation="segmentation_extract",
-                operation_snapshot=operation_snapshot,
-            )
-        except SegmentationPreflightError as exc:
-            self._stop_for_authoritative_error(exc)
-            return
-        self.set_status(f"Extracted selected intensity volume: {name}")
+        self._create_output("Extract Selected Voxels", "selection", "segmentation_extract")
 
     def delete_selected(self):
-        fs = self._output_mask()
-        if fs is None:
-            return
-        try:
-            operation_snapshot = self._preflight_authoritative_target(
-                "Delete Selected start validation"
-            )
-        except SegmentationPreflightError as exc:
-            self._stop_for_authoritative_error(exc)
-            return
-        target = self.target_vc
-        source = target.image
-        extent = tuple(int(v) for v in fs.mask_extent)
-        mask = np.array(
-            _image_array_view(fs.mask), copy=True, dtype=np.uint8
-        )
-
-        def work(report):
-            report(10, "Delete Selected: copying")
-            output = vtk.vtkImageData()
-            output.DeepCopy(source)
-            report(65, "Delete Selected: applying")
-            arr = _image_array_view(output)
-            roi = arr[extent_slices_zyx(extent, output.GetExtent())]
-            roi[mask != 0] = 0
-            output.GetPointData().GetScalars().Modified()
-            output.Modified()
-            report(95, "Delete Selected: finalizing")
-            return output
-
-        output = self._run_output_background(
-            "Delete Selected",
-            work,
-            operation_snapshot=operation_snapshot,
-        )
-        if output is None:
-            return
-        name = self._derived_name("unselected")
-        try:
-            self._add_derived_volume(
-                output,
-                name,
-                mask_volume=False,
-                operation="segmentation_delete_selected",
-                operation_snapshot=operation_snapshot,
-            )
-        except SegmentationPreflightError as exc:
-            self._stop_for_authoritative_error(exc)
-            return
-        self.set_status(f"Created volume with selected voxels removed: {name}")
+        self._create_output("Delete Selected", "unselected", "segmentation_delete_selected")
 
     def _derived_name(self, suffix):
         base = self.target_item.text(0) if self.target_item is not None else "volume"
@@ -4890,6 +3996,7 @@ class VolumeSegmentationController(QtCore.QObject):
             pass
 
         item = QtWidgets.QTreeWidgetItem([display_name])
+        inherit_object_origin(item, (self.target_item,), operation)
         item.setFlags(
             item.flags()
             | Qt.ItemFlag.ItemIsEditable
@@ -5043,213 +4150,131 @@ class VolumeSegmentationController(QtCore.QObject):
         worker.signals.progress.connect(self._job_progress)
         worker.signals.finished.connect(self._job_finished)
         worker.signals.failed.connect(self._job_failed)
-        self._pool.start(worker)
+        worker.signals.cancelled.connect(self._job_cancelled)
+        try:
+            self._pool.start(worker)
+        except Exception:
+            self._worker_refs.pop(job_id, None)
+            raise
         return job_id
 
     @QtCore.Slot(int, object)
     def _job_finished(self, job_id, result):
-        job_id = int(job_id)
-        self._worker_refs.pop(job_id, None)
-        if job_id == self._blocking_job:
+        worker = self._worker_refs.pop(int(job_id), None)
+        if int(job_id) != self._operation_job:
+            self._finish_background_ui()
             return
-        if job_id == self._speck_job:
-            self._speck_job = None
-            self._handle_speck_result(result)
+        operation = self._operation
+        self._operation_job = None
+        self._operation = None
+        success = False
+        try:
+            if worker is None or worker.cancel_event.is_set() or not self._operation_is_current(operation):
+                self._rollback_operation(operation)
+                return
+            # Selection signals are queued. Check the actual selection before publishing
+            # even when its target-sync callback has not run yet.
+            selected, _item = self._latest_selected_volume()
+            if selected is not None and selected is not self.target_vc:
+                self._rollback_operation(operation)
+                self.sync_target_to_latest_selection()
+                self.set_status("Segmentation result discarded because the target changed.")
+                return
+            self._accept_background_result(operation["snapshot"], operation["label"])
+            operation["publish"](result)
+            success = True
+        except SegmentationPreflightError as exc:
+            self._rollback_operation(operation)
+            self.set_status(f"{operation['label']} result discarded: {exc}")
+        except Exception as exc:
+            self._rollback_operation(operation)
+            self.set_status(f"{operation['label']} failed: {exc}")
+            traceback.print_exc()
+        finally:
+            self._finish_brush_feedback(success)
+            self._finish_background_ui()
 
     @QtCore.Slot(int, str, str)
     def _job_failed(self, job_id, message, details):
-        job_id = int(job_id)
-        self._worker_refs.pop(job_id, None)
-        print(f"[VolumeSegmentation] Worker failed: {message}")
-        if details:
-            print(details)
-        if job_id == self._blocking_job:
-            return
-        if job_id == self._speck_job:
-            self._speck_job = None
-            self._speck_pending = None
-            self.panel.set_speck_busy(False)
+        worker = self._worker_refs.pop(int(job_id), None)
+        if int(job_id) == self._operation_job:
+            operation = self._operation
+            self._operation = None
+            self._operation_job = None
+            self._rollback_operation(operation)
+            if worker is not None and not worker.cancel_event.is_set() and self._operation_is_current(operation):
+                self.set_status(f"{operation['label']} failed: {message}")
+                print(f"[VolumeSegmentation] {details}")
             self._reset_speck_adjustment()
-            self._update_history_ui()
-            self.set_status(f"Remove Specks failed: {message}")
-            self._drain_target_sync()
+            self._finish_brush_feedback(False)
+        self._finish_background_ui()
 
-    @staticmethod
-    def _pump_gui_events(max_ms=15):
-        app = QtWidgets.QApplication.instance()
-        if app is not None:
-            app.processEvents(QtCore.QEventLoop.ProcessEventsFlag.AllEvents, int(max_ms))
 
-    def _run_background(self, label, function, *, operation_snapshot=None):
-        if self._speck_job is not None:
-            raise RuntimeError("Remove specks is still updating the selection.")
-        if self._blocking_job is not None:
-            raise RuntimeError("Another segmentation operation is still running.")
-        operation_snapshot = operation_snapshot or self._preflight_authoritative_target(
-            f"{label} start validation"
-        )
-        preserve_threshold = bool(self._threshold_recompute_active and label == "Diffuse")
-        self.panel.set_background_busy(True, label, preserve_threshold=preserve_threshold)
-        job_id = int(self._start_job(function))
-        self._blocking_job = job_id
-        worker = self._worker_refs.get(job_id)
-        if worker is None:
-            self._blocking_job = None
-            self.panel.set_background_busy(False)
-            raise RuntimeError("Could not start segmentation background worker.")
+    def _run_background(self, label, function, publish, *, operation_snapshot=None,
+                        preserve_threshold=False, preserve_specks=False, rollback=None):
+        """Dispatch once; completion returns through a queued Qt signal."""
+        if self._target_locked():
+            self.set_status("A segmentation calculation is still finishing. You can navigate or cancel it.")
+            return None
         try:
-            while not worker.done_event.wait(0.010):
-                self._pump_gui_events(15)
-            self._pump_gui_events(15)
-            if worker.error is not None:
-                raise RuntimeError(worker.error)
-            self._accept_background_result(operation_snapshot, label)
-            self.panel.set_progress(100, f"{label}: complete")
-            self._pump_gui_events(5)
-            return worker.result
-        finally:
-            self._blocking_job = None
-            self.panel.set_background_busy(False)
-            self._update_history_ui()
-            self._drain_target_sync()
-            self._schedule_pending_exact_threshold()
+            snapshot = operation_snapshot or self._preflight_authoritative_target(f"{label} start validation")
+        except SegmentationPreflightError as exc:
+            if rollback is not None:
+                rollback()
+            self._stop_for_authoritative_error(exc)
+            return None
+        operation = {
+            "label": label, "snapshot": snapshot, "publish": publish,
+            "generation": self._operation_generation, "state": self.state,
+            "frame": self._frame_state(snapshot.frame_index), "rollback": rollback,
+        }
+        self.panel.set_background_busy(True, label, preserve_threshold=preserve_threshold,
+                                       preserve_specks=preserve_specks)
+        self._operation = operation
+        try:
+            self._operation_job = self._start_job(function)
+        except Exception as exc:
+            self._operation = None
+            self._operation_job = None
+            self._rollback_operation(operation)
+            self._finish_brush_feedback(False)
+            self._finish_background_ui()
+            self.set_status(f"{label} could not start: {exc}")
+            return None
+        return self._operation_job
 
-    def _compute_diffuse_stroke(
-        self,
-        seed_geometry,
-        growth_geometry,
-        snap,
-        frame_state,
-        frame_index,
-        threshold_value,
-        *,
-        clipping_plane_coeffs=(),
-        smart_local_threshold=False,
-        smart_faint_recovery=False,
-        smart_boundary_guard=False,
-        smart_visible_seeds=False,
-        visible_ijk_to_clip=None,
-        visible_depth_coeff=None,
-        visible_viewport_px=None,
-    ):
-        """Rasterize and solve an initial Diffuse stroke inside the background job."""
-        source_extent = tuple(int(v) for v in snap["extent"])
-
-        def work(report):
-            report(5, "Diffuse: rasterizing brush")
-            seed_stencil, seed_extent = self._rasterize_stroke_geometry(
-                seed_geometry, source_extent
-            )
-            growth_stencil, growth_extent = self._rasterize_stroke_geometry(
-                growth_geometry, source_extent
-            )
-            if seed_stencil is None or seed_extent is None:
-                return None
-
-            operation_extent = extent_intersection(
-                extent_union(seed_extent, growth_extent), source_extent
-            )
-            if operation_extent is None:
-                return None
-
-            report(25, "Diffuse: clipping brush")
-            inside_clip = self._clipping_inside_mask(
-                operation_extent,
-                snap["vtk_ijk_to_world_affine"],
-                plane_coeffs=clipping_plane_coeffs,
-            )
-            seed_stencil, _inside_clip = self._restrict_stencil_to_clipping(
-                seed_stencil, operation_extent, snap, inside_mask=inside_clip
-            )
-            growth_stencil, _inside_clip = self._restrict_stencil_to_clipping(
-                growth_stencil, operation_extent, snap, inside_mask=inside_clip
-            )
-
-            report(40, "Diffuse: preparing domains")
-            old_patch = self._mask_patch(frame_state, operation_extent)
-            seed_domain = _stencil_to_bool(seed_stencil, operation_extent)
-            growth_domain = _stencil_to_bool(growth_stencil, operation_extent)
-
-            effective_threshold = float(threshold_value)
-            used_local_threshold = False
-            if smart_local_threshold:
-                local_threshold = self._estimate_local_threshold(
-                    operation_extent, seed_domain
-                )
-                if local_threshold is not None:
-                    effective_threshold = float(local_threshold)
-                    used_local_threshold = True
-
-            report(55, "Diffuse: threshold/connectivity")
-            new_patch, component_count = self._compute_diffuse_patch(
-                operation_extent,
-                old_patch,
-                seed_domain,
-                growth_domain,
-                effective_threshold,
-                growth_stencil=growth_stencil,
-                smart_faint_recovery=smart_faint_recovery,
-                smart_boundary_guard=smart_boundary_guard,
-                smart_visible_seeds=smart_visible_seeds,
-                visible_ijk_to_clip=visible_ijk_to_clip,
-                visible_depth_coeff=visible_depth_coeff,
-                visible_viewport_px=visible_viewport_px,
-            )
-            report(95, "Diffuse: finalizing")
-            return {
-                "operation_extent": operation_extent,
-                "old_patch": old_patch,
-                "new_patch": new_patch,
-                "seed_domain": seed_domain,
-                "growth_domain": growth_domain,
-                "threshold_value": effective_threshold,
-                "used_local_threshold": used_local_threshold,
-                "component_count": component_count,
-            }
-
-        return self._run_background(
-            "Diffuse",
-            work,
-            operation_snapshot=snap.get("_target_context"),
-        )
-
-    def _compute_diffuse_new_patch(self, *args, **kwargs):
-        def work(report):
-            report(10, "Diffuse: threshold/connectivity")
-            result = self._compute_diffuse_patch(*args, **kwargs)
-            report(95, "Diffuse: finalizing")
-            return result
-
-        return self._run_background("Diffuse", work)
 
     def _target_locked(self):
-        return bool(self._blocking_job is not None or self._speck_job is not None)
-    def _drain_target_sync(self):
-        if self._target_locked() or not self._deferred_target_sync:
-            return
-        self._deferred_target_sync = False
-        self.sync_target_to_latest_selection()
+        # Cancelled workers also count until their completion signal releases inputs.
+        # This bounds concurrency and keeps borrowed mask scalars immutable while read.
+        return bool(getattr(self, "_worker_refs", {}))
     def _schedule_pending_exact_threshold(self):
-        if self._blocking_job is not None or self._threshold_drain_scheduled:
+        if self._target_locked() or self._threshold_drain_scheduled:
             return
-        pending = self._pending_exact_threshold
-        if pending is None:
+        if self._pending_exact_threshold is None:
             return
-        self._pending_exact_threshold = None
         self._threshold_drain_scheduled = True
         def drain():
             self._threshold_drain_scheduled = False
-            self.set_threshold(pending)
+            pending = self._pending_exact_threshold
+            self._pending_exact_threshold = None
+            if pending is None:
+                return
+            generation, state, frame, value = pending
+            if (generation == self._operation_generation and state is self.state
+                    and frame == self.current_frame_index() and self.active):
+                self.set_threshold(value)
         QtCore.QTimer.singleShot(0, drain)
     def _next_job(self):
         self._job_serial += 1
         return int(self._job_serial)
     @QtCore.Slot(int, int, str)
     def _job_progress(self, job_id, value, text):
-        if int(job_id) == self._blocking_job:
+        worker = self._worker_refs.get(int(job_id))
+        if int(job_id) == self._operation_job and worker is not None and not worker.cancel_event.is_set():
             self.panel.set_progress(value, text)
     @staticmethod
-    def _filter_specks(mask, extent, minimum):
+    def _filter_specks(mask, extent, minimum, *, report):
         mask = np.ascontiguousarray(
             np.asarray(mask, dtype=np.uint8)
         )
@@ -5265,7 +4290,7 @@ class VolumeSegmentationController(QtCore.QObject):
             filt.SetLabelScalarTypeToUnsignedChar()
         except Exception:
             pass
-        filt.Update()
+        report.update(filt)
         return (
             np.asarray(
                 _image_array_view(filt.GetOutput()), dtype=np.uint8
@@ -5282,7 +4307,6 @@ class VolumeSegmentationController(QtCore.QObject):
         self._speck_history_depth = 0
         self._speck_history_entry = None
         self._speck_pending = None
-        self._speck_context = None
 
     def _speck_baseline_matches(self, frame_state):
         if (
@@ -5312,9 +4336,8 @@ class VolumeSegmentationController(QtCore.QObject):
         self._speck_target_vc = self.target_vc
         self._speck_frame = int(self.current_frame_index())
         self._speck_extent = tuple(int(v) for v in frame_state.mask_extent)
-        self._speck_base = np.array(
-            _image_array_view(frame_state.mask), copy=True, dtype=np.uint8
-        )
+        self._speck_base = _image_array_view(self._detached_image(frame_state.mask)).view()
+        self._speck_base.setflags(write=False)
         self._speck_history_depth = len(frame_state.undo_stack)
         self._speck_history_anchor = (
             frame_state.undo_stack[-1] if frame_state.undo_stack else None
@@ -5323,23 +4346,13 @@ class VolumeSegmentationController(QtCore.QObject):
         self._speck_pending = None
 
     @staticmethod
-    def _replace_speck_history_entry(
-        frame_state, extent, base, filtered, previous_entry, history_limit
-    ):
-        base = np.ascontiguousarray(np.asarray(base, dtype=np.uint8))
-        filtered = np.ascontiguousarray(np.asarray(filtered, dtype=np.uint8))
-        previous_is_current = bool(
-            previous_entry is not None
-            and frame_state.undo_stack
-            and frame_state.undo_stack[-1] is previous_entry
-        )
-        changed = not np.array_equal(base, filtered)
-        if not changed:
+    def _replace_speck_history_entry(frame_state, entry, previous_entry, history_limit):
+        previous_is_current = bool(previous_entry is not None and frame_state.undo_stack
+                                   and frame_state.undo_stack[-1] is previous_entry)
+        if entry is None:
             if previous_is_current:
                 frame_state.undo_stack.pop()
             return None
-
-        entry = HistoryEntry.make(extent, base, filtered, mode="specks")
         if previous_is_current:
             frame_state.undo_stack[-1] = entry
         else:
@@ -5354,38 +4367,25 @@ class VolumeSegmentationController(QtCore.QObject):
         minimum = max(1, int(minimum))
         if not self.active:
             return
-        if self._blocking_job is not None:
-            self.set_status("Finish the current segmentation operation before changing Remove specks.")
+        if self._target_locked():
+            worker = self._worker_refs.get(self._operation_job)
+            if (self._operation and self._operation["label"] == "Remove Specks"
+                    and worker is not None and not worker.cancel_event.is_set()):
+                self._speck_pending = minimum
             return
-        try:
-            self._preflight_authoritative_target(
-                "Remove Specks start validation"
-            )
-        except SegmentationPreflightError as exc:
-            self._stop_for_authoritative_error(exc)
-            return
-        fs = self._frame_state()
-        if fs is None or fs.mask is None or not np.any(
-            _image_array_view(fs.mask)
-        ):
+        frame = self._frame_state()
+        if frame is None or frame.mask is None:
             self.set_status("Remove specks: the current frame has no selected voxels.")
             return
-
-        if not self._speck_baseline_matches(fs):
-            self._start_speck_adjustment(fs)
-        if self._speck_job is not None:
-            self._speck_pending = minimum
-            return
-
+        if not self._speck_baseline_matches(frame):
+            self._start_speck_adjustment(frame)
         self._launch_speck_job(minimum)
 
     def _launch_speck_job(self, minimum):
         if self._speck_base is None:
             return
         try:
-            self._speck_context = self._preflight_authoritative_target(
-                "Remove Specks start validation"
-            )
+            snapshot = self._preflight_authoritative_target("Remove Specks start validation")
         except SegmentationPreflightError as exc:
             self._stop_for_authoritative_error(exc)
             return
@@ -5393,115 +4393,110 @@ class VolumeSegmentationController(QtCore.QObject):
         generation = int(self._speck_generation)
         base = self._speck_base
         extent = self._speck_extent
-        def work(_report):
-            filtered = self._filter_specks(base, extent, minimum)
-            return {
-                "generation": generation,
-                "minimum": minimum,
-                "mask": filtered,
-                "before": int(np.count_nonzero(base)),
-                "after": int(np.count_nonzero(filtered)),
-            }
-        self.panel.set_speck_busy(True)
-        self._speck_job = self._start_job(work)
+        def work(report):
+            report(10, "Remove Specks: filtering selection")
+            baseline = np.array(base, copy=True, dtype=np.uint8)
+            filtered = self._filter_specks(baseline, extent, minimum, report=report)
+            report(80, "Remove Specks: preparing history")
+            entry = (HistoryEntry.make(extent, base, filtered, mode="specks")
+                     if not np.array_equal(base, filtered) else None)
+            return {"generation": generation, "minimum": minimum, "mask": filtered, "baseline": baseline,
+                    "entry": entry, "before": int(np.count_nonzero(base)),
+                    "after": int(np.count_nonzero(filtered))}
+        self._run_background("Remove Specks", work, self._handle_speck_result,
+                             operation_snapshot=snapshot, preserve_specks=True)
 
     def _handle_speck_result(self, result):
         if int(result["generation"]) != int(self._speck_generation):
-            self.panel.set_speck_busy(False)
-            self._update_history_ui()
-            self._drain_target_sync()
             return
-        try:
-            if self._speck_context is None:
-                raise SegmentationPreflightError(
-                    "Remove Specks result validation: the operation target snapshot is missing."
-                )
-            self._accept_background_result(
-                self._speck_context, "Remove Specks"
-            )
-        except SegmentationPreflightError as exc:
-            self.panel.set_speck_busy(False)
-            self._reset_speck_adjustment()
-            self._update_history_ui()
-            self._drain_target_sync()
-            self._stop_for_authoritative_error(exc)
-            return
-
         pending = self._speck_pending
         self._speck_pending = None
         if pending is not None and int(pending) != int(result["minimum"]):
             self._launch_speck_job(int(pending))
             return
-
-        fs = self._frame_state(self._speck_frame)
-        if (
-            fs is None
-            or self._speck_target_vc is not self.target_vc
-            or int(self.current_frame_index()) != int(self._speck_frame)
-            or tuple(fs.mask_extent or ()) != tuple(self._speck_extent)
-            or not self._speck_baseline_matches(fs)
-        ):
-            self.panel.set_speck_busy(False)
+        frame = self._frame_state(self._speck_frame)
+        if frame is None or not self._speck_baseline_matches(frame):
             self._reset_speck_adjustment()
-            self._update_history_ui()
-            self._drain_target_sync()
             return
-
-        filtered = np.array(result["mask"], copy=True, dtype=np.uint8)
-        self._write_mask_patch(fs, self._speck_extent, filtered)
+        self._speck_base = result["baseline"]
+        self._write_mask_patch(frame, self._speck_extent, result["mask"])
         self._speck_history_entry = self._replace_speck_history_entry(
-            fs,
-            self._speck_extent,
-            self._speck_base,
-            filtered,
-            self._speck_history_entry,
-            self.settings.get("history_limit", 40),
-        )
+            frame, result["entry"], self._speck_history_entry, self.settings.get("history_limit", 40))
         self._sync_current_frame_preview(render=True)
-        self.panel.set_speck_busy(False)
-        self._update_history_ui()
-        removed = int(result["before"]) - int(result["after"])
-        self.set_status(
-            f"Remove specks: minimum {int(result['minimum'])} voxels; "
-            f"{max(0, removed):,} voxels removed from the whole selection."
-        )
-        self._drain_target_sync()
+        removed = max(0, int(result["before"]) - int(result["after"]))
+        self.set_status(f"Remove specks: minimum {int(result['minimum'])} voxels; {removed:,} voxels removed from the whole selection.")
 
     def _output_mask(self):
-        if not self.active:
+        if not self.active or self._target_locked():
             return None
-        fs = self._frame_state()
-        if fs is None or fs.mask is None or not np.any(
-            _image_array_view(fs.mask)
-        ):
-            QtWidgets.QMessageBox.information(
-                self.main, "Volume Segmentation",
-                "The current frame has no selected voxels."
-            )
+        frame = self._frame_state()
+        if frame is None or frame.mask is None:
+            self.set_status("The current frame has no selected voxels.")
             return None
-        return fs
-    def _run_output_background(
-        self, label, function, *, operation_snapshot=None
-    ):
+        return frame
+
+    def _create_output(self, label, suffix, operation, *, mask_volume=False, margin=0):
+        frame = self._output_mask()
+        if frame is None:
+            return
         try:
-            return self._run_background(
-                label,
-                function,
-                operation_snapshot=operation_snapshot,
-            )
+            snapshot = self._preflight_authoritative_target(f"{label} start validation")
         except SegmentationPreflightError as exc:
-            print(f"[VolumeSegmentation] {label} discarded: {exc}")
             self._stop_for_authoritative_error(exc)
-            return None
-        except Exception as exc:
-            print(f"[VolumeSegmentation] {label} failed: {exc}")
-            self.set_status(f"{label} failed: {exc}")
-            QtWidgets.QMessageBox.warning(
-                self.main, "Volume Segmentation", f"{label} failed:\n{exc}"
-            )
-            return None
+            return
+        source = self._detached_image(self.target_vc.image)
+        mask_image = self._detached_image(frame.mask)
+        extent = tuple(frame.mask_extent)
+        name = self._derived_name(suffix)
+        parameters = {
+            "signal_threshold": float(self.signal_threshold),
+            "upper_threshold": float(self.upper_threshold),
+            "seed_radius_voxels": int(self.settings["seed_radius"]),
+            "growth_radius_voxels": int(self.settings["growth_radius"]),
+        }
+        if operation == "segmentation_extract_original_signal":
+            parameters["margin_voxels"] = int(margin)
+        def work(report):
+            report(5, f"{label}: reading mask")
+            mask = np.array(_image_array_view(mask_image), copy=True, dtype=np.uint8)
+            if not np.any(mask):
+                return None
+            output = vtk.vtkImageData()
+            if mask_volume:
+                output.DeepCopy(mask_image)
+            else:
+                report(15, f"{label}: copying source grid")
+                output.DeepCopy(source)
+                arr = _image_array_view(output)
+                source_arr = _image_array_view(source)
+                report(55, f"{label}: applying mask")
+                if operation == "segmentation_delete_selected":
+                    arr[extent_slices_zyx(extent, output.GetExtent())][mask != 0] = 0
+                else:
+                    out_extent = extent_expand(extent, margin, limit=source.GetExtent())
+                    roi = np.zeros(extent_shape_zyx(out_extent), dtype=np.uint8)
+                    roi[extent_slices_zyx(extent, out_extent)] = mask
+                    if margin:
+                        roi = self._dilate_roi(roi, out_extent, source, margin, report=report)
+                    report(75, f"{label}: copying selected signal")
+                    slices = extent_slices_zyx(out_extent, output.GetExtent())
+                    arr.fill(0)
+                    np.copyto(arr[slices], source_arr[slices], where=(roi != 0))
+                output.GetPointData().GetScalars().Modified()
+                output.Modified()
+            report(95, f"{label}: ready")
+            return output
+        def publish(output):
+            if output is None:
+                self.set_status("The current frame has no selected voxels.")
+                return
+            self._add_derived_volume(output, name, mask_volume=mask_volume,
+                operation=operation, operation_parameters=parameters, operation_snapshot=snapshot)
+            self.set_status(f"{label}: created {name}")
+        self._run_background(label, work, publish, operation_snapshot=snapshot)
+
     @staticmethod
-    def _dilate_roi(mask, extent, source, margin):
+    def _dilate_roi(mask, extent, source, margin, *, report):
         if int(margin) <= 0:
             return np.ascontiguousarray(mask, dtype=np.uint8)
         image = _binary_numpy_image(
@@ -5513,79 +4508,807 @@ class VolumeSegmentationController(QtCore.QObject):
         filt.SetKernelSize(diameter, diameter, diameter)
         filt.SetDilateValue(1)
         filt.SetErodeValue(0)
-        filt.Update()
+        report.update(filt)
         return np.ascontiguousarray(
             _image_array_view(filt.GetOutput()), dtype=np.uint8
         )
     def extract_original_signal(self):
-        fs = self._output_mask()
-        if fs is None:
-            return
-        try:
-            operation_snapshot = self._preflight_authoritative_target(
-                "Extract Original Signal start validation"
-            )
-        except SegmentationPreflightError as exc:
-            self._stop_for_authoritative_error(exc)
-            return
         margin = max(0, int(self.panel.extract_margin.value()))
-        target = self.target_vc
-        source = target.image
-        source_extent = _extent_tuple(source.GetExtent())
-        mask_extent = tuple(int(v) for v in fs.mask_extent)
-        mask = np.array(
-            _image_array_view(fs.mask), copy=True, dtype=np.uint8
-        )
-        out_extent = extent_expand(
-            mask_extent, margin, limit=source_extent
-        )
-
-        def work(report):
-            report(10, "Original signal: ROI")
-            roi = np.zeros(
-                extent_shape_zyx(out_extent), dtype=np.uint8
-            )
-            roi[extent_slices_zyx(mask_extent, out_extent)] = mask
-            roi = self._dilate_roi(roi, out_extent, source, margin)
-            report(45, "Original signal: copying source grid")
-            output = vtk.vtkImageData()
-            output.DeepCopy(source)
-            arr = _image_array_view(output)
-            source_arr = _image_array_view(source)
-            roi_slices = extent_slices_zyx(out_extent, output.GetExtent())
-            output_roi = arr[roi_slices]
-            source_roi = source_arr[roi_slices]
-            if output_roi.shape != roi.shape:
-                raise RuntimeError("Original-signal ROI geometry mismatch.")
-            arr.fill(0)
-            np.copyto(output_roi, source_roi, where=(roi != 0))
-            output.GetPointData().GetScalars().Modified()
-            output.Modified()
-            report(95, "Original signal: finalizing")
-            return output
-
-        output = self._run_output_background(
-            "Extract Original Signal",
-            work,
-            operation_snapshot=operation_snapshot,
-        )
-        if output is None:
-            return
         suffix = "original_signal" if margin == 0 else f"original_signal_m{margin}"
-        name = self._derived_name(suffix)
-        try:
-            self._add_derived_volume(
-                output, name, mask_volume=False,
-                operation="segmentation_extract_original_signal",
-                operation_parameters={"margin_voxels": int(margin)},
-                operation_snapshot=operation_snapshot,
-            )
-        except SegmentationPreflightError as exc:
-            self._stop_for_authoritative_error(exc)
+        self._create_output("Extract Original Signal", suffix,
+                            "segmentation_extract_original_signal", margin=margin)
+
+
+    def _operation_is_current(self, operation):
+        return bool(operation and self.active
+                    and operation["generation"] == self._operation_generation
+                    and operation["state"] is self.state
+                    and operation["snapshot"].frame_index == self.current_frame_index()
+                    and operation["frame"] is self._frame_state())
+
+    @staticmethod
+    def _rollback_operation(operation):
+        if operation and operation.get("rollback") is not None:
+            rollback = operation.pop("rollback")
+            rollback()
+
+    def _invalidate_operation(self):
+        self._operation_generation = getattr(self, "_operation_generation", 0) + 1
+        self._pending_exact_threshold = None
+        for worker in getattr(self, "_worker_refs", {}).values():
+            worker.cancel_event.set()
+        self._rollback_operation(getattr(self, "_operation", None))
+        if self._target_locked():
+            self.panel.cancel_operation.setEnabled(False)
+
+    def cancel_operation(self):
+        if not self._target_locked():
             return
-        self.set_status(
-            f"Extracted original signal with {margin}-voxel 3-D margin: {name}"
+        self._invalidate_operation()
+        self._reset_speck_adjustment()
+        self.set_brush_interaction_active(False)
+        self.panel.set_progress(0, "Cancelling")
+        self.set_status("Operation cancelled. The last completed mask is retained; navigation is active.")
+
+    @QtCore.Slot(int)
+    def _job_cancelled(self, job_id):
+        self._worker_refs.pop(int(job_id), None)
+        if int(job_id) == self._operation_job:
+            self._rollback_operation(self._operation)
+            self._operation = None
+            self._operation_job = None
+            self._reset_speck_adjustment()
+            self._finish_brush_feedback(False)
+        self._finish_background_ui()
+
+    def _finish_background_ui(self):
+        if self._target_locked():
+            return
+        self.panel.set_background_busy(False)
+        self._update_history_ui()
+        self._schedule_pending_exact_threshold()
+
+    @staticmethod
+    def _detached_image(image):
+        if image is None:
+            return None
+        detached = vtk.vtkImageData()
+        detached.ShallowCopy(image)
+        return detached
+
+    def _capture_computation(self, frame):
+        # Metadata/pipeline wrappers are private. The scalar buffers are retained for
+        # read-only use; editing is serialized until completion, including cancellation.
+        source = self._detached_image(self.target_vc.image)
+        mask = SegmentationFrameState(mask=self._detached_image(frame.mask),
+                                      mask_extent=frame.mask_extent)
+        computation = SegmentationComputation(source, self._scalar_range(self.target_vc), mask)
+        computation.signal_threshold = float(self.signal_threshold)
+        source_key = (id(self.target_vc.image), self.target_vc.image.GetMTime())
+        cached = self._boundary_gradient_cache
+        if self._boundary_gradient_cache_key == source_key and cached is not None:
+            computation._boundary_gradient_cache_key, computation._boundary_gradient_cache = cached
+        return computation
+
+    def _adopt_computation_cache(self, computation):
+        self._boundary_gradient_cache_key = (id(self.target_vc.image), self.target_vc.image.GetMTime())
+        self._boundary_gradient_cache = (
+            computation._boundary_gradient_cache_key, computation._boundary_gradient_cache
         )
+
+class SegmentationComputation:
+    """Detached calculation state. No renderer, widgets or live target references."""
+
+    def __init__(self, source, scalar_range, frame_state):
+        self.source = source
+        self.scalar_range = tuple(float(v) for v in scalar_range)
+        self.signal_threshold = self.scalar_range[0]
+        self.upper_threshold = self.scalar_range[1]
+        self.frame_state = frame_state
+        self.report = None
+        self._boundary_gradient_cache_key = None
+        self._boundary_gradient_cache = None
+        self._boundary_gradient_cache_limit_bytes = 256 * 1024 * 1024
+
+    def _poly_stencil(self, poly, source_extent):
+        bounds = poly.GetBounds()
+        if bounds is None or any(not math.isfinite(float(v)) for v in bounds):
+            return None, None
+        e = (
+            math.floor(bounds[0])-1, math.ceil(bounds[1])+1,
+            math.floor(bounds[2])-1, math.ceil(bounds[3])+1,
+            math.floor(bounds[4])-1, math.ceil(bounds[5])+1,
+        )
+        e = extent_intersection(e, source_extent)
+        if e is None:
+            return None, None
+        raster = vtk.vtkPolyDataToImageStencil()
+        raster.SetInputData(poly)
+        raster.SetOutputOrigin(0.0, 0.0, 0.0)
+        raster.SetOutputSpacing(1.0, 1.0, 1.0)
+        raster.SetOutputWholeExtent(*e)
+        raster.SetTolerance(0.0)
+        self.report.update(raster)
+        stencil = vtk.vtkImageStencilData()
+        stencil.DeepCopy(raster.GetOutput())
+        return stencil, e
+
+
+    def _rasterize_stroke_geometry(self, geometry, source_extent):
+        """Rasterize captured brush solids; safe to run in a segmentation worker."""
+        combined = None
+        combined_extent = None
+        for poly in geometry or ():
+            self.report.check_cancelled()
+            stencil, extent = self._poly_stencil(poly, source_extent)
+            if stencil is None:
+                continue
+            if combined is None:
+                combined = vtk.vtkImageStencilData()
+                combined.DeepCopy(stencil)
+            else:
+                combined.Add(stencil)
+            combined_extent = extent_union(combined_extent, extent)
+        return combined, combined_extent
+
+
+    def _clipping_inside_mask(self, extent, vtk_ijk_to_world, plane_coeffs=()):
+        shape = extent_shape_zyx(extent)
+        if any(v <= 0 for v in shape):
+            return np.zeros(shape, dtype=bool)
+        if not plane_coeffs:
+            return np.ones(shape, dtype=bool)
+
+        x = np.arange(extent[0], extent[1]+1, dtype=np.float64)[None, None, :]
+        y = np.arange(extent[2], extent[3]+1, dtype=np.float64)[None, :, None]
+        total = extent_voxel_count(extent)
+        if total <= 8_000_000:
+            z = np.arange(extent[4], extent[5]+1, dtype=np.float64)[:, None, None]
+            inside = np.ones(shape, dtype=bool)
+            for a, b, c, d in plane_coeffs:
+                inside &= (a*x + b*y + c*z + d) >= -1e-8
+            return inside
+
+        # Large local ROI: retain vectorized XY work but chunk Z to limit temporaries.
+        inside = np.ones(shape, dtype=bool)
+        plane_xy = max(1, shape[1]*shape[2])
+        chunk_z = max(1, min(shape[0], int(2_000_000/plane_xy)))
+        for z0 in range(0, shape[0], chunk_z):
+            self.report.check_cancelled()
+            z1 = min(shape[0], z0+chunk_z)
+            z = np.arange(extent[4]+z0, extent[4]+z1, dtype=np.float64)[:, None, None]
+            block = inside[z0:z1]
+            for a, b, c, d in plane_coeffs:
+                block &= (a*x + b*y + c*z + d) >= -1e-8
+        return inside
+
+
+
+
+    def _threshold_source_extent(self, extent, threshold_value=None, upper_threshold=None):
+        """Threshold only ``extent`` from the captured source image.
+
+        ``vtkImageThreshold`` honors UPDATE_EXTENT, so there is no need to create
+        an intermediate ``vtkImageClip`` copy for every brush operation.  The
+        output is UCHAR 0/1 so downstream connectivity also runs on the smallest
+        practical scalar type.
+        """
+        e = _extent_tuple(extent)
+        if e is None:
+            raise ValueError("Invalid threshold extent")
+        threshold = vtk.vtkImageThreshold()
+        threshold.SetInputData(self.source)
+        lower = self.signal_threshold if threshold_value is None else float(threshold_value)
+        upper = self.upper_threshold if upper_threshold is None else float(upper_threshold)
+        threshold.ThresholdBetween(float(lower), float(upper))
+        threshold.ReplaceInOn()
+        threshold.ReplaceOutOn()
+        threshold.SetInValue(1)
+        threshold.SetOutValue(0)
+        threshold.SetOutputScalarTypeToUnsignedChar()
+        threshold.UpdateInformation()
+        try:
+            info = threshold.GetOutputInformation(0)
+            info.Set(vtk.vtkStreamingDemandDrivenPipeline.UPDATE_EXTENT(), e, 6)
+        except Exception:
+            # Older VTK builds still work correctly; they may simply request the
+            pass
+        self.report.update(threshold)
+        return threshold
+
+
+    def _seed_points_from_candidates(self, candidates, extent):
+        """Return cheap seed points using one seed per contiguous X run.
+
+        Every non-empty 3-D connected component contains at least one X run, so
+        this guarantees coverage without generating a full int32 component-label
+        image and scanning it with ``np.unique``.  The VTK connectivity filter
+        itself de-duplicates overlapping flood fronts through its visited mask.
+        """
+        candidates = np.asarray(candidates, dtype=bool)
+        if candidates.size == 0 or not np.any(candidates):
+            return vtk.vtkPoints(), 0
+
+        starts = np.empty_like(candidates, dtype=bool)
+        starts[..., 0] = candidates[..., 0]
+        if candidates.shape[2] > 1:
+            np.logical_and(
+                candidates[..., 1:],
+                np.logical_not(candidates[..., :-1]),
+                out=starts[..., 1:],
+            )
+        zz, yy, xx = np.nonzero(starts)
+        count = int(xx.size)
+        if count <= 0:
+            return vtk.vtkPoints(), 0
+
+        # vtkImageThresholdConnectivity converts seed points back to indices with
+        # (point-origin)/spacing and currently ignores vtkImageData direction.
+        # Feed exactly that coordinate convention, vectorized, so non-identity
+        # image directions do not corrupt seed indexing.
+        origin = np.asarray(self.source.GetOrigin(), dtype=np.float64)
+        spacing = np.asarray(self.source.GetSpacing(), dtype=np.float64)
+        ijk = np.column_stack((
+            xx.astype(np.float64, copy=False) + float(extent[0]),
+            yy.astype(np.float64, copy=False) + float(extent[2]),
+            zz.astype(np.float64, copy=False) + float(extent[4]),
+        ))
+        points_xyz = origin[None, :] + ijk * spacing[None, :]
+        vtk_points_array = numpy_to_vtk(
+            np.ascontiguousarray(points_xyz, dtype=np.float64),
+            deep=True,
+        )
+        vtk_points = vtk.vtkPoints()
+        vtk_points.SetData(vtk_points_array)
+        return vtk_points, count
+
+
+    def _source_patch_view(self, extent):
+        source_extent = _extent_tuple(self.source.GetExtent())
+        e = _extent_tuple(extent)
+        if source_extent is None or e is None or extent_intersection(e, source_extent) != e:
+            raise ValueError("Smart-brush extent lies outside the target image")
+        return _image_array_view(self.source)[extent_slices_zyx(e, source_extent)]
+
+
+    @staticmethod
+    def _sample_masked_values(array, mask, max_samples=500_000):
+        """Return a bounded deterministic sample without first copying all masked voxels."""
+        values = np.asarray(array)
+        domain = np.asarray(mask, dtype=bool)
+        if values.shape != domain.shape or values.size == 0:
+            return np.empty(0, dtype=values.dtype)
+
+        selected_count = int(np.count_nonzero(domain))
+        if selected_count <= 0:
+            return np.empty(0, dtype=values.dtype)
+        max_samples = max(64, int(max_samples))
+        if selected_count <= max_samples:
+            return values[domain]
+
+        # Spatially sample the complete ROI. This bounds both the temporary index
+        # array and the gathered values even when a very large brush contains
+        # millions of eligible voxels.
+        flat_values = values.reshape(-1)
+        flat_domain = domain.reshape(-1)
+        sample_count = min(max_samples, flat_values.size)
+        indices = np.linspace(0, flat_values.size - 1, sample_count, dtype=np.intp)
+        sampled_domain = flat_domain[indices]
+        return flat_values[indices[sampled_domain]]
+
+
+    def _visible_seed_domain(
+        self,
+        extent,
+        seed_domain,
+        intensity_allowed,
+        *,
+        visible_ijk_to_clip=None,
+        visible_depth_coeff=None,
+        visible_viewport_px=None,
+    ):
+        """Keep the front-most threshold-passing seed layer for each screen bin.
+
+        This is intentionally a seed filter, not a visibility-constrained region
+        grow. The first pass builds a small depth buffer in two-pixel screen bins;
+        the second keeps candidates close to the nearest signal in each bin. A
+        several-voxel depth tolerance provides robust seed thickness while still
+        rejecting clearly separate structures farther behind the painted target.
+        """
+        seed = np.asarray(seed_domain, dtype=bool)
+        allowed = np.asarray(intensity_allowed, dtype=bool)
+        if seed.shape != allowed.shape or seed.size == 0:
+            return seed
+        candidates = seed & allowed
+        candidate_count = int(np.count_nonzero(candidates))
+        if candidate_count <= 0:
+            return np.zeros_like(seed, dtype=bool)
+
+        try:
+            ijk_to_clip = np.asarray(visible_ijk_to_clip, dtype=float).reshape(4, 4)
+            depth_coeff = np.asarray(visible_depth_coeff, dtype=float).reshape(4)
+            vx0, vy0, vx1, vy1 = (float(v) for v in visible_viewport_px)
+        except Exception:
+            # Fail open if an old in-memory history entry lacks projection data.
+            return seed
+
+        viewport_w = max(1.0, vx1 - vx0)
+        viewport_h = max(1.0, vy1 - vy0)
+        if not (
+            np.all(np.isfinite(ijk_to_clip))
+            and np.all(np.isfinite(depth_coeff))
+            and all(math.isfinite(v) for v in (vx0, vy0, vx1, vy1))
+        ):
+            return seed
+
+        # Two-pixel bins are more stable than exact raster pixels for discrete
+        # voxel centers and halve the depth-buffer dimensions in each direction.
+        bin_size = 2.0
+        bins_x = max(1, int(math.ceil(viewport_w / bin_size)))
+        bins_y = max(1, int(math.ceil(viewport_h / bin_size)))
+        front_depth = np.full(bins_x * bins_y, np.inf, dtype=np.float32)
+
+        e = _extent_tuple(extent)
+        if e is None:
+            return seed
+        shape = candidates.shape
+        nz, ny, nx = (int(v) for v in shape)
+        flat_candidates = candidates.reshape(-1)
+        block_voxels = 500_000
+
+        def projected_block(start, stop):
+            local = np.flatnonzero(flat_candidates[start:stop])
+            if local.size == 0:
+                return None
+            flat_index = local.astype(np.int64, copy=False) + int(start)
+            xx = flat_index % nx
+            tmp = flat_index // nx
+            yy = tmp % ny
+            zz = tmp // ny
+
+            coords = np.empty((flat_index.size, 4), dtype=np.float64)
+            coords[:, 0] = xx + float(e[0])
+            coords[:, 1] = yy + float(e[2])
+            coords[:, 2] = zz + float(e[4])
+            coords[:, 3] = 1.0
+
+            clip = coords @ ijk_to_clip.T
+            w = clip[:, 3]
+            valid = np.isfinite(w) & (np.abs(w) > 1e-12)
+            if not np.any(valid):
+                return None
+            ndc_x = np.empty_like(w)
+            ndc_y = np.empty_like(w)
+            ndc_x.fill(np.nan)
+            ndc_y.fill(np.nan)
+            ndc_x[valid] = clip[valid, 0] / w[valid]
+            ndc_y[valid] = clip[valid, 1] / w[valid]
+            px = vx0 + 0.5 * (ndc_x + 1.0) * viewport_w
+            py = vy0 + 0.5 * (ndc_y + 1.0) * viewport_h
+            bx_float = np.floor((px - vx0) / bin_size)
+            by_float = np.floor((py - vy0) / bin_size)
+            valid &= (
+                np.isfinite(px) & np.isfinite(py)
+                & np.isfinite(bx_float) & np.isfinite(by_float)
+                & (bx_float >= 0) & (bx_float < bins_x)
+                & (by_float >= 0) & (by_float < bins_y)
+            )
+            indices = np.flatnonzero(valid)
+            if indices.size == 0:
+                return None
+            depth = coords[indices] @ depth_coeff
+            depth_valid = np.isfinite(depth) & (depth >= -1e-9)
+            if not np.any(depth_valid):
+                return None
+            indices = indices[depth_valid]
+            depth = depth[depth_valid]
+            bx = bx_float[indices].astype(np.int64, copy=False)
+            by = by_float[indices].astype(np.int64, copy=False)
+            return (
+                flat_index[indices].astype(np.intp, copy=False),
+                (by * bins_x + bx).astype(np.intp, copy=False),
+                depth.astype(np.float32, copy=False),
+            )
+
+        # First pass: nearest threshold-passing seed signal in each screen bin.
+        for start in range(0, flat_candidates.size, block_voxels):
+            self.report.check_cancelled()
+            stop = min(flat_candidates.size, start + block_voxels)
+            projected = projected_block(start, stop)
+            if projected is None:
+                continue
+            _flat_index, pixels, depth = projected
+            np.minimum.at(front_depth, pixels, depth)
+
+        if not np.any(np.isfinite(front_depth)):
+            return seed
+
+        # Approximate four source-voxel layers along the camera direction. This
+        # gives the seed enough thickness for connectivity without admitting a
+        # clearly separated structure farther down the same viewing ray.
+        one_voxel_depth = float(np.max(np.abs(depth_coeff[:3])))
+        if not math.isfinite(one_voxel_depth) or one_voxel_depth <= 1e-12:
+            one_voxel_depth = 1e-6
+        depth_tolerance = max(1e-6, 4.0 * one_voxel_depth)
+
+        visible_flat = np.zeros(flat_candidates.size, dtype=bool)
+        for start in range(0, flat_candidates.size, block_voxels):
+            self.report.check_cancelled()
+            stop = min(flat_candidates.size, start + block_voxels)
+            projected = projected_block(start, stop)
+            if projected is None:
+                continue
+            flat_index, pixels, depth = projected
+            keep = depth <= (front_depth[pixels] + depth_tolerance)
+            if np.any(keep):
+                visible_flat[flat_index[keep]] = True
+
+        return visible_flat.reshape(shape)
+
+
+    def _estimate_local_threshold(self, extent, domain):
+        """Return a deterministic Otsu-like threshold from the painted 3-D domain.
+
+        The stroke frustum naturally contains foreground plus local background
+        along the viewing rays, which makes it a useful local intensity sample.
+        Sampling is bounded before masked values are materialized so very large
+        screen-space brushes cannot create an equally large temporary array.
+        """
+        mask = np.asarray(domain, dtype=bool)
+        if mask.size == 0 or np.count_nonzero(mask) < 64:
+            return None
+        source = np.asarray(self._source_patch_view(extent))
+        values = self._sample_masked_values(source, mask)
+        if values.size < 64:
+            return None
+        values = np.asarray(values, dtype=np.float64)
+        values = values[np.isfinite(values)]
+        if values.size < 64:
+            return None
+
+        lo = float(np.percentile(values, 1.0))
+        hi = float(np.percentile(values, 99.5))
+        if not math.isfinite(lo) or not math.isfinite(hi) or hi <= lo:
+            return None
+
+        hist, edges = np.histogram(values, bins=256, range=(lo, hi))
+        hist = hist.astype(np.float64, copy=False)
+        total = float(hist.sum())
+        if total < 64.0 or np.count_nonzero(hist) < 2:
+            return None
+        centers = 0.5 * (edges[:-1] + edges[1:])
+        weight_left = np.cumsum(hist)
+        sum_left = np.cumsum(hist * centers)
+        total_sum = float(sum_left[-1])
+        weight_right = total - weight_left
+
+        valid = (weight_left > 0.0) & (weight_right > 0.0)
+        if not np.any(valid):
+            return None
+        mean_left = np.zeros_like(centers)
+        mean_right = np.zeros_like(centers)
+        mean_left[valid] = sum_left[valid] / weight_left[valid]
+        mean_right[valid] = (total_sum - sum_left[valid]) / weight_right[valid]
+        between = np.full_like(centers, -1.0)
+        between[valid] = (
+            weight_left[valid] * weight_right[valid]
+            * np.square(mean_left[valid] - mean_right[valid])
+        )
+        index = int(np.argmax(between))
+        value = float(centers[index])
+        scalar_lo, scalar_hi = self.scalar_range
+        return max(float(scalar_lo), min(float(scalar_hi), value))
+
+
+    def _faint_growth_threshold(self, seed_threshold):
+        """Relax a confident seed threshold toward the target's background floor."""
+        lo, hi = self.scalar_range
+        seed_threshold = max(float(lo), min(float(hi), float(seed_threshold)))
+        # Keep roughly 72% of the distance above the scalar floor. This is
+        # intentionally conservative: faint connected branches become available
+        # without turning Diffuse into an unrestricted low-threshold flood fill.
+        return max(float(lo), min(seed_threshold, float(lo) + 0.72 * (seed_threshold - float(lo))))
+
+
+    def _boundary_guard_domain(self, extent, growth_domain, intensity_allowed, seed_domain):
+        """Remove the strongest local signal gradients from the Diffuse domain."""
+        growth_domain = np.asarray(growth_domain, dtype=bool)
+        intensity_allowed = np.asarray(intensity_allowed, dtype=bool)
+        seed_domain = np.asarray(seed_domain, dtype=bool)
+        eligible = growth_domain & intensity_allowed
+        if np.count_nonzero(eligible) < 128:
+            return growth_domain, None
+
+        # Stream only the requested ROI from the captured source image.
+        # Avoid vtkImageClip here: its extra cropped source allocation is expensive
+        # for the large screen-space growth radii supported by MADI3D. Reuse the
+        # gradient while repeatedly adjusting the threshold of the same latest
+        # stroke; only the intensity eligibility/cutoff changes between updates.
+        image = self.source
+        cache_key = tuple(int(v) for v in extent)
+        magnitude = None
+        if cache_key == self._boundary_gradient_cache_key:
+            cached = self._boundary_gradient_cache
+            if cached is not None and cached.shape == growth_domain.shape:
+                magnitude = cached
+
+        if magnitude is None:
+            gradient = vtk.vtkImageGradientMagnitude()
+            gradient.SetInputData(image)
+            gradient.SetDimensionality(3)
+            gradient.HandleBoundariesOn()
+            gradient.UpdateInformation()
+            try:
+                gradient.GetOutputInformation(0).Set(
+                    vtk.vtkStreamingDemandDrivenPipeline.UPDATE_EXTENT(), extent, 6
+                )
+            except Exception:
+                pass
+            self.report.update(gradient)
+            magnitude = np.array(
+                _image_array_view(gradient.GetOutput()), dtype=np.float32, copy=True
+            )
+            if magnitude.shape != growth_domain.shape:
+                return growth_domain, None
+            if magnitude.nbytes <= int(self._boundary_gradient_cache_limit_bytes):
+                self._boundary_gradient_cache_key = cache_key
+                self._boundary_gradient_cache = magnitude
+            else:
+                self._boundary_gradient_cache_key = None
+                self._boundary_gradient_cache = None
+
+        values = self._sample_masked_values(magnitude, eligible)
+        values = values[np.isfinite(values)]
+        if values.size < 128:
+            return growth_domain, None
+        cutoff = float(np.percentile(values, 95.0))
+        if not math.isfinite(cutoff) or cutoff <= 0.0:
+            return growth_domain, None
+
+        guarded = growth_domain & (magnitude <= cutoff)
+        # Never let the boundary test erase the user's confident seed itself.
+        guarded |= growth_domain & seed_domain
+        return guarded, cutoff
+
+
+    def _threshold_allowed_patch(self, extent, threshold_value):
+        """Fast Boolean threshold for consumers that do not need a VTK pipeline."""
+        source = np.asarray(self._source_patch_view(extent))
+        lower = float(threshold_value)
+        upper = float(self.upper_threshold)
+        allowed = np.greater_equal(source, lower)
+        if math.isfinite(upper):
+            np.logical_and(allowed, np.less_equal(source, upper), out=allowed)
+        return allowed
+
+
+    def _compute_diffuse_patch(
+        self,
+        extent,
+        old_patch,
+        seed_domain,
+        growth_domain,
+        threshold_value,
+        growth_stencil=None,
+        *,
+        smart_faint_recovery=False,
+        smart_boundary_guard=False,
+        smart_visible_seeds=False,
+        visible_ijk_to_clip=None,
+        visible_depth_coeff=None,
+        visible_viewport_px=None,
+    ):
+        self.report.check_cancelled()
+        old = np.asarray(old_patch, dtype=bool)
+        seed_domain = np.asarray(seed_domain, dtype=bool)
+        growth_domain = np.asarray(growth_domain, dtype=bool)
+
+        seed_threshold = float(threshold_value)
+        growth_threshold = (
+            self._faint_growth_threshold(seed_threshold)
+            if smart_faint_recovery else seed_threshold
+        )
+
+        # Seeds remain strict even when faint recovery is enabled. Connectivity
+        # may then traverse the lower growth threshold inside the outer domain.
+        seed_filter = self._threshold_source_extent(extent, seed_threshold, self.upper_threshold)
+        seed_allowed = np.asarray(_image_array_view(seed_filter.GetOutput()), dtype=bool)
+
+        effective_seed_domain = seed_domain
+        if smart_visible_seeds:
+            effective_seed_domain = self._visible_seed_domain(
+                extent,
+                seed_domain,
+                seed_allowed,
+                visible_ijk_to_clip=visible_ijk_to_clip,
+                visible_depth_coeff=visible_depth_coeff,
+                visible_viewport_px=visible_viewport_px,
+            )
+
+        if abs(growth_threshold - seed_threshold) <= max(1e-12, abs(self.upper_threshold) * 1e-12):
+            growth_filter = seed_filter
+            growth_allowed = seed_allowed
+        else:
+            growth_filter = self._threshold_source_extent(extent, growth_threshold, self.upper_threshold)
+            growth_allowed = np.asarray(_image_array_view(growth_filter.GetOutput()), dtype=bool)
+
+        if smart_boundary_guard:
+            growth_domain, _cutoff = self._boundary_guard_domain(
+                extent, growth_domain, growth_allowed, effective_seed_domain
+            )
+            # The original screen-space stencil no longer represents the guarded
+            # Boolean domain, so rebuild the local stencil once.
+            growth_stencil = None
+
+        # Existing selected voxels remain valid Diffuse starting points even when
+        # Visible Seeds is enabled. Visibility filtering applies only to new seed
+        # material from this stroke; it must not invalidate deliberate prior work.
+        self.report.check_cancelled()
+        candidates = ((old & seed_allowed) | (effective_seed_domain & seed_allowed)) & growth_domain
+        seed_points, seed_count = self._seed_points_from_candidates(candidates, extent)
+        if seed_count <= 0:
+            return old.astype(np.uint8), 0
+
+        if growth_stencil is None:
+            growth_stencil = _stencil_from_binary(
+                growth_domain.astype(np.uint8), extent, inside_value=1
+            )
+
+        grow = vtk.vtkImageThresholdConnectivity()
+        grow.SetInputConnection(growth_filter.GetOutputPort())
+        grow.ThresholdBetween(1.0, 1.0)
+        grow.SetSeedPoints(seed_points)
+        grow.SetStencilData(growth_stencil)
+        grow.ReplaceInOn()
+        grow.ReplaceOutOn()
+        grow.SetInValue(1)
+        grow.SetOutValue(0)
+        # vtkImageThresholdConnectivity otherwise requests the full upstream
+        # WHOLE_EXTENT even when vtkImageThreshold was previously updated only
+        # for this ROI. Constrain both its flood-fill slice range and output
+        # UPDATE_EXTENT so the source threshold remains strictly local.
+        grow.SetSliceRangeX(int(extent[0]), int(extent[1]))
+        grow.SetSliceRangeY(int(extent[2]), int(extent[3]))
+        grow.SetSliceRangeZ(int(extent[4]), int(extent[5]))
+        grow.UpdateInformation()
+        try:
+            grow.GetOutputInformation(0).Set(
+                vtk.vtkStreamingDemandDrivenPipeline.UPDATE_EXTENT(), extent, 6
+            )
+        except Exception:
+            pass
+        self.report.update(grow)
+
+        result = np.asarray(_image_array_view(grow.GetOutput()), dtype=bool)
+        result &= growth_domain
+        return (old | result).astype(np.uint8), seed_count
+
+
+    def _recompute_history_entry(self, entry, old_patch, threshold_override=None):
+        old = np.ascontiguousarray(np.asarray(old_patch, dtype=np.uint8))
+        mode = str(entry.mode).lower()
+        if mode == "clear":
+            return np.zeros_like(old, dtype=np.uint8)
+
+        seed = entry.domain("seed")
+        if seed is None:
+            seed = np.zeros_like(old, dtype=np.uint8)
+        seed = np.asarray(seed, dtype=bool)
+        if mode == "unselect":
+            return (np.asarray(old, dtype=bool) & ~seed).astype(np.uint8)
+
+        threshold_value = entry.threshold if threshold_override is None else float(threshold_override)
+        if threshold_value is None:
+            threshold_value = float(self.signal_threshold)
+        if mode == "select":
+            allowed = self._threshold_allowed_patch(entry.extent, threshold_value)
+            effective_seed = seed
+            if bool(entry.smart_visible_seeds):
+                effective_seed = self._visible_seed_domain(
+                    entry.extent,
+                    seed,
+                    allowed,
+                    visible_ijk_to_clip=entry.visible_ijk_to_clip,
+                    visible_depth_coeff=entry.visible_depth_coeff,
+                    visible_viewport_px=entry.visible_viewport_px,
+                )
+            return (np.asarray(old, dtype=bool) | (effective_seed & allowed)).astype(np.uint8)
+        if mode == "diffuse":
+            growth = entry.domain("growth")
+            if growth is None:
+                growth = seed
+            new_patch, _components = self._compute_diffuse_patch(
+                entry.extent,
+                old,
+                seed,
+                growth,
+                threshold_value,
+                smart_faint_recovery=bool(entry.smart_faint_recovery),
+                smart_boundary_guard=bool(entry.smart_boundary_guard),
+                smart_visible_seeds=bool(entry.smart_visible_seeds),
+                visible_ijk_to_clip=entry.visible_ijk_to_clip,
+                visible_depth_coeff=entry.visible_depth_coeff,
+                visible_viewport_px=entry.visible_viewport_px,
+            )
+            return new_patch
+        if mode == "specks":
+            return np.array(entry.unpack("new"), copy=True, dtype=np.uint8)
+        raise ValueError(f"Unsupported segmentation history mode: {mode}")
+
+
+    def stroke(self, mode, seed_geometry, growth_geometry, snap, planes, threshold, settings, projection):
+        self.report(5, f"{mode.title()}: rasterizing brush")
+        seed_stencil, seed_extent = self._rasterize_stroke_geometry(seed_geometry, snap["extent"])
+        growth_stencil, growth_extent = (None, None)
+        if mode == "diffuse":
+            growth_stencil, growth_extent = self._rasterize_stroke_geometry(growth_geometry, snap["extent"])
+        extent = extent_intersection(extent_union(seed_extent, growth_extent), snap["extent"])
+        if seed_stencil is None or extent is None:
+            return None
+        self.report(30, f"{mode.title()}: preparing domains")
+        seed = _stencil_to_bool(seed_stencil, extent)
+        growth = _stencil_to_bool(growth_stencil, extent) if mode == "diffuse" else None
+        # Clip the materialized domains directly, avoiding a second stencil round trip.
+        if planes:
+            inside = self._clipping_inside_mask(extent, snap["vtk_ijk_to_world_affine"], planes)
+            seed &= inside
+            if growth is not None:
+                growth &= inside
+                growth_stencil = None
+        old = _mask_patch(self.frame_state, extent)
+        self.report(45, f"{mode.title()}: calculating mask")
+        local = mode != "unselect" and settings.get("smart_local_threshold", False)
+        local_value = self._estimate_local_threshold(extent, seed) if local else None
+        used_local = local_value is not None
+        if used_local:
+            threshold = float(local_value)
+        visible = mode != "unselect" and settings.get("smart_visible_seeds", False) and projection is not None
+        flags = dict(
+            smart_visible_seeds=bool(visible),
+            visible_ijk_to_clip=(projection or {}).get("ijk_to_clip"),
+            visible_depth_coeff=(projection or {}).get("depth_coeff"),
+            visible_viewport_px=(projection or {}).get("viewport_px"),
+        )
+        faint = mode == "diffuse" and settings.get("smart_faint_recovery", False)
+        boundary = mode == "diffuse" and settings.get("smart_boundary_guard", False)
+        if mode == "unselect":
+            new = old.copy()
+            np.copyto(new, 0, where=seed)
+        elif mode == "select":
+            allowed = self._threshold_allowed_patch(extent, threshold)
+            effective = self._visible_seed_domain(extent, seed, allowed, **{
+                k: v for k, v in flags.items() if k != "smart_visible_seeds"
+            }) if visible else seed
+            new = (np.asarray(old, dtype=bool) | (effective & allowed)).astype(np.uint8)
+        elif mode == "diffuse":
+            new, _count = self._compute_diffuse_patch(
+                extent, old, seed, growth, threshold, growth_stencil=growth_stencil,
+                smart_faint_recovery=faint, smart_boundary_guard=boundary, **flags)
+        else:
+            raise ValueError(f"Unknown brush mode: {mode}")
+        self.report(85, f"{mode.title()}: preparing history")
+        changed = not np.array_equal(old, new)
+        entry = HistoryEntry.make(extent, old, new, mode=mode,
+            threshold=None if mode == "unselect" else threshold,
+            seed_domain=seed, growth_domain=growth, smart_local_threshold=used_local,
+            smart_faint_recovery=faint, smart_boundary_guard=boundary, **flags)
+        if mode == "unselect":
+            detail = "Unselect updated the mask. Signal Threshold does not affect removal."
+        else:
+            detail = (f"{mode.title()} {'updated the mask' if changed else 'added no voxels'} "
+                      f"at threshold {threshold:.6g}.")
+            if not changed:
+                detail += " Adjust Signal Threshold to recalculate this edit."
+            helpers = [label for label, used in (("local threshold", used_local),
+                       ("faint recovery", faint), ("boundary guard", boundary), ("visible seeds", visible)) if used]
+            if helpers:
+                detail += f" Smart: {', '.join(helpers)}."
+            if settings.get("smart_visible_seeds", False) and projection is None:
+                detail += " Visible seeds were unavailable for this view; normal seeding was used."
+        self.report(95, f"{mode.title()}: ready")
+        return entry, new, changed, detail
+
+
 
 __all__ = [
     "VolumeSegmentationPanel",

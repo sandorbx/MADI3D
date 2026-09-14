@@ -33,7 +33,72 @@ from madi3d_app.volume.geometry import (
 )
 
 REGISTRATION_CHAIN_SCHEMA_VERSION = 9
-REGISTRATION_ALGORITHM_VERSION = "staged-registration-outcomes-v3"
+REGISTRATION_ALGORITHM_VERSION = "staged-registration-severity-qc-v4"
+
+
+# Engineering review policy, not biological constants. Existing fixtures cover
+# identity and clearly folded synthetic fields (1% and 2/7 nonpositive samples),
+# not a calibrated distribution of acceptable microscopy registrations. Warn on
+# every detected fold; provisionally flag >1 in 1000 finite samples as severe.
+# Do not infer biological acceptability or whole-volume coverage from this QC.
+# Similarity failure limits deliberately exceed the established warning limits;
+# landmark tolerances use the exact Reference working units, possibly unverified.
+DEFAULT_REGISTRATION_QC_THRESHOLDS = {
+    "minimum_scale": 0.05,
+    "maximum_scale": 20.0,
+    "maximum_condition_number": 100.0,
+    "minimum_support_overlap_fraction": 1.0e-5,
+    "warning_nmi_absolute_drop": 0.03,
+    "failure_nmi_absolute_drop": 0.15,
+    "warning_nmi_relative_drop": 0.02,
+    "failure_nmi_relative_drop": 0.10,
+    "warning_ncc_drop": 0.15,
+    "failure_ncc_drop": 0.50,
+    "warning_overlap_absolute_drop": 0.05,
+    "failure_overlap_absolute_drop": 0.25,
+    "warning_overlap_remaining_fraction": 0.50,
+    "failure_overlap_remaining_fraction": 0.10,
+    "warning_nonpositive_jacobian_fraction": 0.0,
+    "failure_nonpositive_jacobian_fraction": 0.001,
+    "warning_landmark_residual_working_units": 2.0,
+    "failure_landmark_residual_working_units": 10.0,
+    "warning_serialization_displacement_voxels": 0.05,
+    "failure_serialization_displacement_voxels": 0.25,
+}
+
+
+def registration_qc_thresholds(values=None):
+    """Resolve and validate a complete, detached QC policy before execution."""
+    supplied = dict(values or {})
+    unknown = supplied.keys() - DEFAULT_REGISTRATION_QC_THRESHOLDS.keys()
+    if unknown:
+        raise ValueError(f"Unknown registration QC threshold(s): {', '.join(sorted(unknown))}")
+    result = dict(DEFAULT_REGISTRATION_QC_THRESHOLDS)
+    for key, value in supplied.items():
+        if isinstance(value, bool):
+            raise ValueError(f"Registration QC {key} must be a finite number.")
+        try:
+            result[key] = float(value)
+        except (ValueError, TypeError) as exc:
+            raise ValueError(f"Registration QC {key} must be a finite number.") from exc
+    for key, value in result.items():
+        if not math.isfinite(value) or value < 0:
+            raise ValueError(f"Registration QC {key} must be finite and nonnegative.")
+        if ("fraction" in key or "relative_drop" in key or "overlap_absolute_drop" in key) and value > 1:
+            raise ValueError(f"Registration QC {key} must be between 0 and 1.")
+    if result["minimum_scale"] <= 0 or result["minimum_scale"] > result["maximum_scale"]:
+        raise ValueError("Minimum allowed scale must be positive and no greater than maximum allowed scale.")
+    if result["maximum_condition_number"] < 1:
+        raise ValueError("Maximum condition number must be at least 1.")
+    for key in result:
+        if not key.startswith("warning_"):
+            continue
+        failure_key = key.replace("warning_", "failure_", 1)
+        warning, failure = result[key], result[failure_key]
+        ordered = failure <= warning if key.endswith("remaining_fraction") else warning <= failure
+        if not ordered:
+            raise ValueError(f"Registration QC {failure_key} must describe at least as severe a change as {key}.")
+    return result
 
 
 def _plain_value(value):
@@ -157,10 +222,11 @@ class RegistrationLandmarkSet:
 
 
 class RegistrationSettings(dict):
-    """Serializable settings mapping with typed landmark access."""
+    """Serializable settings snapshot with validated QC and typed landmarks."""
 
     def __init__(self, values=None):
         super().__init__(_plain_value(dict(values or {})))
+        self["qc_thresholds"] = registration_qc_thresholds(self.get("qc_thresholds"))
 
     @classmethod
     def from_dict(cls, payload):
@@ -173,7 +239,9 @@ class RegistrationSettings(dict):
         )
 
     def to_dict(self):
-        return _plain_value(self)
+        result = _plain_value(self)
+        result["qc_thresholds"] = registration_qc_thresholds(result.get("qc_thresholds"))
+        return result
 
 
 class RegistrationOutputGrid(dict):
@@ -463,11 +531,7 @@ class RegistrationTransformChain:
         self.reformat_volumes = _canonical_local_geometry_records(
             self.reformat_volumes, "Registration Reformat volume"
         )
-        self.settings = (
-            self.settings
-            if isinstance(self.settings, RegistrationSettings)
-            else RegistrationSettings.from_dict(self.settings)
-        )
+        self.settings = RegistrationSettings.from_dict(self.settings)
         self.stages = [
             stage if isinstance(stage, TransformStageResult) else TransformStageResult.from_dict(stage)
             for stage in self.stages
@@ -742,11 +806,7 @@ class RegistrationJob:
         self.execution_status = validate_execution_status(self.execution_status)
         self.qc_status = validate_qc_status(self.qc_status)
         self.user_decision = validate_user_decision(self.user_decision)
-        self.settings = (
-            self.settings
-            if isinstance(self.settings, RegistrationSettings)
-            else RegistrationSettings.from_dict(self.settings)
-        )
+        self.settings = RegistrationSettings.from_dict(self.settings)
 
     def to_dict(self):
         return {

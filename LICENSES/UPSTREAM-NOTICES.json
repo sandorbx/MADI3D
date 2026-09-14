@@ -1,0 +1,608 @@
+{
+  "schema_version": 1,
+  "files": [
+    {
+      "path": "VTK/ThirdParty/cgns/vtkcgns/license.txt",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/cgns/vtkcgns/license.txt",
+      "sha256": "8f3f0ca6bfcd88d7e43d85e4d715132bddce11177f7f6c8f122e42b0493b36c4"
+    },
+    {
+      "path": "VTK/ThirdParty/cli11/vtkcli11/LICENSE",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/cli11/vtkcli11/LICENSE",
+      "sha256": "88cffe4600851e8dad1b8eb1e304d54286a89d2373a1b98f59cb969b9e967b90"
+    },
+    {
+      "path": "VTK/ThirdParty/diy2/vtkdiy2/LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/diy2/vtkdiy2/LICENSE.txt",
+      "sha256": "728b467c7bd03d90a106d036a65724e52959db853e4eefb65c4fbf3e7ac10816"
+    },
+    {
+      "path": "VTK/ThirdParty/eigen/vtkeigen/COPYING.BSD",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/eigen/vtkeigen/COPYING.BSD",
+      "sha256": "51928dce36213c5333ba3172e847d735d4c6e9b7ff2722a326c49067155b82eb"
+    },
+    {
+      "path": "VTK/ThirdParty/eigen/vtkeigen/COPYING.MINPACK",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/eigen/vtkeigen/COPYING.MINPACK",
+      "sha256": "37f2b8b54e7bbf107954865cc3cf567385930a1b7031b479909a09968d9db670"
+    },
+    {
+      "path": "VTK/ThirdParty/eigen/vtkeigen/COPYING.MPL2",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/eigen/vtkeigen/COPYING.MPL2",
+      "sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85"
+    },
+    {
+      "path": "VTK/ThirdParty/eigen/vtkeigen/COPYING.README",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/eigen/vtkeigen/COPYING.README",
+      "sha256": "c83230b770f17ef1386ea1fd3681271dd98aa93646bdbfb5bff3a1b7050fff9d"
+    },
+    {
+      "path": "VTK/ThirdParty/exodusII/vtkexodusII/COPYRIGHT",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/exodusII/vtkexodusII/COPYRIGHT",
+      "sha256": "d5256febd35b763a6f4b96829a6f84da2ca121967ce336142dfe5dc97c567d17"
+    },
+    {
+      "path": "VTK/ThirdParty/expat/vtkexpat/COPYING",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/expat/vtkexpat/COPYING",
+      "sha256": "122f2c27000472a201d337b9b31f7eb2b52d091b02857061a8880371612d9534"
+    },
+    {
+      "path": "VTK/ThirdParty/exprtk/vtkexprtk/license.txt",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/exprtk/vtkexprtk/license.txt",
+      "sha256": "195cbc4d3705eb043fbbf53dd4a4d48a516cd3acdf3759a40a418d56a59813cd"
+    },
+    {
+      "path": "VTK/ThirdParty/fast_float/vtkfast_float/LICENSE-MIT",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/fast_float/vtkfast_float/LICENSE-MIT",
+      "sha256": "e562f3f974ced7e69dd1db77b820b36bcf8f30377f1aa105723fba449c53c4e6"
+    },
+    {
+      "path": "VTK/ThirdParty/fides/vtkfides/LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/fides/vtkfides/LICENSE.txt",
+      "sha256": "69ff14d6186884b61812e2c51c0329f7f59ffc5f55a007fa11682603485451d8"
+    },
+    {
+      "path": "VTK/ThirdParty/fides/vtkfides/thirdparty/rapidjson/fidesrapidjson/license.txt",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/fides/vtkfides/thirdparty/rapidjson/fidesrapidjson/license.txt",
+      "sha256": "a140e5d46fe734a1c78f1a3c3ef207871dd75648be71fdda8e309b23ab8b1f32"
+    },
+    {
+      "path": "VTK/ThirdParty/fmt/vtkfmt/LICENSE",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/fmt/vtkfmt/LICENSE",
+      "sha256": "07580f2a3b35709ce703d523f447b242f6dfec7582a8c0df102c7fa2849375f8"
+    },
+    {
+      "path": "VTK/ThirdParty/freetype/vtkfreetype/LICENSE.TXT",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/freetype/vtkfreetype/LICENSE.TXT",
+      "sha256": "2e3bbb7d7c5c396368dd0853a790ec29ce5b8647163dde42a0493fb0d6556b2b"
+    },
+    {
+      "path": "VTK/ThirdParty/gl2ps/vtkgl2ps/COPYING.GL2PS",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/gl2ps/vtkgl2ps/COPYING.GL2PS",
+      "sha256": "57d35babc96d65b6971dee279d40d4271989465da12726a0c9d8456ee6829358"
+    },
+    {
+      "path": "VTK/ThirdParty/gl2ps/vtkgl2ps/COPYING.LGPL",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/gl2ps/vtkgl2ps/COPYING.LGPL",
+      "sha256": "1dfab741fe12676a0a7e8166ad4a74670cb536ddff56b84b36a48fab28a1a110"
+    },
+    {
+      "path": "VTK/ThirdParty/glad/vtkglad/LICENSE",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/glad/vtkglad/LICENSE",
+      "sha256": "cbb325cd4ac5bd06717ffa34a322b984f9d285e4c67c8ca1b7380d6ef08c2a77"
+    },
+    {
+      "path": "VTK/ThirdParty/h5hut/vtkh5hut/COPYING",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/h5hut/vtkh5hut/COPYING",
+      "sha256": "479eb2ffa04d8702392ef502dc3a248a34da5169d63ffa9c7c301ec53214f0a2"
+    },
+    {
+      "path": "VTK/ThirdParty/h5hut/vtkh5hut/license.txt",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/h5hut/vtkh5hut/license.txt",
+      "sha256": "fc0fbb9b729818d1459c9a3f844cde151524d573faa514ca462d73cd807b34e2"
+    },
+    {
+      "path": "VTK/ThirdParty/hdf5/vtkhdf5/COPYING",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/hdf5/vtkhdf5/COPYING",
+      "sha256": "587b532c4c27b64ecff3192d6189e149231934a00c753a401d4559231af7f7a7"
+    },
+    {
+      "path": "VTK/ThirdParty/hdf5/vtkhdf5/COPYING_LBNL_HDF5",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/hdf5/vtkhdf5/COPYING_LBNL_HDF5",
+      "sha256": "b92bc72a342e6dbfa552439adc80945a42168f6bc4a3d81c3618c3bff780db72"
+    },
+    {
+      "path": "VTK/ThirdParty/hdf5/vtkhdf5/src/H5FDsubfiling/mercury/LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/hdf5/vtkhdf5/src/H5FDsubfiling/mercury/LICENSE.txt",
+      "sha256": "c289101dda222f0d8bd4cfe8eb74a63a4a8694e372656aaad26bebff5825d3de"
+    },
+    {
+      "path": "VTK/ThirdParty/ioss/vtkioss/COPYRIGHT",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/ioss/vtkioss/COPYRIGHT",
+      "sha256": "9e56fc077b5d412c6bf159647895325035f51e72bd77c3560f0a394769f70e8b"
+    },
+    {
+      "path": "VTK/ThirdParty/jpeg/vtkjpeg/LICENSE.md",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/jpeg/vtkjpeg/LICENSE.md",
+      "sha256": "7d8683a7f048e715e08b4cada8b7f0d9a6ab8afad88ed09c1143ef764ecbc0f2"
+    },
+    {
+      "path": "VTK/ThirdParty/jsoncpp/vtkjsoncpp/LICENSE",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/jsoncpp/vtkjsoncpp/LICENSE",
+      "sha256": "cec0db5f6d7ed6b3a72647bd50aed02e13c3377fd44382b96dc2915534c042ad"
+    },
+    {
+      "path": "VTK/ThirdParty/kissfft/vtkkissfft/COPYING",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/kissfft/vtkkissfft/COPYING",
+      "sha256": "a2840585f8411be8e6826a31ef15ae65c950bd74a2437a73b013398a934ad0c6"
+    },
+    {
+      "path": "VTK/ThirdParty/libharu/vtklibharu/LICENSE",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/libharu/vtklibharu/LICENSE",
+      "sha256": "860e4e6f467a9c02298e36382a581a2fa31b2d1e7755da08f8cc0f2036b6857d"
+    },
+    {
+      "path": "VTK/ThirdParty/libproj/vtklibproj/COPYING",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/libproj/vtklibproj/COPYING",
+      "sha256": "6a8f30793e877d32e3f88b972f0970a051a3b5a26cd057d3993cb51e21c43319"
+    },
+    {
+      "path": "VTK/ThirdParty/libxml2/vtklibxml2/Copyright",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/libxml2/vtklibxml2/Copyright",
+      "sha256": "c99aae1afe013e50b8b3701e089222b351258043c3025b64053a233fd25b4be7"
+    },
+    {
+      "path": "VTK/ThirdParty/loguru/vtkloguru/LICENSE",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/loguru/vtkloguru/LICENSE",
+      "sha256": "55e2d7d11d3125e5881f5024d533e45ef39f5ffb15b37bdcafa2cbc909714af7"
+    },
+    {
+      "path": "VTK/ThirdParty/lz4/vtklz4/lib/LICENSE",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/lz4/vtklz4/lib/LICENSE",
+      "sha256": "8b58c446121a109ccf32edc094bba3010a3d85e4ee3702950db55e4d3e87736c"
+    },
+    {
+      "path": "VTK/ThirdParty/lzma/vtklzma/COPYING",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/lzma/vtklzma/COPYING",
+      "sha256": "ee3b35b82f7bb0ba5fd9f13ca34ebbe757a59c05bfde5ab9d50ff4188ed33396"
+    },
+    {
+      "path": "VTK/ThirdParty/mpi4py/vtkmpi4py/LICENSE.rst",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/mpi4py/vtkmpi4py/LICENSE.rst",
+      "sha256": "58d364950f06a2d1c300cfae8e6901733c8faf2a6c54bc3a7ce62c24f7e32ec6"
+    },
+    {
+      "path": "VTK/ThirdParty/netcdf/vtknetcdf/COPYRIGHT",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/netcdf/vtknetcdf/COPYRIGHT",
+      "sha256": "58b3a925e82191209929dbf47891f9d661e09d8f8ee753ca90bd3f6a1262ecb7"
+    },
+    {
+      "path": "VTK/ThirdParty/nlohmannjson/vtknlohmannjson/LICENSE.MIT",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/nlohmannjson/vtknlohmannjson/LICENSE.MIT",
+      "sha256": "86b998c792894ccb911a1cb7994f7a9652894e7a094c0b5e45be2f553f45cf14"
+    },
+    {
+      "path": "VTK/ThirdParty/ogg/vtkogg/COPYING",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/ogg/vtkogg/COPYING",
+      "sha256": "d2ab5758336489da61c12cc5bb757da5339c4ae9001f9bb0562b4370249af814"
+    },
+    {
+      "path": "VTK/ThirdParty/pegtl/vtkpegtl/LICENSE",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/pegtl/vtkpegtl/LICENSE",
+      "sha256": "8dd848eff55d8f925ad676daf6cba065c4ef7b85698ae1fbdc6603ae4fa32cba"
+    },
+    {
+      "path": "VTK/ThirdParty/png/vtkpng/LICENSE",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/png/vtkpng/LICENSE",
+      "sha256": "7317e078e2d3b5d7ba5a6159e650945153262b44b76f6700f8e9edb261c5143e"
+    },
+    {
+      "path": "VTK/ThirdParty/pugixml/vtkpugixml/LICENSE.md",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/pugixml/vtkpugixml/LICENSE.md",
+      "sha256": "0d0b3772af2fa45628a548a3b34583707ebcc68bb6f83ec48ca273aab4a510f1"
+    },
+    {
+      "path": "VTK/ThirdParty/scn/vtkscn/LICENSE",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/scn/vtkscn/LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    {
+      "path": "VTK/ThirdParty/scn/vtkscn/LICENSE.nanorange",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/scn/vtkscn/LICENSE.nanorange",
+      "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566"
+    },
+    {
+      "path": "VTK/ThirdParty/theora/vtktheora/COPYING",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/theora/vtktheora/COPYING",
+      "sha256": "8417fad7da775735564e209484a2e011e0fa201e94f01fdbee6e4977e478e6fc"
+    },
+    {
+      "path": "VTK/ThirdParty/theora/vtktheora/LICENSE",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/theora/vtktheora/LICENSE",
+      "sha256": "654a0238f789f4435c4818f50005b141d013c5a09a31d861efc1d0d67ba975a4"
+    },
+    {
+      "path": "VTK/ThirdParty/tiff/vtktiff/LICENSE.md",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/tiff/vtktiff/LICENSE.md",
+      "sha256": "0780558a8bfba0af1160ec1ff11ade4f41c0d7deafd6ecfc796b492a788e380d"
+    },
+    {
+      "path": "VTK/ThirdParty/token/vtktoken/license.md",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/token/vtktoken/license.md",
+      "sha256": "2153f6031e7beb4a69eaf701c061187f134281ef1b52b63eddfaf3c1498e91d2"
+    },
+    {
+      "path": "VTK/ThirdParty/utf8/vtkutf8/LICENSE",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/utf8/vtkutf8/LICENSE",
+      "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566"
+    },
+    {
+      "path": "VTK/ThirdParty/verdict/vtkverdict/LICENSE",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/verdict/vtkverdict/LICENSE",
+      "sha256": "697863f577faaaa5d6500637a95b329c9bfbf3d2f1500deefc5c052616971811"
+    },
+    {
+      "path": "VTK/ThirdParty/viskores/vtkviskores/viskores/LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/viskores/vtkviskores/viskores/LICENSE.txt",
+      "sha256": "c1a3f1f00dd07c5ec1f634182af2d0cccc7e0d28de8e6312e5a2560c98ced3cc"
+    },
+    {
+      "path": "VTK/ThirdParty/viskores/vtkviskores/viskores/viskores/thirdparty/diy/viskoresdiy/LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/viskores/vtkviskores/viskores/viskores/thirdparty/diy/viskoresdiy/LICENSE.txt",
+      "sha256": "728b467c7bd03d90a106d036a65724e52959db853e4eefb65c4fbf3e7ac10816"
+    },
+    {
+      "path": "VTK/ThirdParty/viskores/vtkviskores/viskores/viskores/thirdparty/lcl/viskoreslcl/LICENSE.md",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/viskores/vtkviskores/viskores/viskores/thirdparty/lcl/viskoreslcl/LICENSE.md",
+      "sha256": "37a0cde690312a79918b6fed70f559f8ca04b46cb8a03c3dd9c5b281c613838c"
+    },
+    {
+      "path": "VTK/ThirdParty/viskores/vtkviskores/viskores/viskores/thirdparty/lodepng/viskoreslodepng/LICENSE",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/viskores/vtkviskores/viskores/viskores/thirdparty/lodepng/viskoreslodepng/LICENSE",
+      "sha256": "bdafa318b8e637d600ca1b60545e894881977a16a16b74809c95e805701621e3"
+    },
+    {
+      "path": "VTK/ThirdParty/vpic/vtkvpic/LICENSE",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/vpic/vtkvpic/LICENSE",
+      "sha256": "27f537cfa93d17a11939834d98e5dd91ed61ad8583b054f1bb6bdcd28f3ae290"
+    },
+    {
+      "path": "VTK/ThirdParty/xdmf2/vtkxdmf2/Copyright.txt",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/xdmf2/vtkxdmf2/Copyright.txt",
+      "sha256": "a83401d8e4e4e8da2d6901f0c85480f9ca2007d9f4eeb12fc0143e6fda165d47"
+    },
+    {
+      "path": "VTK/ThirdParty/xdmf3/vtkxdmf3/Copyright.txt",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/xdmf3/vtkxdmf3/Copyright.txt",
+      "sha256": "486d69367fa9db177f07fdca375ab79fa46c8d2b7b0844feae588f08939ecfa3"
+    },
+    {
+      "path": "VTK/ThirdParty/zlib/vtkzlib/LICENSE",
+      "url": "https://raw.githubusercontent.com/Kitware/VTK/f49a1dbafa60b58ef22f6292ec58370453162192/ThirdParty/zlib/vtkzlib/LICENSE",
+      "sha256": "845efc77857d485d91fb3e0b884aaa929368c717ae8186b66fe1ed2495753243"
+    },
+    {
+      "path": "QtBase/src/3rdparty/D3D12MemoryAllocator/LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/be09b211db70e1b0155d05c18668ad76e7e3df51/src/3rdparty/D3D12MemoryAllocator/LICENSE.txt",
+      "sha256": "1b3941c52b26d42c510afbdf205a8b96a6d64f5a7b8ebff0287979fd91dfd52f"
+    },
+    {
+      "path": "QtBase/src/3rdparty/VulkanMemoryAllocator/LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/be09b211db70e1b0155d05c18668ad76e7e3df51/src/3rdparty/VulkanMemoryAllocator/LICENSE.txt",
+      "sha256": "846d97c8b74ccaa92b9ad031140a04363b3b3985f318094552f297b8bda1c68e"
+    },
+    {
+      "path": "QtBase/src/3rdparty/blake2/COPYING",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/be09b211db70e1b0155d05c18668ad76e7e3df51/src/3rdparty/blake2/COPYING",
+      "sha256": "4103f471877ed0bae500752c5fcd7ecca409d4a4a8dc2ad40437daba60f1a2bc"
+    },
+    {
+      "path": "QtBase/src/3rdparty/double-conversion/LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/be09b211db70e1b0155d05c18668ad76e7e3df51/src/3rdparty/double-conversion/LICENSE",
+      "sha256": "4af93c12062c58058378de2397dc1c92bbff9ddfb1d583a01c84127557ce97ca"
+    },
+    {
+      "path": "QtBase/src/3rdparty/easing/LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/be09b211db70e1b0155d05c18668ad76e7e3df51/src/3rdparty/easing/LICENSE",
+      "sha256": "92fac99458f1754b73edf50f9c9983e0efaa06ad96e2afd5e538c79f45b4b191"
+    },
+    {
+      "path": "QtBase/src/3rdparty/forkfd/LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/be09b211db70e1b0155d05c18668ad76e7e3df51/src/3rdparty/forkfd/LICENSE",
+      "sha256": "d0d683ae18e78fbef90eb41168fb781920da2d12bf80704490f0882915c18ae0"
+    },
+    {
+      "path": "QtBase/src/3rdparty/freetype/LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/be09b211db70e1b0155d05c18668ad76e7e3df51/src/3rdparty/freetype/LICENSE.txt",
+      "sha256": "bf543cdda11864477b8d2ca2aa9afc2aaa8f9133461b4d962ed6ec73646256a1"
+    },
+    {
+      "path": "QtBase/src/3rdparty/harfbuzz-ng/COPYING",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/be09b211db70e1b0155d05c18668ad76e7e3df51/src/3rdparty/harfbuzz-ng/COPYING",
+      "sha256": "ba8f810f2455c2f08e2d56bb49b72f37fcf68f1f4fade38977cfd7372050ad64"
+    },
+    {
+      "path": "QtBase/src/3rdparty/icc/LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/be09b211db70e1b0155d05c18668ad76e7e3df51/src/3rdparty/icc/LICENSE.txt",
+      "sha256": "9e34ff47b3a44814e183342e7e198d127a6740e29d20e8381fba7688dafc79dd"
+    },
+    {
+      "path": "QtBase/src/3rdparty/libjpeg/COPYRIGHT.txt",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/be09b211db70e1b0155d05c18668ad76e7e3df51/src/3rdparty/libjpeg/COPYRIGHT.txt",
+      "sha256": "7a5ab11868180be3b636e8306a95c9dc96b10e2591196a6d9b5a0949b780431e"
+    },
+    {
+      "path": "QtBase/src/3rdparty/libjpeg/LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/be09b211db70e1b0155d05c18668ad76e7e3df51/src/3rdparty/libjpeg/LICENSE",
+      "sha256": "2189dc45a8fe96204069f8124caa53a148dfdc193f50f584c6ca7849a6072872"
+    },
+    {
+      "path": "QtBase/src/3rdparty/libpng/LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/be09b211db70e1b0155d05c18668ad76e7e3df51/src/3rdparty/libpng/LICENSE",
+      "sha256": "16d9daaafbf63a31a5bdc91d4600972548fef5aaa1244202393288dbd079c49a"
+    },
+    {
+      "path": "QtBase/src/3rdparty/libpsl/src/LICENSE.chromium",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/be09b211db70e1b0155d05c18668ad76e7e3df51/src/3rdparty/libpsl/src/LICENSE.chromium",
+      "sha256": "1d7f52747a9169751cdf2641a8299c0098e9ecdf9429296ffd55bdb14c9ed5b3"
+    },
+    {
+      "path": "QtBase/src/3rdparty/md4c/LICENSE.md",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/be09b211db70e1b0155d05c18668ad76e7e3df51/src/3rdparty/md4c/LICENSE.md",
+      "sha256": "d30937367d5413e7eaa218b1640b8946ff76fd34d97152f6979fd96169d5d0fc"
+    },
+    {
+      "path": "QtBase/src/3rdparty/pcre2/LICENCE-SLJIT",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/be09b211db70e1b0155d05c18668ad76e7e3df51/src/3rdparty/pcre2/LICENCE-SLJIT",
+      "sha256": "5f216505c0f6ea3273caec89e766eef93cdeb7bbb0c429f9360116d7c938feeb"
+    },
+    {
+      "path": "QtBase/src/3rdparty/pcre2/LICENCE.md",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/be09b211db70e1b0155d05c18668ad76e7e3df51/src/3rdparty/pcre2/LICENCE.md",
+      "sha256": "9cf7ac6976099a1d856826d3ef1b093bd6b84489dc6100628ac79e740cf9885a"
+    },
+    {
+      "path": "QtBase/src/3rdparty/pixman/LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/be09b211db70e1b0155d05c18668ad76e7e3df51/src/3rdparty/pixman/LICENSE",
+      "sha256": "942c4f2a80394d3f53599b8382e9f27349b95c45d92b69b84f26d404f4dd74a5"
+    },
+    {
+      "path": "QtBase/src/3rdparty/rfc6234/LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/be09b211db70e1b0155d05c18668ad76e7e3df51/src/3rdparty/rfc6234/LICENSE",
+      "sha256": "7ccebd514aaabc86192f957d773cebf06577c12fe9f25ecd419c6cac5da7a14c"
+    },
+    {
+      "path": "QtBase/src/3rdparty/tinycbor/LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/be09b211db70e1b0155d05c18668ad76e7e3df51/src/3rdparty/tinycbor/LICENSE",
+      "sha256": "3c6ba0b5bfa7830505301ffb336a17b0748e0d61c4d34216e9dc98f10e40395e"
+    },
+    {
+      "path": "QtBase/src/3rdparty/xcb/LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/be09b211db70e1b0155d05c18668ad76e7e3df51/src/3rdparty/xcb/LICENSE",
+      "sha256": "82775191bc05f85b40404d77bb69b1edeaeb4033f48387e9e5eab4dd67f5d6f1"
+    },
+    {
+      "path": "QtBase/src/3rdparty/zlib/LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/be09b211db70e1b0155d05c18668ad76e7e3df51/src/3rdparty/zlib/LICENSE",
+      "sha256": "d7e3139972874dc8abdbbfce27ec1e6f942b28279dd7d27453630a8b4610e080"
+    },
+    {
+      "path": "ITK/Modules/ThirdParty/DICOMParser/src/DICOMParser/Copyright.txt",
+      "url": "https://raw.githubusercontent.com/InsightSoftwareConsortium/ITK/4c49df934c316ff87dbbd971b89e63df6bbd1836/Modules/ThirdParty/DICOMParser/src/DICOMParser/Copyright.txt",
+      "sha256": "207ac5fbf0e944b6dc725b1ff9182ef2402763bb39e00f9a7e3bfc90bfb1c2ca"
+    },
+    {
+      "path": "ITK/Modules/ThirdParty/DoubleConversion/src/LICENSE",
+      "url": "https://raw.githubusercontent.com/InsightSoftwareConsortium/ITK/4c49df934c316ff87dbbd971b89e63df6bbd1836/Modules/ThirdParty/DoubleConversion/src/LICENSE",
+      "sha256": "4af93c12062c58058378de2397dc1c92bbff9ddfb1d583a01c84127557ce97ca"
+    },
+    {
+      "path": "ITK/Modules/ThirdParty/Eigen3/src/itkeigen/COPYING.BSD",
+      "url": "https://raw.githubusercontent.com/InsightSoftwareConsortium/ITK/4c49df934c316ff87dbbd971b89e63df6bbd1836/Modules/ThirdParty/Eigen3/src/itkeigen/COPYING.BSD",
+      "sha256": "51928dce36213c5333ba3172e847d735d4c6e9b7ff2722a326c49067155b82eb"
+    },
+    {
+      "path": "ITK/Modules/ThirdParty/Eigen3/src/itkeigen/COPYING.MINPACK",
+      "url": "https://raw.githubusercontent.com/InsightSoftwareConsortium/ITK/4c49df934c316ff87dbbd971b89e63df6bbd1836/Modules/ThirdParty/Eigen3/src/itkeigen/COPYING.MINPACK",
+      "sha256": "c87b7f8ee88f6195e91743820c00354833583aef091b72e2d4a49c8e28e798a0"
+    },
+    {
+      "path": "ITK/Modules/ThirdParty/Eigen3/src/itkeigen/COPYING.MPL2",
+      "url": "https://raw.githubusercontent.com/InsightSoftwareConsortium/ITK/4c49df934c316ff87dbbd971b89e63df6bbd1836/Modules/ThirdParty/Eigen3/src/itkeigen/COPYING.MPL2",
+      "sha256": "66a3107d5ad6a058aab753eaac2047ccb2ed0e39465dd0fe5844da3e300d5172"
+    },
+    {
+      "path": "ITK/Modules/ThirdParty/Eigen3/src/itkeigen/COPYING.README",
+      "url": "https://raw.githubusercontent.com/InsightSoftwareConsortium/ITK/4c49df934c316ff87dbbd971b89e63df6bbd1836/Modules/ThirdParty/Eigen3/src/itkeigen/COPYING.README",
+      "sha256": "db640ff2bd90c6abd6a4d3fbb351e0ee4d555417cf840492054d1cbb2ea85644"
+    },
+    {
+      "path": "ITK/Modules/ThirdParty/Expat/src/expat/COPYING",
+      "url": "https://raw.githubusercontent.com/InsightSoftwareConsortium/ITK/4c49df934c316ff87dbbd971b89e63df6bbd1836/Modules/ThirdParty/Expat/src/expat/COPYING",
+      "sha256": "8c6b5b6de8fae20b317f4992729abc0e520bfba4c7606cd1e9eeb87418eebdec"
+    },
+    {
+      "path": "ITK/Modules/ThirdParty/GDCM/src/gdcm/CMake/COPYING-CMAKE-SCRIPTS",
+      "url": "https://raw.githubusercontent.com/InsightSoftwareConsortium/ITK/4c49df934c316ff87dbbd971b89e63df6bbd1836/Modules/ThirdParty/GDCM/src/gdcm/CMake/COPYING-CMAKE-SCRIPTS",
+      "sha256": "c666ec2313dba24523ccad88f4c04ea4b24fad6545263a35b1d4ab2b08efe50a"
+    },
+    {
+      "path": "ITK/Modules/ThirdParty/GDCM/src/gdcm/Copyright.txt",
+      "url": "https://raw.githubusercontent.com/InsightSoftwareConsortium/ITK/4c49df934c316ff87dbbd971b89e63df6bbd1836/Modules/ThirdParty/GDCM/src/gdcm/Copyright.txt",
+      "sha256": "31a64b1bc4f367401fdd689daee273af8195c24eb5d8dcd5b694f201b06721ed"
+    },
+    {
+      "path": "ITK/Modules/ThirdParty/GDCM/src/gdcm/Source/DataDictionary/COPYRIGHT.dicom3tools",
+      "url": "https://raw.githubusercontent.com/InsightSoftwareConsortium/ITK/4c49df934c316ff87dbbd971b89e63df6bbd1836/Modules/ThirdParty/GDCM/src/gdcm/Source/DataDictionary/COPYRIGHT.dicom3tools",
+      "sha256": "456d41e399bf2c7c54ac46b5fd59abd33a6552a66e9eb365e66c430660b52a65"
+    },
+    {
+      "path": "ITK/Modules/ThirdParty/GDCM/src/gdcm/Utilities/gdcmcharls/License.txt",
+      "url": "https://raw.githubusercontent.com/InsightSoftwareConsortium/ITK/4c49df934c316ff87dbbd971b89e63df6bbd1836/Modules/ThirdParty/GDCM/src/gdcm/Utilities/gdcmcharls/License.txt",
+      "sha256": "73b19321a7d74c7b3d0aca858b224f22fe3a4464b55e6b2fbfe846d93ffa5dec"
+    },
+    {
+      "path": "ITK/Modules/ThirdParty/GDCM/src/gdcm/Utilities/gdcmjpeg/COPYRIGHT.dcmtk",
+      "url": "https://raw.githubusercontent.com/InsightSoftwareConsortium/ITK/4c49df934c316ff87dbbd971b89e63df6bbd1836/Modules/ThirdParty/GDCM/src/gdcm/Utilities/gdcmjpeg/COPYRIGHT.dcmtk",
+      "sha256": "69ad14550e1bbc9a273c0d8bad88dc9c2da9fed80ae6e938d8788892add78c20"
+    },
+    {
+      "path": "ITK/Modules/ThirdParty/GDCM/src/gdcm/Utilities/gdcmmd5/COPYING",
+      "url": "https://raw.githubusercontent.com/InsightSoftwareConsortium/ITK/4c49df934c316ff87dbbd971b89e63df6bbd1836/Modules/ThirdParty/GDCM/src/gdcm/Utilities/gdcmmd5/COPYING",
+      "sha256": "e7d641419b96d5a5ac75566ca86621041d0de27926ef78fbc4e8a750ae851793"
+    },
+    {
+      "path": "ITK/Modules/ThirdParty/GDCM/src/gdcm/Utilities/gdcmopenjpeg/LICENSE",
+      "url": "https://raw.githubusercontent.com/InsightSoftwareConsortium/ITK/4c49df934c316ff87dbbd971b89e63df6bbd1836/Modules/ThirdParty/GDCM/src/gdcm/Utilities/gdcmopenjpeg/LICENSE",
+      "sha256": "a6af136f3e15038a666b61f376612a07d9a4e48cb7c01adbf3e33b3f14ab49b6"
+    },
+    {
+      "path": "ITK/Modules/ThirdParty/GDCM/src/gdcm/Utilities/gdcmuuid/COPYING",
+      "url": "https://raw.githubusercontent.com/InsightSoftwareConsortium/ITK/4c49df934c316ff87dbbd971b89e63df6bbd1836/Modules/ThirdParty/GDCM/src/gdcm/Utilities/gdcmuuid/COPYING",
+      "sha256": "9b718a9460fed5952466421235bc79eb49d4e9eacc920d7a9dd6285ab8fd6c6d"
+    },
+    {
+      "path": "ITK/Modules/ThirdParty/GDCM/src/gdcm/Utilities/socketxx/COPYING",
+      "url": "https://raw.githubusercontent.com/InsightSoftwareConsortium/ITK/4c49df934c316ff87dbbd971b89e63df6bbd1836/Modules/ThirdParty/GDCM/src/gdcm/Utilities/socketxx/COPYING",
+      "sha256": "6f5d04f1e620b33204e5b3895805dc5cdf8f21bd3e3a9e374d7bb31734849214"
+    },
+    {
+      "path": "ITK/Modules/ThirdParty/GIFTI/src/gifticlib/LICENSE.gifti",
+      "url": "https://raw.githubusercontent.com/InsightSoftwareConsortium/ITK/4c49df934c316ff87dbbd971b89e63df6bbd1836/Modules/ThirdParty/GIFTI/src/gifticlib/LICENSE.gifti",
+      "sha256": "4bd822bb2f830a9219356a5e41739f134e8df275c1339653d7e5cda6c1bc6c6d"
+    },
+    {
+      "path": "ITK/Modules/ThirdParty/HDF5/src/itkhdf5/COPYING",
+      "url": "https://raw.githubusercontent.com/InsightSoftwareConsortium/ITK/4c49df934c316ff87dbbd971b89e63df6bbd1836/Modules/ThirdParty/HDF5/src/itkhdf5/COPYING",
+      "sha256": "49875a6b3fd8a684f3d03d5418fcfa057efae9813194296d11f2828a24e4a6e0"
+    },
+    {
+      "path": "ITK/Modules/ThirdParty/KWSys/src/KWSys/Copyright.txt",
+      "url": "https://raw.githubusercontent.com/InsightSoftwareConsortium/ITK/4c49df934c316ff87dbbd971b89e63df6bbd1836/Modules/ThirdParty/KWSys/src/KWSys/Copyright.txt",
+      "sha256": "7aa92ae0b86f73f81947d177639556fe7f8ea42a74762ecdf563e3daf7106a40"
+    },
+    {
+      "path": "ITK/Modules/ThirdParty/MINC/src/libminc/COPYING",
+      "url": "https://raw.githubusercontent.com/InsightSoftwareConsortium/ITK/4c49df934c316ff87dbbd971b89e63df6bbd1836/Modules/ThirdParty/MINC/src/libminc/COPYING",
+      "sha256": "b7f0d2170651fc256e896cadad5d837cb4c2321bf86734f61a2b8c3fcf039648"
+    },
+    {
+      "path": "ITK/Modules/ThirdParty/MetaIO/src/MetaIO/License.txt",
+      "url": "https://raw.githubusercontent.com/InsightSoftwareConsortium/ITK/4c49df934c316ff87dbbd971b89e63df6bbd1836/Modules/ThirdParty/MetaIO/src/MetaIO/License.txt",
+      "sha256": "de2b1b69404af9ca85e649957a57ea0b0cd2fa89c90ca999954d8ca9fae0c09b"
+    },
+    {
+      "path": "ITK/Modules/ThirdParty/NIFTI/src/nifti/LICENSE",
+      "url": "https://raw.githubusercontent.com/InsightSoftwareConsortium/ITK/4c49df934c316ff87dbbd971b89e63df6bbd1836/Modules/ThirdParty/NIFTI/src/nifti/LICENSE",
+      "sha256": "7e79481776a1413c90b452ce9517f2e470d2e4b0b92ff08869a00e0e64416317"
+    },
+    {
+      "path": "ITK/Modules/ThirdParty/OpenJPEG/src/LICENSE",
+      "url": "https://raw.githubusercontent.com/InsightSoftwareConsortium/ITK/4c49df934c316ff87dbbd971b89e63df6bbd1836/Modules/ThirdParty/OpenJPEG/src/LICENSE",
+      "sha256": "ccc6d8104986c7920099eecaaab5082d1f0062dbd1ceb6d54d6a3308f85da16f"
+    },
+    {
+      "path": "ITK/Modules/ThirdParty/PNG/src/itkpng/LICENSE",
+      "url": "https://raw.githubusercontent.com/InsightSoftwareConsortium/ITK/4c49df934c316ff87dbbd971b89e63df6bbd1836/Modules/ThirdParty/PNG/src/itkpng/LICENSE",
+      "sha256": "7317e078e2d3b5d7ba5a6159e650945153262b44b76f6700f8e9edb261c5143e"
+    },
+    {
+      "path": "ITK/Modules/ThirdParty/TIFF/src/itktiff/COPYRIGHT",
+      "url": "https://raw.githubusercontent.com/InsightSoftwareConsortium/ITK/4c49df934c316ff87dbbd971b89e63df6bbd1836/Modules/ThirdParty/TIFF/src/itktiff/COPYRIGHT",
+      "sha256": "92b72ba97e6c2749c2a94bc0ef646b47080217f1e772a482b33cf5a5f98a6506"
+    },
+    {
+      "path": "ITK/Modules/ThirdParty/VNL/src/vxl/v3p/netlib/libf2c/Notice",
+      "url": "https://raw.githubusercontent.com/InsightSoftwareConsortium/ITK/4c49df934c316ff87dbbd971b89e63df6bbd1836/Modules/ThirdParty/VNL/src/vxl/v3p/netlib/libf2c/Notice",
+      "sha256": "44561c447e91203ddc747beeca5cc2794d95ee982c17c578670e4f0408bc3904"
+    },
+    {
+      "path": "Mesa-LLVM/mesa-license.html",
+      "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/mesa-11.2.2/docs/license.html",
+      "sha256": "288ddfae338be168ef2492c21de42ee2f5c8ebc5a734b4e58b37007141bc2d6d"
+    },
+    {
+      "path": "Mesa-LLVM/mesa-llvmpipe.c",
+      "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/mesa-11.2.2/src/gallium/drivers/llvmpipe/lp_context.c",
+      "sha256": "a3d06bd48eab5ab72e32b0056749d6ee1fd33a932e6049ea2ee8db4ec2e4bdef"
+    },
+    {
+      "path": "Mesa-LLVM/mesa-gallivm.c",
+      "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/mesa-11.2.2/src/gallium/auxiliary/gallivm/lp_bld_init.c",
+      "sha256": "1b3ca879446601a22d371e260498f54bc685ada501a8c17ab9333234f1cf8a0e"
+    },
+    {
+      "path": "Mesa-LLVM/mesa-glext.h",
+      "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/mesa-11.2.2/include/GL/glext.h",
+      "sha256": "559c95f323962b9f3abfdc7be26cb661b6c136a7f27318ad2881a7680b051b27"
+    },
+    {
+      "path": "Mesa-LLVM/mesa-threads.h",
+      "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/mesa-11.2.2/include/c11/threads_win32.h",
+      "sha256": "2d6c7d991c8f5c7a78da51cdff748bd1483a6d0558c75765253eafeff43e18d1"
+    },
+    {
+      "path": "Mesa-LLVM/llvm-license.txt",
+      "url": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-3.6.2/llvm/LICENSE.TXT",
+      "sha256": "e3bc36440fc927c62d5cc24efeefe225a14d4e34ffeb0c92e430625cce9ee444"
+    },
+    {
+      "path": "Mesa-LLVM/llvm-regex.txt",
+      "url": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-3.6.2/llvm/lib/Support/COPYRIGHT.regex",
+      "sha256": "0424e57d4303164dc59a8509c20dae0518b853692e5c2b0e98b11816fdbc97c7"
+    },
+    {
+      "path": "Mesa-LLVM/llvm-md5.cpp",
+      "url": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-3.6.2/llvm/lib/Support/MD5.cpp",
+      "sha256": "19edb938505f839ba5d2d96c26d5db454542cc9d22d277652f5085c62d0ac792"
+    },
+    {
+      "path": "Mesa-LLVM/llvm-arm-license.txt",
+      "url": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-3.6.2/llvm/lib/Target/ARM/LICENSE.TXT",
+      "sha256": "28cbd5f6dac844fc3d94e879dba83c3ca87328ece8e0d388284f8cec6a042a97"
+    },
+    {
+      "path": "CPython/python/cpython/v3.11.9/Doc/license.rst",
+      "url": "https://raw.githubusercontent.com/python/cpython/de54cf5be371a6f5e2e9f208c38def5f81d3ef02/Doc/license.rst",
+      "sha256": "2b734ec5975b21b29ae8b9756a00fc3dfe701abe51687cec4c98a21c51005bca"
+    },
+    {
+      "path": "CPython/openssl/openssl/openssl-3.0.13/LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/openssl/openssl/85cf92f55d9e2ac5aacf92bedd33fb890b9f8b4c/LICENSE.txt",
+      "sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a"
+    },
+    {
+      "path": "CPython/libffi/libffi/v3.4.4/LICENSE",
+      "url": "https://raw.githubusercontent.com/libffi/libffi/f24180be1367f942824365b131ae894b9c769c7d/LICENSE",
+      "sha256": "2c9c2acb9743e6b007b91350475308aee44691d96aa20eacef8e199988c8c388"
+    },
+    {
+      "path": "CPython/python/cpython-source-deps/tcl-core-8.6.12.1/license.terms",
+      "url": "https://raw.githubusercontent.com/python/cpython-source-deps/ee45625299d55a7caaf6d9d898af3ee3c858cc4a/license.terms",
+      "sha256": "c0a69a2bfd757361ec7e6143973b103c90409316b49e9c88db26ad6388e79f16"
+    },
+    {
+      "path": "CPython/python/cpython-source-deps/tk-8.6.12.1/license.terms",
+      "url": "https://raw.githubusercontent.com/python/cpython-source-deps/0379c463285a9a796a173afeccd40f21ccaf04c4/license.terms",
+      "sha256": "2cde822b93ca16ae535c954b7dfe658b4ad10df2a193628d1b358f1765e8b198"
+    },
+    {
+      "path": "CPython/tcltk/tcl/core-8-6-13/license.terms",
+      "url": "https://raw.githubusercontent.com/tcltk/tcl/338c6692672696a76b6cb4073820426406c6f3f9/license.terms",
+      "sha256": "c0a69a2bfd757361ec7e6143973b103c90409316b49e9c88db26ad6388e79f16"
+    },
+    {
+      "path": "CPython/tcltk/tk/core-8-6-13/license.terms",
+      "url": "https://raw.githubusercontent.com/tcltk/tk/0540bb61e34516730b6e0f8d44b39589d6c71f20/license.terms",
+      "sha256": "2cde822b93ca16ae535c954b7dfe658b4ad10df2a193628d1b358f1765e8b198"
+    },
+    {
+      "path": "CPython/ncurses-5.9/include/curses.h.in",
+      "url": "https://ftp.gnu.org/gnu/ncurses/ncurses-5.9.tar.gz",
+      "extraction": "complete leading copyright and permission comment",
+      "source_file_sha256": "e9d9da42725ca9a5e5f4b9f47f5a8e56b18636c9bbbbaa38ed0b9d3ba83a2553",
+      "archive_sha256": "9046298fb440324c9d4135ecea7879ffed8546dd1b58e59430ea07a4633f563b",
+      "sha256": "3dba93abfd04310c1530467fd3a9e57fe201550290a2c5ed9f4c7a7af160fdae"
+    }
+  ]
+}

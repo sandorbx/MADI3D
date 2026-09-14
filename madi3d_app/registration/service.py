@@ -39,6 +39,7 @@ from madi3d_app.registration.models import (
     RegistrationSettings,
     RegistrationTransformChain,
     TransformStageResult,
+    registration_qc_thresholds,
     _canonical_local_geometry_payload,
 )
 from madi3d_app.registration.output import partial_output_path
@@ -742,23 +743,14 @@ def _output_to_source_zyx_mapping(source_world_affine, output_world_affine):
 
 def _resample_zyx(source_zyx, source_world_affine, output_world_affine,
                   output_shape_zyx, *, order=1, output_dtype=np.float32):
-    try:
-        from scipy import ndimage
-    except Exception as exc:
-        raise RuntimeError("Registration requires SciPy. Install it with: pip install scipy") from exc
+    from madi3d_app.volume.resampling import sample_affine_zyx
     source = np.ascontiguousarray(np.asarray(source_zyx))
     mapping = _output_to_source_zyx_mapping(source_world_affine, output_world_affine)
-    return ndimage.affine_transform(
-        source,
-        matrix=mapping[:3, :3],
-        offset=mapping[:3, 3],
-        output_shape=tuple(int(v) for v in output_shape_zyx),
-        output=output_dtype,
-        order=int(order),
-        mode="constant",
-        cval=0.0,
-        prefilter=(int(order) > 1),
-    )
+    try:
+        return sample_affine_zyx(source, mapping, output_shape_zyx,
+                                 output_dtype=output_dtype, order=order)
+    except ImportError as exc:
+        raise RuntimeError("Registration requires SciPy. Install it with: pip install scipy") from exc
 
 
 def _robust_normalize(array):
@@ -1890,42 +1882,26 @@ def _affine_qc_components(matrix4):
     }
 
 
-def _linear_qc_thresholds():
+def _linear_qc_thresholds(settings=None):
     return {
+        **registration_qc_thresholds(dict(settings or {}).get("qc_thresholds")),
         "minimum_positive_determinant": 1.0e-8,
         "minimum_principal_stretch": 1.0e-8,
-        "minimum_scale": 0.05,
-        "maximum_scale": 20.0,
-        "maximum_condition_number": 100.0,
-        "minimum_support_overlap_fraction": 1.0e-5,
-        "substantial_nmi_absolute_drop": 0.03,
-        "substantial_nmi_relative_drop": 0.02,
-        "substantial_ncc_drop": 0.15,
-        "substantial_overlap_absolute_drop": 0.05,
-        "substantial_overlap_remaining_fraction": 0.5,
     }
 
 
-def _deformation_qc_thresholds():
-    thresholds = _linear_qc_thresholds()
-    return {
-        "maximum_nonpositive_jacobian_fraction": 0.0,
-        "substantial_nmi_absolute_drop": thresholds["substantial_nmi_absolute_drop"],
-        "substantial_nmi_relative_drop": thresholds["substantial_nmi_relative_drop"],
-        "substantial_ncc_drop": thresholds["substantial_ncc_drop"],
-        "substantial_overlap_absolute_drop": thresholds["substantial_overlap_absolute_drop"],
-        "substantial_overlap_remaining_fraction": thresholds["substantial_overlap_remaining_fraction"],
-    }
+def _deformation_qc_thresholds(settings=None):
+    return registration_qc_thresholds(dict(settings or {}).get("qc_thresholds"))
 
 
-def _linear_transform_sanity(matrix4, kind="affine"):
+def _linear_transform_sanity(matrix4, kind="affine", *, settings=None):
     """Evaluate transform plausibility without discarding invertible output.
 
     The returned diagnostics use MADI's moving-to-reference direction. A false
     result is scientific QC, not an artifact failure; finite invertible
     candidates remain available for inspection and explicit use.
     """
-    thresholds = _linear_qc_thresholds()
+    thresholds = _linear_qc_thresholds(settings)
     try:
         details = _affine_qc_components(matrix4)
         determinant = float(details["determinant"])
@@ -1946,9 +1922,11 @@ def _linear_transform_sanity(matrix4, kind="affine"):
     # enough for legitimate cross-specimen affine registration while catching an
     # optimizer that has escaped into an obviously destructive solution.
     if minimum < thresholds["minimum_scale"] or maximum > thresholds["maximum_scale"]:
-        return False, f"extreme affine scale (singular values {singular.tolist()})", details
+        return False, (f"extreme affine scale (singular values {singular.tolist()}; "
+                       f"allowed {thresholds['minimum_scale']:.6g} to {thresholds['maximum_scale']:.6g})"), details
     if condition > thresholds["maximum_condition_number"]:
-        return False, f"ill-conditioned affine transform (condition {condition:.6g})", details
+        return False, (f"ill-conditioned affine transform (condition {condition:.6g}; "
+                       f"failure threshold {thresholds['maximum_condition_number']:.6g})"), details
 
     return True, "", details
 
@@ -1968,24 +1946,96 @@ def _linear_transform_artifact_error(matrix4):
 
 
 def _deformation_result_qc_status(deformation_qc):
-    deformation_qc = dict(deformation_qc or {})
-    warnings = [str(value).lower() for value in deformation_qc.get("warnings") or ()]
-    jacobian = dict(deformation_qc.get("jacobian_local") or {})
-    if (
-        float(jacobian.get("nonpositive_fraction", 0.0) or 0.0)
-        > _deformation_qc_thresholds()["maximum_nonpositive_jacobian_fraction"]
-    ):
-        return "failed"
-    failure_terms = (
-        "decreased substantially",
-        "overlap fell substantially",
-        "similarity qc is incomplete",
-        "implausible displacement",
-        "landmark disagreement",
+    qc = dict(deformation_qc or {})
+    evidence = qc.get("evidence")
+    if evidence is None:
+        evidence = _deformation_qc_evidence(
+            qc.get("linear_similarity"), qc.get("warp_similarity"),
+            qc.get("jacobian_local"), qc.get("configured_metric", "nmi"),
+            thresholds=qc.get("thresholds"),
+        )
+    return _qc_evidence_status(evidence, warnings=qc.get("warnings"))
+
+
+def _qc_evidence_status(evidence, *, warnings=()):
+    statuses = {item["status"] for item in evidence}
+    return "failed" if "failed" in statuses else "warning" if "warning" in statuses or warnings else "passed"
+
+
+def _qc_messages(evidence, *, status=None):
+    return [item["message"] for item in evidence
+            if item["status"] == status or (status is None and item["status"] != "passed")]
+
+
+def _qc_measurement(metric, label, value, warning, failure, *, percent=False):
+    """Classify numeric evidence; missing optional measurements are advisory."""
+    value = float(value) if value is not None else float("nan")
+    def display(number):
+        return f"{100 * number:.6g}%" if percent else f"{number:.6g}"
+    status = ("warning" if not math.isfinite(value) else
+              "failed" if value > failure else "warning" if value > warning else "passed")
+    measured = display(value) if math.isfinite(value) else "unavailable — QC is incomplete"
+    return {
+        "metric": metric, "value": value if math.isfinite(value) else None,
+        "warning_threshold": warning, "failure_threshold": failure, "status": status,
+        "message": f"{label} {measured} — warning threshold {display(warning)}, failure threshold {display(failure)}; {status}",
+    }
+
+
+def _landmark_qc_evidence(landmarks, matrix, thresholds):
+    if not landmarks:
+        return []
+    residuals = np.linalg.norm(
+        _apply_points_affine(landmarks["moving_landmarks_operation_space"], matrix)
+        - np.asarray(landmarks["reference_landmarks_operation_space"], dtype=float), axis=1,
     )
-    if any(any(term in warning for term in failure_terms) for warning in warnings):
-        return "failed"
-    return "warning" if warnings else "passed"
+    evidence = _qc_measurement(
+        "landmark_max_residual_working_units", "Maximum landmark disagreement (Reference working units)",
+        float(np.max(residuals)), thresholds["warning_landmark_residual_working_units"],
+        thresholds["failure_landmark_residual_working_units"],
+    )
+    evidence["residuals_working_units"] = residuals.tolist()
+    evidence["measurement_role"] = "initialization landmarks; not independent validation"
+    return [evidence]
+
+
+def _serialization_qc_evidence(qc, thresholds):
+    """Review measured serialization error; retain independent adapter safeguards."""
+    qc = dict(qc or {})
+    forward, inverse = qc.get("max_forward_voxel_displacement"), qc.get("max_inverse_voxel_displacement")
+    if forward is None or inverse is None:
+        if qc.get("status") in {"failed", "warning"}:
+            return [{"metric": "affine_serialization", "status": qc["status"],
+                     "message": f"CMTK affine round-trip serialization QC {qc['status']}; {qc}"}]
+        return []
+    measured = (max(float(forward), float(inverse))
+                if math.isfinite(float(forward)) and math.isfinite(float(inverse)) else None)
+    evidence = [_qc_measurement(
+        "serialization_displacement_voxels", "CMTK serialization displacement (max forward/inverse voxels)",
+        measured, thresholds["warning_serialization_displacement_voxels"],
+        thresholds["failure_serialization_displacement_voxels"],
+    )]
+    limits = dict(qc.get("thresholds") or {})
+    for metric, value, limit in (
+        ("serialization_displacement_working_units", max(
+            float(qc.get("max_forward_displacement_working_units", 0)),
+            float(qc.get("max_inverse_displacement_working_units", 0))),
+         limits.get("failure_max_working_unit_displacement")),
+        ("serialization_condition_number", qc.get("affine_condition_number"), limits.get("condition_failure")),
+    ):
+        if value is not None and limit is not None and (
+            not math.isfinite(float(value)) or float(value) > float(limit)
+            or (metric == "serialization_condition_number" and float(value) == float(limit))
+        ):
+            evidence.append({"metric": metric, "value": value, "failure_threshold": limit,
+                             "status": "failed", "message": f"{metric} {value:.6g}; failure threshold {limit:.6g}"})
+    condition = qc.get("affine_condition_number")
+    condition_warning = limits.get("condition_warning")
+    if condition is not None and condition_warning is not None and float(condition) >= float(condition_warning):
+        evidence.append({"metric": "serialization_condition_number", "value": condition,
+                         "warning_threshold": condition_warning, "status": "warning",
+                         "message": f"CMTK serialization condition {condition:.6g}; warning threshold {condition_warning:.6g}"})
+    return evidence
 
 
 def _linear_stage_pipeline(global_model):
@@ -2310,44 +2360,43 @@ def _array_similarity_diagnostics(fixed_array, moving_array, *, nmi_bins=64):
     }
 
 
-def _deformation_qc_warnings(linear_similarity, warp_similarity, jacobian, configured_metric):
-    """Combine common image QC with CMTK-local Jacobian warnings."""
-    thresholds = _deformation_qc_thresholds()
+def _deformation_qc_evidence(linear_similarity, warp_similarity, jacobian, configured_metric, *, thresholds=None):
+    """Retain sampled geometric evidence separately from optional image QC."""
+    thresholds = registration_qc_thresholds(thresholds)
     linear_similarity = dict(linear_similarity or {})
     warp_similarity = dict(warp_similarity or {})
     jacobian = dict(jacobian or {})
-    warnings = list(jacobian.get("warnings") or [])
-    warnings.extend(
-        _linear_quality_warnings(
-            linear_similarity,
-            warp_similarity,
-            configured_metric,
-        )
+    evidence = _similarity_qc_evidence(
+        linear_similarity, warp_similarity, configured_metric, thresholds=thresholds,
+        overlap_before=linear_similarity.get("foreground_overlap_fraction"),
+        overlap_after=warp_similarity.get("foreground_overlap_fraction"),
+        overlap_label="foreground",
     )
+    evidence.append(_qc_measurement(
+        "nonpositive_jacobian_fraction", "Folding", jacobian.get("nonpositive_fraction"),
+        thresholds["warning_nonpositive_jacobian_fraction"],
+        thresholds["failure_nonpositive_jacobian_fraction"], percent=True,
+    ))
+    # The adapter retains its raw zero-tolerance folding message. Replace that
+    # duplicate diagnostic with the measured policy above, never classify prose.
+    for warning in jacobian.get("warnings") or []:
+        if str(warning).startswith("local folding detected:"):
+            continue
+        evidence.append({"metric": "jacobian_diagnostic", "status": "warning", "message": str(warning)})
+    return evidence
 
-    before_overlap = float(
-        linear_similarity.get("foreground_overlap_fraction", float("nan"))
-    )
-    after_overlap = float(
-        warp_similarity.get("foreground_overlap_fraction", float("nan"))
-    )
-    if (
-        math.isfinite(before_overlap) and math.isfinite(after_overlap)
-        and before_overlap - after_overlap > thresholds["substantial_overlap_absolute_drop"]
-        and after_overlap < thresholds["substantial_overlap_remaining_fraction"] * max(before_overlap, 1e-12)
-    ):
-        warnings.append(
-            f"foreground overlap fell substantially ({before_overlap:.5f} -> {after_overlap:.5f})"
-        )
 
-    for label, similarity in (("affine-seed", linear_similarity), ("final-warp", warp_similarity)):
-        nmi = float(similarity.get("nmi", float("nan")))
-        ncc = float(similarity.get("ncc", float("nan")))
-        if not math.isfinite(nmi) or not math.isfinite(ncc):
-            warnings.append(
-                f"{label} deterministic similarity QC is incomplete (NMI={nmi}, NCC={ncc})"
-            )
-    return list(dict.fromkeys(str(value) for value in warnings if str(value).strip()))
+def _optional_array_similarity_diagnostics(fixed, moving):
+    # A malformed reformat is an artifact error, not an optional metric gap.
+    if np.shape(fixed) != np.shape(moving):
+        raise RuntimeError("CMTK QC reformat does not match the Reference grid.")
+    try:
+        return _array_similarity_diagnostics(fixed, moving)
+    except (InterruptedError, MemoryError):
+        raise
+    except Exception as exc:
+        return {"nmi": None, "ncc": None, "foreground_overlap_fraction": None,
+                "error": f"Optional similarity QC is incomplete: {exc}"}
 
 
 def _resampled_similarity_diagnostics(
@@ -2383,52 +2432,67 @@ def _resampled_ncc(fixed_image, moving_image, fixed_to_moving_transform, fixed_m
     )
 
 
-def _linear_quality_warnings(before, after, configured_metric, *, overlap_before=None, overlap_after=None):
-    """Return strong QC warnings without making image similarity a hard gate."""
-    thresholds = _linear_qc_thresholds()
+def _similarity_qc_evidence(before, after, configured_metric, *, thresholds=None,
+                            overlap_before=None, overlap_after=None, overlap_label="support"):
+    """Numeric severity with paired absolute/relative guards and explicit gaps."""
+    thresholds = registration_qc_thresholds(thresholds)
     before = dict(before or {})
     after = dict(after or {})
-    warnings = []
-
-    before_nmi = float(before.get("nmi", float("nan")))
-    after_nmi = float(after.get("nmi", float("nan")))
-    if math.isfinite(before_nmi) and math.isfinite(after_nmi):
-        drop = before_nmi - after_nmi
-        relative = drop / max(abs(before_nmi), 1e-12)
-        if (
-            drop > thresholds["substantial_nmi_absolute_drop"]
-            and relative > thresholds["substantial_nmi_relative_drop"]
-        ):
-            warnings.append(
-                f"deterministic NMI decreased substantially ({before_nmi:.5f} -> {after_nmi:.5f})"
-            )
-
-    before_ncc = float(before.get("ncc", float("nan")))
-    after_ncc = float(after.get("ncc", float("nan")))
-    if math.isfinite(before_ncc) and math.isfinite(after_ncc):
-        if before_ncc - after_ncc > thresholds["substantial_ncc_drop"]:
-            warnings.append(
-                f"deterministic NCC decreased substantially ({before_ncc:.5f} -> {after_ncc:.5f})"
-            )
-
-    if overlap_before is not None and overlap_after is not None:
-        before_overlap = float(overlap_before)
-        after_overlap = float(overlap_after)
-        if (
-            math.isfinite(before_overlap) and math.isfinite(after_overlap)
-            and before_overlap - after_overlap > thresholds["substantial_overlap_absolute_drop"]
-            and after_overlap < thresholds["substantial_overlap_remaining_fraction"] * max(before_overlap, 1e-12)
-        ):
-            warnings.append(
-                f"support overlap fell substantially ({before_overlap:.5f} -> {after_overlap:.5f})"
-            )
-
-    metric = str(configured_metric or "mattes").lower()
-    if warnings and metric in {"mattes", "joint_mi", "mi", "nmi"}:
-        warnings.append(
-            "optimizer used an information-theoretic metric; deterministic NCC is secondary QC and was not used as a rejection gate"
+    evidence = []
+    for metric in ("nmi", "ncc"):
+        start, end = before.get(metric), after.get(metric)
+        start = float(start) if start is not None else float("nan")
+        end = float(end) if end is not None else float("nan")
+        finite = math.isfinite(start) and math.isfinite(end)
+        suffix = "nmi_absolute_drop" if metric == "nmi" else "ncc_drop"
+        item = _qc_measurement(
+            metric + "_drop", f"deterministic {metric.upper()} decreased by", start - end,
+            thresholds["warning_" + suffix], thresholds["failure_" + suffix],
         )
-    return warnings
+        item.update(before=start if math.isfinite(start) else None, after=end if math.isfinite(end) else None)
+        if metric == "nmi" and finite:
+            relative = (start - end) / max(abs(start), 1e-12)
+            warn, fail = thresholds["warning_nmi_relative_drop"], thresholds["failure_nmi_relative_drop"]
+            item["status"] = (
+                "failed" if item["status"] == "failed" and relative > fail else
+                "warning" if start - end > item["warning_threshold"] and relative > warn else "passed"
+            )
+            item.update(relative_drop=relative, warning_relative_threshold=warn, failure_relative_threshold=fail)
+            item["message"] = item["message"].rsplit(";", 1)[0] + (
+                f"; relative drop {100 * relative:.6g}% (warning >{100 * warn:.6g}%, failure >{100 * fail:.6g}%; "
+                f"both absolute and relative limits must be crossed); {item['status']}"
+            )
+        if metric == "ncc" and str(configured_metric).lower() in {"mattes", "joint_mi", "mi", "nmi"}:
+            item["message"] += "; optimizer used an information-theoretic metric; NCC is secondary QC"
+        evidence.append(item)
+    if overlap_before is not None or overlap_after is not None or overlap_label == "foreground":
+        before_overlap = float(overlap_before) if overlap_before is not None else float("nan")
+        after_overlap = float(overlap_after) if overlap_after is not None else float("nan")
+        item = _qc_measurement(
+            overlap_label + "_overlap_drop", f"{overlap_label} overlap fell by",
+            before_overlap - after_overlap,
+            thresholds["warning_overlap_absolute_drop"], thresholds["failure_overlap_absolute_drop"],
+        )
+        if math.isfinite(before_overlap) and math.isfinite(after_overlap):
+            remaining = after_overlap / max(before_overlap, 1e-12)
+            warn = thresholds["warning_overlap_remaining_fraction"]
+            fail = thresholds["failure_overlap_remaining_fraction"]
+            item["status"] = (
+                "failed" if item["status"] == "failed" and remaining < fail else
+                "warning" if before_overlap - after_overlap > item["warning_threshold"] and remaining < warn else "passed"
+            )
+            item.update(before=before_overlap, after=after_overlap, remaining_fraction=remaining,
+                        warning_remaining_fraction=warn, failure_remaining_fraction=fail)
+            item["message"] = item["message"].rsplit(";", 1)[0] + (
+                f"; overlap {before_overlap:.6g} → {after_overlap:.6g}; remaining {100 * remaining:.6g}% "
+                f"(warning <{100 * warn:.6g}%, failure <{100 * fail:.6g}%; both limits must be crossed); {item['status']}"
+            )
+        evidence.append(item)
+    for label, values in (("Preceding stage", before), ("Final stage", after)):
+        if values.get("error"):
+            evidence.append({"metric": "similarity_diagnostic", "status": "warning",
+                             "message": f"{label} similarity QC is incomplete: {values['error']}"})
+    return evidence
 
 
 def _sitk_affine_from_matrix(matrix4):
@@ -2667,7 +2731,8 @@ class RegistrationWorker(QtCore.QThread):
 
     def _run_cmtk_linear_stage(
         self, *, fixed, moving, fixed_grid, moving_grid, fixed_arr, moving_arr,
-        fixed_img, moving_img, fixed_mask, cumulative_m2f, settings, base, stage_span
+        fixed_img, moving_img, fixed_mask, cumulative_m2f, settings, base, stage_span,
+        landmark_details=None,
     ):
         """Run one complete CMTK staged global registration and apply common MADI QC."""
         if self.cmtk_backend is None:
@@ -2677,6 +2742,7 @@ class RegistrationWorker(QtCore.QThread):
             )
 
         cmtk_settings = _cmtk_linear_settings_from_registration(settings)
+        thresholds = registration_qc_thresholds(settings.get("qc_thresholds"))
         dof_sequence = tuple(int(v) for v in cmtk_settings.dof_sequence)
         path_labels = _cmtk_linear_path_labels(dof_sequence)
         label = "CMTK global " + " → ".join(path_labels)
@@ -2767,11 +2833,12 @@ class RegistrationWorker(QtCore.QThread):
             )
             artifact_error = _linear_transform_artifact_error(candidate_m2f)
             _qc_passed, qc_failure, sanity = _linear_transform_sanity(
-                candidate_m2f, global_model
+                candidate_m2f, global_model, settings=settings,
             )
             final_overlap = float(_support_overlap_fraction(fixed, moving, candidate_m2f))
-            if final_overlap < _linear_qc_thresholds()["minimum_support_overlap_fraction"]:
-                qc_failure = "optimized transform leaves essentially no fixed/moving support overlap"
+            if final_overlap < thresholds["minimum_support_overlap_fraction"]:
+                qc_failure = (f"support overlap {final_overlap:.6g}; minimum allowed "
+                              f"{thresholds['minimum_support_overlap_fraction']:.6g}")
 
             try:
                 candidate_f2m = np.linalg.inv(candidate_m2f)
@@ -2783,25 +2850,19 @@ class RegistrationWorker(QtCore.QThread):
                     "ncc": float("nan"), "nmi": float("nan"), "valid_voxels": 0,
                     "nmi_bins": 64, "error": str(exc),
                 }
-            quality_warnings = _linear_quality_warnings(
+            qc_evidence = _similarity_qc_evidence(
                 similarity_before, similarity_after, cmtk_settings.metric,
                 overlap_before=stage_start_overlap, overlap_after=final_overlap,
+                thresholds=thresholds,
             ) if not artifact_error else []
-            serialization_status = str(
-                (result.affine_serialization_qc or {}).get("status") or "not-evaluated"
-            )
-            if serialization_status in {"warning", "failed"}:
-                quality_warnings.append(
-                    "CMTK affine round-trip serialization QC " + serialization_status
-                )
-            qc_failures = [qc_failure] if qc_failure else []
-            if serialization_status == "failed":
-                qc_failures.append("CMTK affine round-trip serialization QC failed")
+            if not artifact_error:
+                qc_evidence.extend(_serialization_qc_evidence(result.affine_serialization_qc, thresholds))
+                qc_evidence.extend(_landmark_qc_evidence(landmark_details, candidate_m2f, thresholds))
+            quality_warnings = _qc_messages(qc_evidence)
+            qc_failures = ([qc_failure] if qc_failure else []) + _qc_messages(qc_evidence, status="failed")
             stage_qc_status = (
                 "not-evaluated" if artifact_error else
-                "failed" if qc_failure or serialization_status == "failed" else
-                "warning" if quality_warnings else
-                "passed"
+                "failed" if qc_failures else _qc_evidence_status(qc_evidence)
             )
 
             similarity_delta = {}
@@ -2867,7 +2928,7 @@ class RegistrationWorker(QtCore.QThread):
                         result.affine_serialization_qc
                     ),
                     "qc_thresholds": {
-                        "linear": _linear_qc_thresholds(),
+                        "linear": _linear_qc_thresholds(settings),
                         "affine_serialization": copy.deepcopy(
                             (result.affine_serialization_qc or {}).get("thresholds") or {}
                         ),
@@ -2884,6 +2945,7 @@ class RegistrationWorker(QtCore.QThread):
                     "deterministic_similarity_delta": similarity_delta,
                     "linear_sanity": sanity,
                     "quality_warnings": list(quality_warnings),
+                    "qc_evidence": qc_evidence,
                     "artifact_error": artifact_error,
                     "qc_failures": list(qc_failures),
                     "support_overlap_fraction_at_stage_start": stage_start_overlap,
@@ -2897,6 +2959,7 @@ class RegistrationWorker(QtCore.QThread):
 
     def _register_pair(self, task, task_index, task_total):
         settings = self.settings
+        thresholds = registration_qc_thresholds(settings.get("qc_thresholds"))
         original_fixed = task["fixed"]
         original_moving = task["moving"]
         preparation = _prepare_registration_pair(original_fixed, original_moving)
@@ -3052,6 +3115,7 @@ class RegistrationWorker(QtCore.QThread):
         stages = []
         previous_m2f = np.eye(4, dtype=float)
         cumulative_m2f = initial_m2f.copy()
+        landmark_evidence = _landmark_qc_evidence(landmark_details, initial_m2f, thresholds)
         stages.append(TransformStageResult(
             name=initial_label,
             kind="initial",
@@ -3059,13 +3123,16 @@ class RegistrationWorker(QtCore.QThread):
             incremental_moving_to_fixed=_matrix_to_json(cumulative_m2f),
             ncc=None,
             execution_status="succeeded",
-            qc_status="not-evaluated",
+            qc_status=_qc_evidence_status(landmark_evidence) if landmark_evidence else "not-evaluated",
             user_decision="unapplied",
             details={
                 "mode": requested_initial,
                 "support_overlap_fraction": float(fallback_overlap),
                 "requested_support_overlap_fraction": float(initial_overlap),
                 "automatic_center_fallback": bool(fallback_used),
+                "qc_thresholds": {"linear": _linear_qc_thresholds(settings)},
+                "qc_evidence": landmark_evidence,
+                "quality_warnings": _qc_messages(landmark_evidence),
                 **landmark_details,
             },
         ))
@@ -3323,7 +3390,7 @@ class RegistrationWorker(QtCore.QThread):
                     # correspond to how the moving specimen is actually transformed.
                     artifact_error = _linear_transform_artifact_error(candidate_m2f)
                     _qc_passed, qc_failure, sanity = _linear_transform_sanity(
-                        candidate_m2f, kind
+                        candidate_m2f, kind, settings=settings,
                     )
 
                 # An optimizer may terminate without an exception while leaving only a
@@ -3332,8 +3399,9 @@ class RegistrationWorker(QtCore.QThread):
                 final_overlap = 0.0
                 if candidate_m2f is not None:
                     final_overlap = float(_support_overlap_fraction(fixed, moving, candidate_m2f))
-                    if final_overlap < _linear_qc_thresholds()["minimum_support_overlap_fraction"]:
-                        qc_failure = "optimized transform leaves essentially no fixed/moving support overlap"
+                    if final_overlap < thresholds["minimum_support_overlap_fraction"]:
+                        qc_failure = (f"support overlap {final_overlap:.6g}; minimum allowed "
+                                      f"{thresholds['minimum_support_overlap_fraction']:.6g}")
 
                 try:
                     similarity_after = _resampled_similarity_diagnostics(
@@ -3345,16 +3413,18 @@ class RegistrationWorker(QtCore.QThread):
                         "nmi_bins": 64, "error": str(exc),
                     }
                 ncc = float(similarity_after.get("ncc", float("nan")))
-                quality_warnings = _linear_quality_warnings(
+                qc_evidence = _similarity_qc_evidence(
                     similarity_before, similarity_after, settings.get("metric", "mattes"),
                     overlap_before=stage_start_overlap, overlap_after=final_overlap,
+                    thresholds=thresholds,
                 ) if not artifact_error else []
-                qc_failures = [qc_failure] if qc_failure else []
+                if not artifact_error:
+                    qc_evidence.extend(_landmark_qc_evidence(landmark_details, candidate_m2f, thresholds))
+                quality_warnings = _qc_messages(qc_evidence)
+                qc_failures = ([qc_failure] if qc_failure else []) + _qc_messages(qc_evidence, status="failed")
                 stage_qc_status = (
                     "not-evaluated" if artifact_error else
-                    "failed" if qc_failure else
-                    "warning" if quality_warnings else
-                    "passed"
+                    "failed" if qc_failures else _qc_evidence_status(qc_evidence)
                 )
 
                 if not artifact_error and candidate_m2f is not None:
@@ -3429,9 +3499,10 @@ class RegistrationWorker(QtCore.QThread):
                         "deterministic_similarity_delta": similarity_delta,
                         "linear_sanity": sanity,
                         "quality_warnings": list(quality_warnings),
+                        "qc_evidence": qc_evidence,
                         "artifact_error": artifact_error,
                         "qc_failures": list(qc_failures),
-                        "qc_thresholds": {"linear": _linear_qc_thresholds()},
+                        "qc_thresholds": {"linear": _linear_qc_thresholds(settings)},
                         "optimizer_attempts": attempt_info,
                         "support_overlap_fraction_at_stage_start": float(stage_start_overlap),
                         "support_overlap_fraction": float(final_overlap),
@@ -3461,6 +3532,7 @@ class RegistrationWorker(QtCore.QThread):
                 fixed_img=fixed_img, moving_img=moving_img, fixed_mask=fixed_mask,
                 cumulative_m2f=cumulative_m2f, settings=settings,
                 base=base, stage_span=stage_span,
+                landmark_details=landmark_details,
             )
             stages.append(cmtk_stage)
             if execution_succeeded(cmtk_stage.execution_status):
@@ -3622,10 +3694,10 @@ class RegistrationWorker(QtCore.QThread):
                     )
                     linear_reformatted, _linear_header = read_nrrd_zyx(qc_linear_path)
                     warp_reformatted, _warp_header = read_nrrd_zyx(qc_warp_path)
-                    linear_similarity = _array_similarity_diagnostics(
+                    linear_similarity = _optional_array_similarity_diagnostics(
                         fixed_cmtk_arr, linear_reformatted
                     )
-                    warp_similarity = _array_similarity_diagnostics(
+                    warp_similarity = _optional_array_similarity_diagnostics(
                         fixed_cmtk_arr, warp_reformatted
                     )
                     jacobian_qc = runner.run_jacobian_qc(
@@ -3639,20 +3711,30 @@ class RegistrationWorker(QtCore.QThread):
                         cancel_check=lambda: bool(self._cancel or self.isInterruptionRequested()),
                         timeout=None,
                     )
-                    qc_warnings = _deformation_qc_warnings(
+                    qc_evidence = _deformation_qc_evidence(
                         linear_similarity,
                         warp_similarity,
                         jacobian_qc,
                         cmtk_settings.metric,
+                        thresholds=thresholds,
                     )
+                    qc_evidence.extend(_serialization_qc_evidence(artifacts.affine_serialization_qc, thresholds))
+                    if landmark_details:
+                        qc_evidence.append({
+                            "metric": "warp_landmarks", "status": "warning",
+                            "message": "Final-warp landmark agreement was not measured; initialization residuals do not validate the warp.",
+                        })
                     deformation_qc = {
-                        "policy": "warn_and_keep",
-                        "thresholds": _deformation_qc_thresholds(),
+                        "policy": "numeric_severity_keep_valid_artifact_v1",
+                        "configured_metric": cmtk_settings.metric,
+                        "thresholds": _deformation_qc_thresholds(settings),
                         "linear_similarity": copy.deepcopy(linear_similarity),
                         "warp_similarity": copy.deepcopy(warp_similarity),
                         "jacobian_local": copy.deepcopy(jacobian_qc),
-                        "warnings": list(qc_warnings),
+                        "evidence": qc_evidence,
+                        "warnings": _qc_messages(qc_evidence),
                     }
+                    deformation_qc["status"] = _deformation_result_qc_status(deformation_qc)
                     update_artifact_bundle_qc(artifacts.workspace, deformation_qc)
                 except CMTKProcessError as exc:
                     result = getattr(exc, "result", None)
@@ -3715,7 +3797,7 @@ class RegistrationWorker(QtCore.QThread):
                     artifacts.affine_serialization_qc
                 ),
                 "qc_thresholds": {
-                    "deformation": _deformation_qc_thresholds(),
+                    "deformation": _deformation_qc_thresholds(settings),
                     "affine_serialization": copy.deepcopy(
                         (artifacts.affine_serialization_qc or {}).get("thresholds") or {}
                     ),
@@ -3784,7 +3866,7 @@ class RegistrationWorker(QtCore.QThread):
                 cumulative_moving_to_fixed=_matrix_to_json(cumulative_m2f),
                 incremental_moving_to_fixed=_matrix_to_json(np.eye(4)),
                 metric_value=None,
-                ncc=float(deformation_qc["warp_similarity"]["ncc"]),
+                ncc=deformation_qc["warp_similarity"].get("ncc"),
                 iterations=0,
                 stop_condition=(
                     "CMTK warp completed; scientific QC requires review"
@@ -3800,8 +3882,8 @@ class RegistrationWorker(QtCore.QThread):
                 f"{label} execution succeeded",
                 details=(
                     f"CMTK={artifacts.cmtk_version or 'unknown'}; warp={artifacts.warp_xform}; "
-                    f"NMI {deformation_qc['linear_similarity']['nmi']:.6g}→{deformation_qc['warp_similarity']['nmi']:.6g}; "
-                    f"NCC {deformation_qc['linear_similarity']['ncc']:.6g}→{deformation_qc['warp_similarity']['ncc']:.6g}; "
+                    f"NMI {deformation_qc['linear_similarity'].get('nmi')}→{deformation_qc['warp_similarity'].get('nmi')}; "
+                    f"NCC {deformation_qc['linear_similarity'].get('ncc')}→{deformation_qc['warp_similarity'].get('ncc')}; "
                     f"Jacobian median={deformation_qc['jacobian_local']['median']:.6g}; "
                     f"folding={100.0 * deformation_qc['jacobian_local']['nonpositive_fraction']:.6g}%; "
                     f"warnings={deformation_qc.get('warnings') or 'none'}; "
@@ -3810,7 +3892,7 @@ class RegistrationWorker(QtCore.QThread):
             )
             if deformation_qc.get("warnings"):
                 self._diag(
-                    f"{label} QC warning",
+                    f"{label} QC {deformation_qc['status']}",
                     level="WARNING",
                     details=" | ".join(map(str, deformation_qc.get("warnings") or [])),
                 )

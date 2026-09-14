@@ -305,9 +305,17 @@ def registration_qc_summary(chain_payload: dict) -> dict:
             "automatic_center_fallback",
             "linear_sanity",
             "deformation_qc",
+            "qc_thresholds",
+            "qc_evidence",
+            "qc_failures",
+            "quality_warnings",
+            "deterministic_similarity_before",
+            "deterministic_similarity_after",
         ):
             if key in details:
                 summary[key] = copy.deepcopy(details.get(key))
+        if stage.get("qc"):
+            summary["qc"] = copy.deepcopy(stage["qc"])
         execution_error = str(details.get("execution_error") or details.get("artifact_error") or "").strip()
         if execution_error:
             summary["execution_error"] = execution_error
@@ -330,7 +338,7 @@ def registration_qc_summary(chain_payload: dict) -> dict:
     unique_warnings = list(dict.fromkeys(warnings))
     return {
         "format": "MADI3D Registration QC Summary",
-        "format_version": 1,
+        "format_version": 2,
         "registration_id": str(chain.get("registration_id") or ""),
         "source_name": str(chain.get("source_name") or ""),
         "target_name": str(chain.get("target_name") or ""),
@@ -338,6 +346,8 @@ def registration_qc_summary(chain_payload: dict) -> dict:
         "has_deformation": bool(chain.get("has_deformation", False)),
         "execution_status": str(chain.get("execution_status") or "pending"),
         "qc_status": str(chain.get("qc_status") or "not-evaluated"),
+        "qc_thresholds": copy.deepcopy(dict(chain.get("settings") or {}).get("qc_thresholds") or {}),
+        "registration_algorithm_version": chain.get("registration_algorithm_version"),
         "user_decision": str(chain.get("user_decision") or "unapplied"),
         "stage_path": [
             str(stage.get("kind") or "unknown")

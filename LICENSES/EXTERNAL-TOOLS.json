@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "ffmpeg": {
+    "release": "n8.1.2-1",
+    "version": "n8.1.2",
+    "build_commit": "88caac417541f3bb678fa6670cb73f2d74c7aaf9",
+    "x265": "4.2",
+    "assets": {
+      "ffmpeg-win-x64.exe": "4044b3924c977ad31229d504c5d5b8685f9553124fbaff6e9c99048b42830341",
+      "ffmpeg-linux-x64": "9eac5b2b5076db5ff853a6fa0dcd6b8de7d0cac8481eadda6c47cd935825f1ee",
+      "ffmpeg-osx-x64": "62c87854d851f202fc4a29bdda0fe7b6ebcddd37b863482ce1bdc81151b03fe4",
+      "ffmpeg-osx-arm64": "e7b9fcd97f95f333512d6e8b8ac24d9dbc08f189f36047695499bd7b57214b22"
+    }
+  },
+  "cmtk": {
+    "macos_arm64_url": "https://github.com/jefferis/cmtk/releases/download/natdev-latest/cmtk-3.4.0-dev-macos-arm64-gcd.tar.gz",
+    "macos_arm64_sha256": "4160852416b6cba9a55c7e7d0497e4d7153262a3a5265cafb39d1bb850649d6c",
+    "source_commit": "bfc0c235099e4499b76f1f7977aee73933ab7d7e",
+    "windows_wsl_release": "Ubuntu 24.04.4 LTS",
+    "linux_package_version": "repository-selected; probe and retain actual version",
+    "macos_intel": "existing installation only"
+  }
+}

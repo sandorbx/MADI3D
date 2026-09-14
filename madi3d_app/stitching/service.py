@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 STITCHING_ALGORITHM_VERSION = (
-    "stitching-registration-fusion-v6-conservative-model-reference-lattice"
+    "stitching-registration-fusion-v8-discovery-resolution-retry"
 )
 
 DEFAULT_STITCHING_MINIMUM_NCC = 0.05
@@ -62,6 +62,11 @@ from madi3d_app.stitching.models import (
     StitchingRegistrationResult,
     StitchingRejection,
     stitching_grid_revision,
+)
+from madi3d_app.stitching.correlation import (
+    DEFAULT_PHASE_PEAK_COUNT,
+    check_cancelled,
+    evaluate_translations,
 )
 from madi3d_app.volume.geometry import (
     affine_support_bounds as _support_bounds,
@@ -995,7 +1000,9 @@ def _resample_zyx(
             "3-D stitching requires SciPy. Install it with: pip install scipy"
         ) from exc
 
-    source_zyx = np.ascontiguousarray(np.asarray(source_zyx))
+    # SciPy accepts strided arrays and broadcast support masks. Materializing
+    # either here can copy an entire native volume for each bounded resample.
+    source_zyx = np.asarray(source_zyx)
     mapping = _output_to_source_zyx_mapping(source_world_affine, output_world_affine)
     return ndimage.affine_transform(
         source_zyx,
@@ -1189,106 +1196,22 @@ def _ncc(a, b, mask=None):
 
 
 def _phase_correlation_shift(fixed, moving, max_shift_zyx=None):
-    """Return displacement plus an interpretable phase-peak ambiguity metric.
+    """Periodic single-peak diagnostic retained for the boundary regression audit.
 
-    Confidence compares the primary peak with the strongest peak outside a
-    two-voxel periodic neighbourhood. A ratio below 1.5 or relative prominence
-    below 0.25 is conservatively flagged for review; it is not an edge-rejection
-    rule. Flat/no-information inputs report invalid ambiguous confidence.
+    Production registration evaluates linearly padded hypotheses on common
+    support. This diagnostic uses the same FFT/peak implementation with periodic
+    input semantics, as required by its circular-shift characterization tests.
     """
+    from madi3d_app.stitching.correlation import phase_confidence, phase_peaks
+
     fixed = np.asarray(fixed, dtype=np.float32)
     moving = np.asarray(moving, dtype=np.float32)
     if fixed.shape != moving.shape:
         raise ValueError("Phase-correlation arrays must have the same shape.")
-
-    f = np.fft.fftn(fixed)
-    m = np.fft.fftn(moving)
-    cross = f * np.conj(m)
-    cross /= np.maximum(np.abs(cross), 1e-12)
-    corr = np.fft.ifftn(cross).real
-
-    allowed = None
-    if max_shift_zyx is not None:
-        max_shift = np.asarray(max_shift_zyx, dtype=int)
-        allowed = np.zeros(corr.shape, dtype=bool)
-        index_sets = []
-        for n, radius in zip(corr.shape, max_shift):
-            radius = max(0, min(int(radius), n // 2))
-            idx = np.concatenate((np.arange(0, radius + 1), np.arange(n - radius, n)))
-            index_sets.append(np.unique(idx))
-        allowed[np.ix_(*index_sets)] = True
-        masked = np.where(allowed, corr, -np.inf)
-        peak_index = np.unravel_index(int(np.argmax(masked)), corr.shape)
-    else:
-        masked = corr
-        peak_index = np.unravel_index(int(np.argmax(corr)), corr.shape)
-
-    primary_peak = float(corr[peak_index])
-    secondary_search = np.array(masked, dtype=float, copy=True)
-    exclusion_radius = 2
-    excluded_indices = [
-        np.unique(
-            [
-                (int(peak_index[axis]) + offset) % int(corr.shape[axis])
-                for offset in range(-exclusion_radius, exclusion_radius + 1)
-            ]
-        )
-        for axis in range(3)
-    ]
-    secondary_search[np.ix_(*excluded_indices)] = -np.inf
-    finite_secondary = secondary_search[np.isfinite(secondary_search)]
-    secondary_peak = (
-        float(np.max(finite_secondary)) if finite_secondary.size else float("nan")
-    )
-    signal_norm = math.sqrt(
-        float(np.vdot(fixed, fixed).real) * float(np.vdot(moving, moving).real)
-    )
-    valid_confidence = bool(
-        math.isfinite(primary_peak)
-        and math.isfinite(secondary_peak)
-        and signal_norm > 1e-12
-        and primary_peak > 1e-12
-    )
-    if valid_confidence:
-        peak_ratio = float(primary_peak / max(secondary_peak, 1e-12))
-        peak_prominence = float(
-            (primary_peak - secondary_peak) / max(abs(primary_peak), 1e-12)
-        )
-        ambiguous = bool(peak_ratio < 1.5 or peak_prominence < 0.25)
-    else:
-        peak_ratio = None
-        peak_prominence = None
-        ambiguous = True
-
-    shift = np.asarray(peak_index, dtype=float)
-    shape = np.asarray(corr.shape, dtype=float)
-    shift[shift > shape / 2.0] -= shape[shift > shape / 2.0]
-
-    # Independent parabolic interpolation around the periodic correlation peak.
-    for axis in range(3):
-        idx0 = list(peak_index)
-        idxm = list(peak_index)
-        idxp = list(peak_index)
-        idxm[axis] = (idxm[axis] - 1) % corr.shape[axis]
-        idxp[axis] = (idxp[axis] + 1) % corr.shape[axis]
-        fm = float(corr[tuple(idxm)])
-        f0 = float(corr[tuple(idx0)])
-        fp = float(corr[tuple(idxp)])
-        denom = fm - 2.0 * f0 + fp
-        if abs(denom) > 1e-12:
-            delta = 0.5 * (fm - fp) / denom
-            if abs(delta) <= 1.0:
-                shift[axis] += delta
-    return {
-        "shift_zyx": shift,
-        "primary_peak": primary_peak,
-        "secondary_peak": secondary_peak if math.isfinite(secondary_peak) else None,
-        "peak_ratio": peak_ratio,
-        "peak_prominence": peak_prominence,
-        "valid": valid_confidence,
-        "ambiguous": ambiguous,
-        "secondary_exclusion_radius_voxels": exclusion_radius,
-    }
+    peaks, _shape = phase_peaks(fixed, moving, count=1, linear=False,
+                                max_shift=max_shift_zyx)
+    return dict(phase_confidence(peaks, 0),
+                shift_zyx=np.array(peaks[0]["shift_zyx"] if peaks else [0., 0., 0.]))
 
 
 def _translation_matrix_xyz(translation_xyz):
@@ -1560,14 +1483,14 @@ def _estimate_registration_pair_bytes(tile_a, tile_b, pair, settings, mode):
     )
     voxels = math.prod(int(value) for value in shape_zyx)
     bytes_per_voxel = {
-        "translation": 96,
-        "rigid": 112,
-        "affine": 128,
+        "translation": 384,
+        "rigid": 400,
+        "affine": 416,
     }.get(str(mode or "translation").lower(), 128)
     return int(64 * 1024**2 + voxels * bytes_per_voxel)
 
 
-def _register_pair(tile_a, tile_b, pair, settings, mode):
+def _register_pair(tile_a, tile_b, pair, settings, mode, *, cancelled=None):
     tile_a, tile_b = _prepared_tiles([tile_a, tile_b])
     try:
         from scipy import ndimage, optimize
@@ -1586,6 +1509,7 @@ def _register_pair(tile_a, tile_b, pair, settings, mode):
         tile_a["data"], tile_a["world_affine"], grid_affine, shape_zyx,
         order=1, output_dtype=np.float32,
     )
+    check_cancelled(cancelled)
     moving = _resample_zyx(
         tile_b["data"], tile_b["world_affine"], grid_affine, shape_zyx,
         order=1, output_dtype=np.float32,
@@ -1600,6 +1524,9 @@ def _register_pair(tile_a, tile_b, pair, settings, mode):
         tile_b["world_affine"], grid_affine, shape_zyx,
         order=0, output_dtype=np.uint8,
     ) > 0
+    check_cancelled(cancelled)
+    fixed_mask &= np.isfinite(fixed)
+    moving_mask &= np.isfinite(moving)
 
     fixed_p = _registration_preprocess(fixed, fixed_mask)
     moving_p = _registration_preprocess(moving, moving_mask)
@@ -1609,13 +1536,17 @@ def _register_pair(tile_a, tile_b, pair, settings, mode):
     search_margin = max(0.0, float(settings["search_margin"]))
     spacing_zyx = np.asarray(spacing_xyz[::-1], dtype=float)
     max_shift_zyx = np.ceil(search_margin / np.maximum(spacing_zyx, 1e-9)).astype(int)
-    max_shift_zyx = np.minimum(max_shift_zyx, np.asarray(shape_zyx) // 2)
     fixed_phase = _registration_support_taper(fixed_p, fixed_mask)
     moving_phase = _registration_support_taper(moving_p, moving_mask)
-    phase_correlation = _phase_correlation_shift(
-        fixed_phase, moving_phase, max_shift_zyx
+    evaluation = evaluate_translations(
+        fixed_p, moving_p, fixed_mask, moving_mask, fixed_phase, moving_phase,
+        ncc=_ncc, settings=settings, max_shift=max_shift_zyx, cancelled=cancelled,
     )
-    shift_zyx = np.asarray(phase_correlation["shift_zyx"], dtype=float)
+    phase_correlation = evaluation["phase_correlation"]
+    selected_candidate = evaluation["selected"]
+    shift_zyx = np.asarray(
+        selected_candidate["translation_zyx"] if selected_candidate else (0., 0., 0.), dtype=float
+    )
 
     moved_translation = ndimage.shift(
         moving_p,
@@ -1665,6 +1596,7 @@ def _register_pair(tile_a, tile_b, pair, settings, mode):
         )
 
     def evaluated_correction(corr):
+        check_cancelled(cancelled)
         moved = transform_moving_matrix(corr)
         moved_mask = transform_moving_matrix(corr, mask=True) > 0
         valid = fixed_mask & moved_mask
@@ -1943,7 +1875,27 @@ def _register_pair(tile_a, tile_b, pair, settings, mode):
             for key, value in phase_correlation.items()
             if key != "shift_zyx"
         },
+        "candidate_evaluation": evaluation,
+        "measured_overlap": _measured_overlap(tile_a, tile_b, correction, grid_affine, overlap_voxels),
     }
+
+
+def _measured_overlap(tile_a, tile_b, correction, grid_affine, overlap_voxels):
+    """Geometric extent and sampled support after the measured correction."""
+    alo, ahi = _support_bounds(tile_a["world_affine"], tile_a["dims"])
+    blo, bhi = _support_bounds(correction @ tile_b["world_affine"], tile_b["dims"])
+    cell_volume = abs(float(np.linalg.det(np.asarray(grid_affine)[:3, :3])))
+    valid_volume = overlap_voxels * cell_volume
+    volumes = [abs(float(np.linalg.det(t["world_affine"][:3, :3]))) * math.prod(t["dims"])
+               for t in (tile_a, tile_b)]
+    return dict(
+        minimum_xyz=np.maximum(alo, blo).tolist(), maximum_xyz=np.minimum(ahi, bhi).tolist(),
+        extent_xyz=np.maximum(0., np.minimum(ahi, bhi)-np.maximum(alo, blo)).tolist(),
+        valid_registration_samples=overlap_voxels, valid_volume=valid_volume,
+        fraction_of_fixed=min(1., valid_volume/volumes[0]),
+        fraction_of_moving=min(1., valid_volume/volumes[1]),
+        measurement="sampled common support, including zero-valued background; extent is its world-axis bounding box")
+
 
 def _connected_components(tile_ids, edges):
     tile_ids = list(tile_ids)
@@ -2722,9 +2674,74 @@ def _registration_geometry_provenance(
     return payload
 
 
+def estimate_source_loading(descriptors, *, working_memory_mb, available_memory_bytes=None):
+    """Full-decoding preflight for formats used by the existing GUI loader.
+
+    Resident decoded inputs plus one largest decoder buffer are budgeted. Source
+    dimensions/dtype come from captured records, not filenames or file sizes.
+    """
+    sizes = []
+    for descriptor in descriptors:
+        grid = descriptor.get("working_geometry") or descriptor.get("channel_local_working_grid") or {}
+        dims = finite_tuple3(grid.get("dimensions"), "Source load dimensions", positive=True, integer=True)
+        dtype = np.dtype(descriptor.get("scalar_dtype") or "float64")
+        sizes.append(math.prod(dims) * dtype.itemsize)
+    decoded = sum(sizes)
+    required = decoded + max(sizes, default=0) + int(working_memory_mb * 1024**2)
+    available = _available_memory_bytes() if available_memory_bytes is None else available_memory_bytes
+    if available and required > int(available * .6):
+        raise MemoryError(f"These sources require about {decoded/1024**3:.2f} GiB decoded, plus decoder and registration buffers. This exceeds the current memory budget. Load a smaller collection or reduce the images before stitching.")
+    return dict(full_decoded_source_bytes=decoded, estimated_additional_peak_bytes=required,
+                concurrent_decoders=1, behavior="full source decoding, one volume at a time; all decoded inputs remain resident")
+
+
+def registration_settings_from_saved_panel(settings):
+    """Use the same numerical contract for detached queued projects."""
+    s = dict(settings or {})
+    values = dict(search_margin=s.get("search_margin", 25.),
+        minimum_overlap_fraction=float(s.get("minimum_overlap", .25))/100.,
+        minimum_score=s.get("minimum_score", DEFAULT_STITCHING_MINIMUM_NCC),
+        coarse_max_dim=s.get("coarse_size", 112), max_angle_deg=s.get("max_angle", DEFAULT_STITCHING_MAX_ANGLE_DEG),
+        max_scale_percent=s.get("max_scale", DEFAULT_STITCHING_MAX_SCALE_PERCENT),
+        max_shear=s.get("max_shear", DEFAULT_STITCHING_MAX_SHEAR), worker_count=s.get("worker_count", 0),
+        initial_pose_source=s.get("initial_pose", "current"), overlap_source=s.get("overlap_source", "madi"),
+        registration_channel_key=s.get("registration_channel"))
+    for key in ("topology", "phase_peak_count", "discovery_max_pairs", "discovery_exhaustive_tiles", "registration_memory_mb",
+                "stage_xy_mapping", "invert_stage_x", "invert_stage_y", "invert_stage_z"):
+        if key in s:
+            values[key] = copy.deepcopy(s[key])
+    return validated_registration_settings(values)
+
+
 def validated_registration_settings(settings, subject="Stitching registration"):
     """Validate open-ended persisted settings at the registration boundary."""
     values = dict(settings or {})
+    defaults = dict(
+        phase_peak_count=DEFAULT_PHASE_PEAK_COUNT, discovery_preview_dim=64,
+        discovery_minimum_support=512, discovery_minimum_informative=128,
+        discovery_minimum_ncc=0.6, candidate_ambiguity_ncc=0.03,
+        discovery_exhaustive_tiles=12, discovery_max_pairs=256,
+        discovery_neighbors=4, preview_cache_mb=64, registration_memory_mb=1024,
+    )
+    for key, default in defaults.items():
+        values.setdefault(key, default)
+        number = float(values[key])
+        if not math.isfinite(number) or number <= 0:
+            raise ValueError(f"{subject} setting {key!r} must be positive and finite.")
+        if isinstance(default, int):
+            if int(number) != number:
+                raise ValueError(f"{subject} setting {key!r} must be integral.")
+            values[key] = int(number)
+        else:
+            values[key] = number
+    if values["phase_peak_count"] > 32 or values["discovery_preview_dim"] > 256:
+        raise ValueError("Phase peaks are limited to 32 and discovery previews to 256 samples per axis.")
+    if values["discovery_neighbors"] > 32:
+        raise ValueError("Coarse image scheduling is limited to 32 neighbors per tile; use exhaustive search to broaden it further.")
+    if values["discovery_minimum_ncc"] > 1 or values["candidate_ambiguity_ncc"] > 1:
+        raise ValueError("Discovery NCC settings must be within 0..1.")
+    from madi3d_app.stitching.topology import validate_topology
+    values["topology"] = validate_topology(values.get("topology"))
     required = {
         "search_margin",
         "minimum_overlap_fraction",
@@ -2791,6 +2808,7 @@ class StitchRegistrationOperation:
         cancelled=None,
         completed_callback=None,
         failed_callback=None,
+        reuse_result=None,
     ):
         self.tiles = tiles
         self.settings = dict(settings)
@@ -2799,6 +2817,7 @@ class StitchRegistrationOperation:
         self._cancelled = cancelled or (lambda: False)
         self._completed_callback = completed_callback or (lambda _result: None)
         self._failed_callback = failed_callback or (lambda _message: None)
+        self.reuse_result = reuse_result
 
     def run(self):
         try:
@@ -2807,6 +2826,29 @@ class StitchRegistrationOperation:
                 raise ValueError(
                     f"Unsupported stitching registration mode {self.mode!r}."
                 )
+            check_cancelled(self._cancelled)
+            automatic = self.settings.get("initial_pose_source") == "auto"
+            placement_evidence = copy.deepcopy(self.settings.get("initial_layout") or {})
+            if automatic and not placement_evidence:
+                from madi3d_app.stitching.stitching_positioning import (
+                    InitialPlacementSettings, registration_initial_layout,
+                )
+                placement_evidence = registration_initial_layout(
+                    self.tiles, InitialPlacementSettings(mode="auto",
+                        **{key: self.settings[key] for key in ("stage_xy_mapping", "invert_stage_x", "invert_stage_y", "invert_stage_z") if key in self.settings}),
+                    topology=self.settings.get("topology"),
+                )
+                placed_tiles = []
+                for original in self.tiles:
+                    tile = dict(original)
+                    delta = np.asarray(placement_evidence["placement_deltas"][tile["tile_id"]])
+                    tile["world_affine"] = delta @ tile["world_affine"]
+                    tile["world_index_affine"] = tile["world_affine"]
+                    if tile.get("actor_matrix") is not None:
+                        tile["actor_matrix"] = delta @ tile["actor_matrix"]
+                        tile["world_transform"] = tile["actor_matrix"]
+                    placed_tiles.append(tile)
+                self.tiles = placed_tiles
             preparation = _prepare_stitching_geometry(self.tiles)
             self.tiles = preparation.prepared_tiles
             registration_inputs = []
@@ -2829,11 +2871,56 @@ class StitchRegistrationOperation:
                         },
                     }
                 )
-            pairs = _candidate_pairs(
-                self.tiles,
-                self.settings["search_margin"],
-                self.settings["minimum_overlap_fraction"],
-            )
+            discovery = None
+            search_coverage = {}
+            input_fingerprints = {}
+            reuse_signature = None
+            if automatic:
+                from madi3d_app.stitching.discovery import DiscoveryContext, pixel_fingerprint
+                discovery = DiscoveryContext(self.tiles, self.settings, cancelled=self._cancelled,
+                                             progress=self._progress_callback, placement_evidence=placement_evidence)
+                for tile in self.tiles:
+                    self._progress_callback(0, f"Checking registration pixels: {tile['display_name']}")
+                    input_fingerprints[tile["tile_id"]] = pixel_fingerprint(tile, self._cancelled)
+                    tile["_registration_pixel_fingerprint"] = input_fingerprints[tile["tile_id"]]
+                    discovery.metrics["source_hash_bytes"] += np.asarray(tile["data"]).nbytes
+                signature_settings = {k: v for k, v in self.settings.items() if k not in {"resolved_worker_count", "worker_resolution", "initial_layout"}}
+                signature_payload = dict(algorithm=STITCHING_ALGORITHM_VERSION, mode=self.mode,
+                    settings=signature_settings, pixels=input_fingerprints,
+                    placement_evidence=_json_geometry_value(placement_evidence),
+                    geometry=preparation.provenance.to_dict(),
+                    tiles=[dict(tile_id=t["tile_id"], affine=t["world_affine"].tolist(), dims=list(t["dims"]),
+                                source_id=t.get("source_id"), reference=t.get("reference_enabled", True)) for t in self.tiles])
+                reuse_signature = hashlib.sha256(json.dumps(signature_payload, sort_keys=True, allow_nan=False).encode("utf-8")).hexdigest()
+                if self.reuse_result is not None and self.reuse_result.get("reuse_signature") == reuse_signature:
+                    reused = copy.deepcopy(self.reuse_result)
+                    reused["reused_calculation"] = True
+                    check_cancelled(self._cancelled)
+                    self._progress_callback(100, "Reused registration after verifying pixels, channel, geometry and settings")
+                    self._completed_callback(reused)
+                    return
+                known_ids = {r["tile_id"] for r in placement_evidence.get("records", [])
+                             if r.get("applied_axes") and not r.get("kept_current_pose")}
+                known_tiles = [tile for tile in self.tiles if tile["tile_id"] in known_ids]
+                # For larger collections, physical proximity only schedules bounded
+                # comparisons; it does not require an all-pairs bounds allocation.
+                if len(known_tiles) > self.settings["discovery_exhaustive_tiles"]:
+                    from scipy.spatial import cKDTree
+                    centers = np.array([t["world_affine"][:3, 3] for t in known_tiles])
+                    nearest = cKDTree(centers).query(centers, k=min(len(centers), self.settings["discovery_neighbors"]+1))[1]
+                    subset_pairs = sorted({tuple(sorted((i, int(j)))) for i, row in enumerate(nearest) for j in np.atleast_1d(row) if i != j})
+                else:
+                    from itertools import combinations
+                    subset_pairs = list(combinations(range(len(known_tiles)), 2))
+                indices = {t["tile_id"]: i for i, t in enumerate(self.tiles)}
+                guided = []
+                for i, j in subset_pairs:
+                    for pair in _candidate_pairs([known_tiles[i], known_tiles[j]], self.settings["search_margin"], self.settings["minimum_overlap_fraction"]):
+                        pair["i"], pair["j"] = indices[pair["fixed_id"]], indices[pair["moving_id"]]
+                        guided.append(pair)
+                pairs, search_coverage = discovery.schedule(guided, known_ids)
+            else:
+                pairs = _candidate_pairs(self.tiles, self.settings["search_margin"], self.settings["minimum_overlap_fraction"])
             # Reference-enabled tiles can constrain neighbors. Fusion-only tiles
             # remain in the project/output but do not create edges solely between
             # one another. If only the second tile is a reference, orient the edge
@@ -2858,7 +2945,7 @@ class StitchRegistrationOperation:
                 _tile_support_mask(tile)
 
             total = len(pairs)
-            estimated_pair_bytes = max(
+            estimated_pair_bytes = discovery.metrics["estimated_working_bytes"] if discovery else max(
                 (
                     _estimate_registration_pair_bytes(
                         self.tiles[pair["i"]],
@@ -2872,8 +2959,13 @@ class StitchRegistrationOperation:
                 default=0,
             )
             worker_resolution = {}
+            working_budget = int(self.settings["registration_memory_mb"] * 1024**2)
+            if estimated_pair_bytes > working_budget:
+                raise MemoryError("One registration comparison exceeds the configured working-memory budget. Reduce registration size or increase the budget.")
+            budget_workers = max(1, working_budget // max(1, estimated_pair_bytes))
+            requested_workers = int(self.settings.get("worker_count", 0)) or 8
             worker_count = _resolved_worker_count(
-                self.settings.get("worker_count", 0),
+                1 if discovery else min(requested_workers, budget_workers),
                 total,
                 auto_cap=8,
                 estimated_bytes_per_job=estimated_pair_bytes,
@@ -2906,7 +2998,15 @@ class StitchRegistrationOperation:
                     raise InterruptedError
                 a = self.tiles[pair["i"]]
                 b = self.tiles[pair["j"]]
-                edge = _register_pair(a, b, pair, self.settings, self.mode)
+                if discovery and pair.get("search_domain") == "unknown-position":
+                    edge = discovery.register(a, b, pair, self.settings, self.mode)
+                else:
+                    # Retain the guided path for usable placement evidence.
+                    edge = _register_pair(a, b, pair, self.settings, self.mode, cancelled=self._cancelled)
+                    if discovery and (edge["score"] < minimum_score or not edge["phase_correlation"]["valid"]):
+                        guided_evaluation = copy.deepcopy(edge)
+                        edge = discovery.register(a, b, pair, self.settings, self.mode)
+                        edge["guided_attempt"] = guided_evaluation
                 return pair, edge
 
             def pair_evaluation(pair, outcome, *, edge=None, error=None):
@@ -2930,6 +3030,7 @@ class StitchRegistrationOperation:
                     },
                     "minimum_accepted_ncc": minimum_score,
                     "outcome": str(outcome),
+                    "search_domain": pair.get("search_domain", "guided"),
                 }
                 if edge is not None:
                     record.update(
@@ -2964,6 +3065,10 @@ class StitchRegistrationOperation:
                             "phase_correlation": copy.deepcopy(
                                 edge.get("phase_correlation") or {}
                             ),
+                            "candidate_evaluation": copy.deepcopy(edge.get("candidate_evaluation") or {}),
+                            "coarse_candidate_evaluation": copy.deepcopy(edge.get("coarse_candidate_evaluation") or {}),
+                            "measured_overlap": copy.deepcopy(edge.get("measured_overlap") or {}),
+                            "discovery": copy.deepcopy(edge.get("discovery") or {}),
                         }
                     )
                 if error is not None:
@@ -3060,7 +3165,16 @@ class StitchRegistrationOperation:
 
             def accept_or_reject_pair(pair, edge):
                 phase_valid = (edge.get("phase_correlation") or {}).get("valid")
-                if phase_valid is False:
+                discovery_reasons = (edge.get("discovery") or {}).get("rejection_reasons")
+                if discovery_reasons:
+                    evaluation = pair_evaluation(pair, "searched-without-accepted-match", edge=edge)
+                    rejections.append(StitchingRejection(
+                        code="discovery-unresolved", reason=", ".join(discovery_reasons),
+                        fixed_id=edge["fixed_id"], moving_id=edge["moving_id"],
+                        fixed_name=edge["fixed_name"], moving_name=edge["moving_name"], score=edge["score"],
+                        details={"constraint": copy.deepcopy(edge), "pair_evaluation": evaluation},
+                    ))
+                elif phase_valid is False:
                     record_invalid_pair_rejection(pair, edge)
                 elif edge["score"] >= minimum_score:
                     edges.append(edge)
@@ -3120,6 +3234,7 @@ class StitchRegistrationOperation:
                     finally:
                         executor.shutdown(wait=True, cancel_futures=True)
 
+            check_cancelled(self._cancelled)
             # Parallel completion order is nondeterministic; keep pose-graph
             # residual ordering and project JSON stable across runs.
             edges.sort(key=lambda edge: (
@@ -3229,6 +3344,12 @@ class StitchRegistrationOperation:
             )
 
             execution_warnings = list(preparation.warnings)
+            if discovery:
+                search_coverage.update(searched_pairs=len(pair_evaluations), accepted_pairs=len(edges),
+                    searched_without_accepted_match=len(pair_evaluations)-len(edges),
+                    not_searched_count=search_coverage["total_possible_pairs"]-len(pair_evaluations))
+                if search_coverage["not_searched_count"]:
+                    execution_warnings.append(dict(code="discovery-search-incomplete", message=search_coverage["broaden_search"]))
             if global_mode != self.mode:
                 execution_warnings.append(
                     {
@@ -3275,7 +3396,12 @@ class StitchRegistrationOperation:
                     }
                 )
             elif not edges:
-                if (
+                if discovery is not None:
+                    detail = (
+                        f"{len(pair_evaluations)} pair(s) were searched without an accepted match. "
+                        "Review overlap support, image ambiguity and rejected candidate details."
+                    )
+                elif (
                     score_rejections
                     and not pair_failures
                     and not invalid_pair_rejections
@@ -3338,7 +3464,7 @@ class StitchRegistrationOperation:
                         "code": "disconnected-registration-components",
                         "message": (
                             f"The accepted registration graph has {len(components)} "
-                            "components; each component retained its initial placement."
+                            "components. Relative placement between components is unvalidated; component anchors retained their starting positions."
                         ),
                     }
                 )
@@ -3432,6 +3558,13 @@ class StitchRegistrationOperation:
                     "registration_channel_label"
                 ),
                 "registration_inputs": registration_inputs,
+                "placement_evidence": placement_evidence,
+                "input_pixel_fingerprints": input_fingerprints,
+                "reuse_signature": reuse_signature,
+                "reused_calculation": False,
+                "search_coverage": search_coverage,
+                "discovery_resources": dict(discovery.metrics) if discovery else {},
+                "unresolved_component_relationships": {"components": components, "relative_placement_validated": len(components) == 1},
                 "candidate_pairs": candidate_pairs,
                 "pair_evaluations": pair_evaluations,
                 "candidate_pair_count": len(pairs),
@@ -3467,6 +3600,7 @@ class StitchRegistrationOperation:
                 )
                 + f" using {worker_count} CPU worker(s){failure_note}",
             )
+            check_cancelled(self._cancelled)
             self._completed_callback(StitchingRegistrationResult.from_runtime(result))
         except InterruptedError:
             return

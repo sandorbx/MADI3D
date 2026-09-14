@@ -1,0 +1,305 @@
+{
+  "schema_version": 1,
+  "licensor": "Sandor Kovacs",
+  "developer": "Sandor Kovacs",
+  "distributions": {
+    "altgraph": {
+      "status": "build-only",
+      "license": "MIT",
+      "source": "https://pypi.org/project/altgraph/"
+    },
+    "annotated-types": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/annotated-types/"
+    },
+    "certifi": {
+      "status": "bundled when collected",
+      "license": "MPL-2.0",
+      "source": "https://pypi.org/project/certifi/"
+    },
+    "charset-normalizer": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/charset-normalizer/"
+    },
+    "colorama": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/colorama/"
+    },
+    "contourpy": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/contourpy/"
+    },
+    "cycler": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/cycler/"
+    },
+    "fonttools": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/fonttools/"
+    },
+    "h5py": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/h5py/"
+    },
+    "idna": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/idna/"
+    },
+    "imagecodecs": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/imagecodecs/"
+    },
+    "imageio": {
+      "status": "bundled when collected",
+      "license": "BSD-2-Clause",
+      "source": "https://pypi.org/project/imageio/"
+    },
+    "importlib-resources": {
+      "status": "bundled when collected",
+      "license": "Apache-2.0",
+      "source": "https://pypi.org/project/importlib-resources/"
+    },
+    "kiwisolver": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/kiwisolver/"
+    },
+    "liffile": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/liffile/"
+    },
+    "matplotlib": {
+      "status": "bundled when collected",
+      "license": "LicenseRef-Matplotlib (PSF-based)",
+      "source": "https://pypi.org/project/matplotlib/"
+    },
+    "neuronbridge-python": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://github.com/JaneliaSciComp/neuronbridge-python/tree/15a268c68a33983cbff6243fd99aa2efbed371ab",
+      "commit": "15a268c68a33983cbff6243fd99aa2efbed371ab",
+      "license_sha256": "213120b36ba1d81c6e035da5858da37579e0ec0049800a5b596e48bf35972381"
+    },
+    "nibabel": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/nibabel/"
+    },
+    "numpy": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0",
+      "source": "https://pypi.org/project/numpy/"
+    },
+    "oiffile": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/oiffile/"
+    },
+    "opencv-python-headless": {
+      "status": "bundled when collected",
+      "license": "Apache-2.0",
+      "source": "https://github.com/opencv/opencv-python/tree/b83046cda41133f1bf2e73e99dba16a1248f103a"
+    },
+    "packaging": {
+      "status": "bundled when collected",
+      "license": "Apache-2.0 OR BSD-2-Clause",
+      "source": "https://pypi.org/project/packaging/"
+    },
+    "pefile": {
+      "status": "build-only",
+      "license": "MIT",
+      "source": "https://pypi.org/project/pefile/"
+    },
+    "pillow": {
+      "status": "bundled when collected",
+      "license": "MIT-CMU",
+      "source": "https://pypi.org/project/pillow/"
+    },
+    "psutil": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/psutil/"
+    },
+    "pydantic": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/pydantic/"
+    },
+    "pydantic-core": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/pydantic-core/"
+    },
+    "pygame": {
+      "status": "bundled when collected",
+      "license": "LGPL-2.1-or-later",
+      "source": "https://github.com/pygame/pygame/tree/b92c0da9d1b5eba6c813138790fc1ab6cea0252c"
+    },
+    "pyinstaller": {
+      "status": "bundled when collected",
+      "license": "GPL-2.0-or-later WITH Bootloader-exception",
+      "source": "https://pypi.org/project/pyinstaller/"
+    },
+    "pyinstaller-hooks-contrib": {
+      "status": "build-only",
+      "license": "GPL-2.0-or-later AND Apache-2.0",
+      "source": "https://pypi.org/project/pyinstaller-hooks-contrib/"
+    },
+    "pynrrd": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/pynrrd/"
+    },
+    "pyparsing": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/pyparsing/"
+    },
+    "pypdfium2": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause AND Apache-2.0",
+      "source": "https://pypi.org/project/pypdfium2/"
+    },
+    "pyside6-essentials": {
+      "status": "bundled when collected",
+      "license": "LGPL-3.0-only",
+      "source": "https://pypi.org/project/pyside6-essentials/",
+      "retained_notices": {
+        "version": "6.9.3",
+        "source_identity": "LICENSES/Qt-SOURCES.json",
+        "reason": "The Linux wheel omits standalone notices. Retain the selected LGPL terms, copyright notice and original Qt native notices independently of wheel layout.",
+        "files": [
+          {
+            "filename": "Qt-PySide6-NOTICE.md",
+            "text_sha256": "a55e82479773f4470aadabd9a777edcd66a81557d50a8b750927b8aff42c10c5"
+          },
+          {
+            "filename": "LGPL-3.0.txt",
+            "text_sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+          },
+          {
+            "filename": "GPL-3.0.txt",
+            "text_sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+          },
+          {
+            "filename": "Qt-native-NOTICES.txt",
+            "text_sha256": "30c26feea0614d92b878c315052e50e32fbe9aafaf2c909a00f288522cd8f99f"
+          }
+        ]
+      }
+    },
+    "python-dateutil": {
+      "status": "bundled when collected",
+      "license": "Apache-2.0 AND BSD-3-Clause",
+      "source": "https://pypi.org/project/python-dateutil/"
+    },
+    "pywin32-ctypes": {
+      "status": "build-only",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/pywin32-ctypes/"
+    },
+    "pyyaml": {
+      "status": "not shipped; optional NumPy/SciPy build-report formatter",
+      "license": "MIT",
+      "source": "https://pypi.org/project/pyyaml/"
+    },
+    "requests": {
+      "status": "bundled when collected",
+      "license": "Apache-2.0",
+      "source": "https://pypi.org/project/requests/"
+    },
+    "scipy": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/scipy/"
+    },
+    "setuptools": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/setuptools/"
+    },
+    "shiboken6": {
+      "status": "bundled when collected",
+      "license": "LGPL-3.0-only",
+      "source": "https://pypi.org/project/shiboken6/",
+      "retained_notices": {
+        "version": "6.9.3",
+        "source_identity": "LICENSES/Qt-SOURCES.json",
+        "reason": "The Linux wheel omits standalone notices. Retain the selected LGPL terms, copyright notice and original Qt native notices independently of wheel layout.",
+        "files": [
+          {
+            "filename": "Qt-PySide6-NOTICE.md",
+            "text_sha256": "a55e82479773f4470aadabd9a777edcd66a81557d50a8b750927b8aff42c10c5"
+          },
+          {
+            "filename": "LGPL-3.0.txt",
+            "text_sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+          },
+          {
+            "filename": "GPL-3.0.txt",
+            "text_sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+          },
+          {
+            "filename": "Qt-native-NOTICES.txt",
+            "text_sha256": "30c26feea0614d92b878c315052e50e32fbe9aafaf2c909a00f288522cd8f99f"
+          }
+        ]
+      }
+    },
+    "simpleitk": {
+      "status": "bundled when collected",
+      "license": "Apache-2.0",
+      "source": "https://pypi.org/project/simpleitk/"
+    },
+    "six": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/six/"
+    },
+    "threadpoolctl": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/threadpoolctl/"
+    },
+    "tifffile": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/tifffile/"
+    },
+    "tqdm": {
+      "status": "bundled when collected",
+      "license": "MPL-2.0 AND MIT",
+      "source": "https://pypi.org/project/tqdm/"
+    },
+    "truststore": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/truststore/"
+    },
+    "typing-extensions": {
+      "status": "bundled when collected",
+      "license": "PSF-2.0",
+      "source": "https://pypi.org/project/typing-extensions/"
+    },
+    "urllib3": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/urllib3/"
+    },
+    "vtk": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/vtk/"
+    }
+  }
+}

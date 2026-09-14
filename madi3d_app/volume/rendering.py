@@ -144,8 +144,8 @@ FLYBRAIN_BRIGHTNESS_DEFAULT = 1.0
 FLYBRAIN_FINAL_GAMMA_DEFAULT = 4.5
 
 # Versioned rendering-preset schema. Presets contain only fluorescence/rendering
-# values; base colors and LUTs deliberately remain independent.
-VOLUME_PRESET_MODEL_VERSION = 4
+# values; base colors, LUTs and the scene's global glow remain independent.
+VOLUME_PRESET_MODEL_VERSION = 5
 VOLUME_PRESET_CUSTOM = "Custom"
 VOLUME_PRESET_CUSTOM_DESCRIPTION = (
     "The selected volume uses manually edited values rather than an unchanged preset."
@@ -159,7 +159,6 @@ VOLUME_RENDER_PRESETS = {
         "data_gamma": 0.50,
         "brightness": 1.00,
         "global_opacity": 1.00,
-        "final_gamma": 4.50,
         "threshold_softness": 0.000,
         "high_end_response": 1.00,
         "color_gamma_multiplier": 1.00,
@@ -174,7 +173,6 @@ VOLUME_RENDER_PRESETS = {
         "data_gamma": 0.82,
         "brightness": 1.20,
         "global_opacity": 0.85,
-        "final_gamma": 5.50,
         "threshold_softness": 0.002,
         "high_end_response": 1.00,
         "color_gamma_multiplier": 1.00,
@@ -189,7 +187,6 @@ VOLUME_RENDER_PRESETS = {
         "data_gamma": 0.36,
         "brightness": 1.05,
         "global_opacity": 0.92,
-        "final_gamma": 3.20,
         "threshold_softness": 0.003,
         "high_end_response": 1.00,
         "color_gamma_multiplier": 1.00,
@@ -204,7 +201,6 @@ VOLUME_RENDER_PRESETS = {
         "data_gamma": 0.62,
         "brightness": 0.90,
         "global_opacity": 0.48,
-        "final_gamma": 4.20,
         "threshold_softness": 0.004,
         "high_end_response": 0.90,
         "color_gamma_multiplier": 1.00,
@@ -219,7 +215,6 @@ VOLUME_RENDER_PRESETS = {
         "data_gamma": 1.0,
         "brightness": 2.0,
         "global_opacity": 0.25,
-        "final_gamma": 4.0,
         "threshold_softness": 0.004,
         "high_end_response": 1.00,
         "color_gamma_multiplier": 0.47,
@@ -234,7 +229,6 @@ VOLUME_RENDER_PRESETS = {
         "data_gamma": 0.58,
         "brightness": 1.00,
         "global_opacity": 0.72,
-        "final_gamma": 4.30,
         "threshold_softness": 0.002,
         "high_end_response": 1.00,
         "color_gamma_multiplier": 1.00,
@@ -249,14 +243,13 @@ VOLUME_RENDER_PRESETS = {
         "data_gamma": 1.0,
         "brightness": 1.00,
         "global_opacity": 0.025,
-        "final_gamma": 4.50,
         "threshold_softness": 0.004,
         "high_end_response": 1.00,
         "color_gamma_multiplier": 0.5,
         "opacity_gamma_multiplier": 0.25,
         "opacity_unit_distance": 1.00,
     },
-    "Label Field": {
+    "Anatomy/Label Field": {
         "description": "For integer label volumes and segmentation fields: removes the zero background, keeps opacity linear across label values, and reduces color response so neighboring labels retain contrast under the global glow.",
         "lower_fraction": 0.000001,
         "upper_fraction": 1.0,
@@ -264,7 +257,6 @@ VOLUME_RENDER_PRESETS = {
         "data_gamma": 1.00,
         "brightness": 0.90,
         "global_opacity": 0.72,
-        "final_gamma": 2.60,
         "threshold_softness": 0.000,
         "high_end_response": 1.00,
         "color_gamma_multiplier": 0.65,
@@ -272,10 +264,14 @@ VOLUME_RENDER_PRESETS = {
         "opacity_unit_distance": 0.50,
     },
 }
-VOLUME_PRESET_NAMES = tuple(VOLUME_RENDER_PRESETS.keys())
+VOLUME_PRESET_NAMES = (
+    "FlyBrain Standard", "Anatomy/Label Field", "Soft / Transparent",
+    "Weak Signal", "High Contrast", "Dense Volume",
+    "Light-field Calcium Time Series", "2-Photon Microscopy",
+)
 VOLUME_PRESET_RESOLVED_KEYS = (
     "lower_threshold", "upper_threshold", "saturation_point", "data_gamma",
-    "brightness", "global_opacity", "final_gamma", "threshold_softness",
+    "brightness", "global_opacity", "threshold_softness",
     "high_end_response", "color_gamma_multiplier", "opacity_gamma_multiplier",
     "opacity_unit_distance",
 )
@@ -309,12 +305,12 @@ def normalize_volume_preset_name(value):
         "2-photon": "2-Photon Microscopy",
         "soft": "Soft / Transparent",
         "transparent": "Soft / Transparent",
-        "binary": "Label Field",
-        "mask": "Label Field",
-        "binary / mask": "Label Field",
-        "label": "Label Field",
-        "labels": "Label Field",
-        "label field": "Label Field",
+        "binary": "Anatomy/Label Field",
+        "mask": "Anatomy/Label Field",
+        "binary / mask": "Anatomy/Label Field",
+        "label": "Anatomy/Label Field",
+        "labels": "Anatomy/Label Field",
+        "label field": "Anatomy/Label Field",
         "custom (mixed)": VOLUME_PRESET_CUSTOM,
     }
     return aliases.get(raw.lower(), VOLUME_PRESET_CUSTOM)
@@ -345,8 +341,8 @@ def resolve_volume_preset(preset_name, data_min, data_max):
     return resolved
 
 
-def volume_preset_values_match(metadata, preset_name, final_gamma=None):
-    """Return True when resolved metadata still matches a named preset."""
+def volume_preset_values_match(metadata, preset_name):
+    """Match per-volume appearance independently of the scene's global glow."""
     md = dict(metadata or {})
     lo = _finite_float(md.get("data_min"), 0.0)
     hi = _finite_float(md.get("data_max"), lo + 1.0)
@@ -357,10 +353,7 @@ def volume_preset_values_match(metadata, preset_name, final_gamma=None):
     scalar_keys = {"lower_threshold", "upper_threshold", "saturation_point"}
     for key in VOLUME_PRESET_RESOLVED_KEYS:
         expected = resolved.get(key)
-        if key == "final_gamma" and final_gamma is not None:
-            actual = _finite_float(final_gamma, None)
-        else:
-            actual = _finite_float(md.get(key), None)
+        actual = _finite_float(md.get(key), None)
         if actual is None or expected is None:
             return False
         tolerance = max(1e-7, span * 1e-6) if key in scalar_keys else 1e-6
@@ -467,14 +460,14 @@ def migrate_volume_transfer_metadata(metadata, data_min=None, data_max=None):
     stored_version = int(_finite_float(
         md.get("preset_version", md.get("render_preset_version")), 0
     ) or 0)
-    if legacy_tf or stored_version not in (0, VOLUME_PRESET_MODEL_VERSION):
+    if legacy_tf or stored_version not in (0, 4, VOLUME_PRESET_MODEL_VERSION):
         active_name = VOLUME_PRESET_CUSTOM
     elif stored_name in VOLUME_RENDER_PRESETS and volume_preset_values_match(
-        md, stored_name, md.get("final_gamma")
+        md, stored_name
     ):
         active_name = stored_name
     elif stored_version == 0 and volume_preset_values_match(
-        md, "FlyBrain Standard", md.get("final_gamma")
+        md, "FlyBrain Standard"
     ):
         active_name = "FlyBrain Standard"
     else:

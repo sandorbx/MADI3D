@@ -1,0 +1,422 @@
+{
+  "schema_version": 2,
+  "archives": [
+    {
+      "component": "opencv-python-headless",
+      "filename": "opencv_python_headless-5.0.0.93.tar.gz",
+      "url": "https://files.pythonhosted.org/packages/1d/99/76b7c80252aa83c1af16393454aafd125a0287101afe8deb0a6821af0e30/opencv_python_headless-5.0.0.93.tar.gz",
+      "size": 81817738,
+      "sha256": "b82f9831daab90b725c7c1ee1b36cb5732c367096ac76d119e64e14eb70d5f3c"
+    },
+    {
+      "component": "pygame",
+      "filename": "pygame-2.6.1.tar.gz",
+      "url": "https://files.pythonhosted.org/packages/49/cc/08bba60f00541f62aaa252ce0cfbd60aebd04616c0b9574f755b583e45ae/pygame-2.6.1.tar.gz",
+      "size": 14808125,
+      "sha256": "56fb02ead529cee00d415c3e007f75e0780c655909aaa8e8bf616ee09c9feb1f"
+    },
+    {
+      "component": "FFmpeg-macOS-OpenCV",
+      "filename": "ffmpeg-8.1.2.tar.xz",
+      "url": "https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz",
+      "size": 11710924,
+      "sha256": "464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c",
+      "owner": "opencv-python-headless",
+      "platforms": [
+        "macOS-arm64",
+        "macOS-x64"
+      ]
+    },
+    {
+      "filename": "pygame-build-b92c0da9d1b5eba6c813138790fc1ab6cea0252c.tar.gz",
+      "url": "https://codeload.github.com/pygame/pygame/tar.gz/b92c0da9d1b5eba6c813138790fc1ab6cea0252c",
+      "size": 5969640,
+      "sha256": "99172e17e236fedd280ccb23eec567bc69a9c82b06155566772fc5069d5d9311",
+      "component": "pygame-build-recipes",
+      "owner": "pygame",
+      "platforms": [
+        "Windows-x64",
+        "Linux-x64",
+        "macOS-x64",
+        "macOS-arm64"
+      ]
+    },
+    {
+      "filename": "openh264-8c7008aeb6335e7d36ab0d9a023a63f82a8eaac0.tar.gz",
+      "url": "https://codeload.github.com/cisco/openh264/tar.gz/8c7008aeb6335e7d36ab0d9a023a63f82a8eaac0",
+      "size": 60304002,
+      "sha256": "0a12daa5a7fefc3acf5f6485fe21159399351cd4b83af80dde525fa520f17820",
+      "component": "OpenH264-headers-Windows-OpenCV",
+      "owner": "opencv-python-headless",
+      "platforms": [
+        "Windows-x64"
+      ]
+    },
+    {
+      "filename": "opencv-a0a660fcb1e58a295e6caa6aee64ed4d369b0181.tar.gz",
+      "url": "https://codeload.github.com/opencv/opencv/tar.gz/a0a660fcb1e58a295e6caa6aee64ed4d369b0181",
+      "size": 81508684,
+      "sha256": "5d97bddd4c5d2895dddafe6aff211b9fc1add564887263b7c062f2699660bf1d",
+      "component": "OpenCV-Windows-plugin-source",
+      "owner": "opencv-python-headless",
+      "platforms": [
+        "Windows-x64"
+      ]
+    },
+    {
+      "filename": "ffmpeg-8.1.1.tar.gz",
+      "url": "https://ffmpeg.org/releases/ffmpeg-8.1.1.tar.gz",
+      "size": 17674354,
+      "sha256": "1b856f26a07082b6879f3e5300d81e8c7ce3b410ade5898b14382d90c2904634",
+      "component": "FFmpeg-Linux-OpenCV",
+      "owner": "opencv-python-headless",
+      "platforms": [
+        "Linux-x64"
+      ]
+    },
+    {
+      "component": "AOM-Windows-OpenCV",
+      "owner": "opencv-python-headless",
+      "platforms": [
+        "Windows-x64"
+      ],
+      "filename": "aom-src-v3.14.1.tar.xz",
+      "url": "https://raw.githubusercontent.com/opencv/opencv_3rdparty/664c0098dcb47b361f20c1d6a518653c23f5f2b5/sources/build/aom/aom-src-v3.14.1.tar.xz",
+      "size": 4422784,
+      "sha256": "f3dbb5ee8367f948ae4c90f09e8fac703dc064ab4529bf854e208633a4e9e3c7",
+      "revision": "03087864cf4bea6abb0d28f95cf7843511413d8f"
+    },
+    {
+      "component": "FFmpeg-Windows-OpenCV",
+      "owner": "opencv-python-headless",
+      "platforms": [
+        "Windows-x64"
+      ],
+      "filename": "ffmpeg-src-n7.1.tar.xz",
+      "url": "https://raw.githubusercontent.com/opencv/opencv_3rdparty/664c0098dcb47b361f20c1d6a518653c23f5f2b5/sources/build/ffmpeg/ffmpeg-src-n7.1.tar.xz",
+      "size": 10771472,
+      "sha256": "65dcebb9ab64dea97f37bdd25a1b43dba807cb8d7c67e9a111729d836354fd8c",
+      "revision": "b08d7969c550a804a59511c7b83f2dd8cc0499b8"
+    },
+    {
+      "component": "libvpx-Windows-OpenCV",
+      "owner": "opencv-python-headless",
+      "platforms": [
+        "Windows-x64"
+      ],
+      "filename": "libvpx-src-v1.16.0.tar.xz",
+      "url": "https://raw.githubusercontent.com/opencv/opencv_3rdparty/664c0098dcb47b361f20c1d6a518653c23f5f2b5/sources/build/libvpx/libvpx-src-v1.16.0.tar.xz",
+      "size": 4389728,
+      "sha256": "60ea79ec7a99e5e7750482c1288b3a3015b4824df45be13bb208f3bd35dde003",
+      "revision": "1024874c5919305883187e2953de8fcb4c3d7fa6"
+    },
+    {
+      "component": "OpenCV-plugin-wrapper",
+      "owner": "opencv-python-headless",
+      "platforms": [
+        "Windows-x64"
+      ],
+      "filename": "opencv-videoio-ffmpeg.tar.xz",
+      "url": "https://raw.githubusercontent.com/opencv/opencv_3rdparty/664c0098dcb47b361f20c1d6a518653c23f5f2b5/sources/opencv/opencv-videoio-ffmpeg.tar.xz",
+      "size": 37176,
+      "sha256": "8ca839350bbf7be6bf10c82f538303d59718ebf71aef32644c60132bd142f893",
+      "revision": "a0a660fcb1e58a295e6caa6aee64ed4d369b0181"
+    },
+    {
+      "component": "OpenCV-plugin-build-recipes",
+      "owner": "opencv-python-headless",
+      "platforms": [
+        "Windows-x64"
+      ],
+      "filename": "opencv_ffmpeg.tar.xz",
+      "url": "https://raw.githubusercontent.com/opencv/opencv_3rdparty/664c0098dcb47b361f20c1d6a518653c23f5f2b5/sources/opencv_ffmpeg.tar.xz",
+      "size": 16956,
+      "sha256": "b8ed5b293311441de369160f047f277b606452fb604f5c35a7ea1edcb3ba6539",
+      "revision": "35095ae894bb59ef8199dbb11a0b0895f3bf1749"
+    },
+    {
+      "component": "SDL2-controller",
+      "owner": "pygame",
+      "platforms": [
+        "macOS-arm64",
+        "macOS-x64",
+        "Linux-x64"
+      ],
+      "url": "https://www.libsdl.org/release/SDL2-2.28.4.tar.gz",
+      "filename": "SDL2-2.28.4.tar.gz",
+      "size": 7344208,
+      "sha256": "888b8c39f36ae2035d023d1b14ab0191eb1d26403c3cf4d4d5ede30e66a4942c"
+    }
+  ],
+  "source_required_owners": [
+    "pygame",
+    "opencv-python-headless"
+  ],
+  "native_provenance": [],
+  "local_materials": [
+    "LICENSES/THIRD-PARTY-SOURCES.json",
+    "LICENSES/THIRD-PARTY.json",
+    "LICENSES/NATIVE-WHEELS.json",
+    "LICENSES/THIRD-PARTY.md",
+    "LICENSES/pygame-NOTICE.md",
+    "LICENSES/OpenCV-NOTICE.md",
+    "LICENSES/pygame-native-NOTICES.txt",
+    "LICENSES/SDL2-LICENSE.txt",
+    "LICENSES/LGPL-2.1.txt",
+    "LICENSES/UPSTREAM-NOTICES.json",
+    "LICENSES/CPython-native-NOTICES.txt",
+    "scripts/build_macos_opencv.py",
+    "scripts/third_party_sources.py",
+    "scripts/third_party_licenses.py",
+    "scripts/qt_lgpl.py",
+    "constraints-opencv-build.txt",
+    "requirements-build.txt",
+    "constraints-build.txt",
+    "MADI3D.spec",
+    "madi3d_version.py",
+    "docs/third-party-source-delivery.md",
+    "scripts/build_pygame.py"
+  ],
+  "investigations": [
+    {
+      "component": "Windows OpenCV FFmpeg plugin",
+      "binary_path": "cv2/opencv_videoio_ffmpeg500_64.dll",
+      "binary_sha256": "7aabff029d1fa47cf56ede4dbbe05dc62da3208f07cd16471d4c966a33f9aa31",
+      "wheel_sha256": "829717b6a95554f273e49e357cee3b3a2a26b6f4842fbc1bed2b45bdd8f87e0e",
+      "upstream_binary_revision": "06dc20cad65dc7fcf784f70c95d46750520889a7",
+      "upstream_source_revision": "664c0098dcb47b361f20c1d6a518653c23f5f2b5",
+      "binary_match": "Downloaded upstream plugin and installed pinned wheel plugin have identical SHA-256.",
+      "observed_components": [
+        {
+          "name": "FFmpeg",
+          "version": "n7.1",
+          "revision": "b08d7969c550a804a59511c7b83f2dd8cc0499b8",
+          "license": "LGPL-2.1-or-later"
+        },
+        {
+          "name": "libvpx",
+          "version": "v1.16.0",
+          "revision": "1024874c5919305883187e2953de8fcb4c3d7fa6",
+          "license": "BSD-3-Clause"
+        },
+        {
+          "name": "AOM",
+          "version": "v3.14.1",
+          "revision": "03087864cf4bea6abb0d28f95cf7843511413d8f",
+          "license": "BSD-2-Clause AND Patent-License"
+        },
+        {
+          "name": "OpenCV wrapper/core",
+          "revision": "a0a660fcb1e58a295e6caa6aee64ed4d369b0181",
+          "license": "Apache-2.0"
+        },
+        {
+          "name": "OpenH264 API headers and dynamic-loader wrapper",
+          "version": "v2.5.0",
+          "revision": "8c7008aeb6335e7d36ab0d9a023a63f82a8eaac0",
+          "license": "BSD-2-Clause"
+        }
+      ],
+      "source_gaps": [
+        "Upstream openh264-api-headers-v2.5.0.tar.xz is a 32-byte empty xz stream, SHA-256 0040f94d11d0039505328a90b2ff48968db873e9e7967307631bf40ef5679275. Full pinned v2.5.0 source is retained instead.",
+        "Upstream wrapper-only archive omits the full OpenCV plugin/core sources required by build_videoio_plugin.sh; the exact OpenCV submodule snapshot is retained separately.",
+        "Recipe links -static-libgcc -static-libstdc++ and MinGW support but uses mutable Ubuntu 24.04 apt packages. Exact incorporated runtime/toolchain revisions, applicable exceptions and source bindings remain unverified."
+      ],
+      "status": "blocked: compiler runtime provenance incomplete"
+    },
+    {
+      "component": "Linux OpenCV wheels",
+      "variants": [
+        {
+          "wheel_sha256": "09a872a157c1376ab922a69bbf22f9a95bcc7b658a9d8b436a60212b02b2eeb4",
+          "recipe": "opencv_python_headless-5.0.0.93/docker/manylinux2014/Dockerfile_x86_64",
+          "base": "quay.io/pypa/manylinux2014_x86_64:latest"
+        },
+        {
+          "wheel_sha256": "ed709fdf9aa0bd1f2ed8549e71d19449b03a675bb581eb292285f6861953be37",
+          "recipe": "opencv_python_headless-5.0.0.93/docker/manylinux_2_28/Dockerfile_x86_64",
+          "base": "quay.io/pypa/manylinux_2_28_x86_64:latest"
+        }
+      ],
+      "retained_source": "ffmpeg-8.1.1.tar.gz",
+      "status": "blocked: exact base image digest/RPM source and compiler runtime provenance missing; FFmpeg source alone does not close either variant"
+    },
+    {
+      "component": "pygame 2.6.1 wheels",
+      "revision": "b92c0da9d1b5eba6c813138790fc1ab6cea0252c",
+      "status": "blocked: upstream sdist omits all manylinux-build recipes; full git snapshot now retained, but wheel-to-build-image/system-library provenance is not established",
+      "recipe": "buildconfig/manylinux-build/docker_base/Dockerfile-x86_64",
+      "source_gap": "Docker recipe has an unpinned base image and yum dependencies; source versions cannot be derived from SONAMEs. macOS uses cached separately built dependencies and Windows uses prebuilt SDK archives."
+    }
+  ],
+  "resolved_findings": [
+    {
+      "component": "macOS OpenCV source build",
+      "resolution": "Both native architectures built the reviewed LGPL-only backend and passed frozen video, Qt/VTK, Mach-O, native inventory and archive validation.",
+      "source_review_scope": "Closes native execution/packaging validation only. It does not claim complete source coverage for pygame or other wheel dependencies.",
+      "future_enforcement": "The source recipe, native ownership/license scans, frozen smoke checks and validate_native_receipt remain mandatory in the packaging pipeline.",
+      "validation_source_policy_sha256": "b04fcb35ef4cf3787aa809a7c409b37cbd4a623353a141678df918d01a16242a",
+      "evidence": [
+        {
+          "platform": "macOS-arm64",
+          "run_id": 34781745546,
+          "url": "https://github.com/sandorbx/MADI3D_MAIN/actions/runs/34781745546",
+          "code_revision": "fcdf621c8c178c836c0bf31755a1aef8410568c6",
+          "checks": [
+            "Build macOS OpenCV with LGPL-only FFmpeg",
+            "Validate installed OpenCV video backend",
+            "Smoke-test packaged application",
+            "Smoke-test packaged macOS Qt/VTK window",
+            "Verify third-party notices in the actual distributable archive",
+            "Bind native validation to final package files",
+            "Generate corresponding-source artifact and compliance report",
+            "Upload package"
+          ],
+          "package_sha256": "c6cefe19a5f6cd8a1e725105ca0cda06dd7a59b4cf186fbf6e06ac38872fee7b",
+          "source_artifact": "MADI3D-0.32.0-third-party-sources-macOS-arm64.zip",
+          "source_sha256": "a038719c18a48d8dab45293c762eca363a3dbbe2128f6368ae5a16c3dcff4491"
+        },
+        {
+          "platform": "macOS-x64",
+          "run_id": 34781747202,
+          "url": "https://github.com/sandorbx/MADI3D_MAIN/actions/runs/34781747202",
+          "code_revision": "fcdf621c8c178c836c0bf31755a1aef8410568c6",
+          "checks": [
+            "Build macOS OpenCV with LGPL-only FFmpeg",
+            "Validate installed OpenCV video backend",
+            "Smoke-test packaged application",
+            "Smoke-test packaged macOS Qt/VTK window",
+            "Verify third-party notices in the actual distributable archive",
+            "Bind native validation to final package files",
+            "Generate corresponding-source artifact and compliance report",
+            "Upload package"
+          ],
+          "package_sha256": "25e5360f86a2aab12be24b2c2295315598ec21e3b67bf5fda4a9a9caa051adae",
+          "source_artifact": "MADI3D-0.32.0-third-party-sources-macOS-x64.zip",
+          "source_sha256": "6e84639cc71eaf27aeeda9f124ed8c85b2d27c3279db161204d0c490bb5f34c0"
+        }
+      ]
+    }
+  ],
+  "provenance_advisories": [
+    {
+      "component": "pygame native wheels",
+      "question": "Obtain complete corresponding sources and build/patch provenance for LGPL native dependencies, particularly the Linux manylinux system-library closure. pygame source alone is insufficient.",
+      "evidence": "https://github.com/pygame/pygame/tree/b92c0da9d1b5eba6c813138790fc1ab6cea0252c/buildconfig"
+    },
+    {
+      "component": "OpenCV Windows/Linux FFmpeg",
+      "question": "Retain and verify matching FFmpeg source, wrapper/build scripts and bundled LGPL/compiler-runtime source for the exact Windows plugin and both Linux wheel variants. Do not infer exact corresponding source from an LGPL license string alone. The matching Windows source branch has an empty OpenH264 header archive and an incomplete wrapper snapshot; replacements are retained, but exact statically linked GCC/MinGW runtime provenance is still missing.",
+      "evidence": "https://github.com/opencv/opencv_3rdparty/tree/06dc20cad65dc7fcf784f70c95d46750520889a7",
+      "platforms": [
+        "Windows-x64",
+        "Linux-x64"
+      ]
+    }
+  ],
+  "release_blockers": [],
+  "redistribution_reviews": [
+    {
+      "owner": "pygame",
+      "platforms": [
+        "Windows-x64"
+      ],
+      "wheel_sha256": "91476902426facd4bb0dad4dc3b2573bc82c95c71b135e0daaea072ed528d299",
+      "source_archives": [
+        "pygame-2.6.1.tar.gz",
+        "pygame-build-b92c0da9d1b5eba6c813138790fc1ab6cea0252c.tar.gz"
+      ],
+      "rationale": "pygame source covers its LGPL extensions; remaining Windows wheel libraries use permissive terms."
+    },
+    {
+      "owner": "pygame",
+      "platforms": [
+        "Linux-x64"
+      ],
+      "recipe": "scripts/build_pygame.py",
+      "source_archives": [
+        "pygame-2.6.1.tar.gz",
+        "SDL2-2.28.4.tar.gz"
+      ],
+      "rationale": "Controlled source build; actual source inputs, build configuration and native hashes are retained and checked."
+    },
+    {
+      "owner": "pygame",
+      "platforms": [
+        "macOS-arm64"
+      ],
+      "recipe": "scripts/build_pygame.py",
+      "source_archives": [
+        "pygame-2.6.1.tar.gz",
+        "SDL2-2.28.4.tar.gz"
+      ],
+      "rationale": "Controlled source build; actual source inputs, build configuration and native hashes are retained and checked."
+    },
+    {
+      "owner": "pygame",
+      "platforms": [
+        "macOS-x64"
+      ],
+      "recipe": "scripts/build_pygame.py",
+      "source_archives": [
+        "pygame-2.6.1.tar.gz",
+        "SDL2-2.28.4.tar.gz"
+      ],
+      "rationale": "Controlled source build; actual source inputs, build configuration and native hashes are retained and checked."
+    },
+    {
+      "owner": "opencv-python-headless",
+      "platforms": [
+        "Windows-x64"
+      ],
+      "wheel_sha256": "829717b6a95554f273e49e357cee3b3a2a26b6f4842fbc1bed2b45bdd8f87e0e",
+      "source_archives": [
+        "opencv_python_headless-5.0.0.93.tar.gz",
+        "openh264-8c7008aeb6335e7d36ab0d9a023a63f82a8eaac0.tar.gz",
+        "opencv-a0a660fcb1e58a295e6caa6aee64ed4d369b0181.tar.gz",
+        "aom-src-v3.14.1.tar.xz",
+        "ffmpeg-src-n7.1.tar.xz",
+        "libvpx-src-v1.16.0.tar.xz",
+        "opencv-videoio-ffmpeg.tar.xz",
+        "opencv_ffmpeg.tar.xz"
+      ],
+      "rationale": "Exact matching FFmpeg and complete OpenCV wrapper/build source retained. Eligible GCC runtime combinations use the runtime exception; full compiler-image reconstruction is advisory."
+    },
+    {
+      "owner": "opencv-python-headless",
+      "platforms": [
+        "Linux-x64"
+      ],
+      "recipe": "scripts/build_macos_opencv.py",
+      "source_archives": [
+        "opencv_python_headless-5.0.0.93.tar.gz",
+        "ffmpeg-8.1.1.tar.gz"
+      ],
+      "rationale": "Controlled source build; actual source inputs, build configuration and native hashes are retained and checked."
+    },
+    {
+      "owner": "opencv-python-headless",
+      "platforms": [
+        "macOS-arm64"
+      ],
+      "recipe": "scripts/build_macos_opencv.py",
+      "source_archives": [
+        "opencv_python_headless-5.0.0.93.tar.gz",
+        "ffmpeg-8.1.2.tar.xz"
+      ],
+      "rationale": "Controlled source build; actual source inputs, build configuration and native hashes are retained and checked."
+    },
+    {
+      "owner": "opencv-python-headless",
+      "platforms": [
+        "macOS-x64"
+      ],
+      "recipe": "scripts/build_macos_opencv.py",
+      "source_archives": [
+        "opencv_python_headless-5.0.0.93.tar.gz",
+        "ffmpeg-8.1.2.tar.xz"
+      ],
+      "rationale": "Controlled source build; actual source inputs, build configuration and native hashes are retained and checked."
+    }
+  ]
+}

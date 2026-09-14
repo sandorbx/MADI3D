@@ -2917,6 +2917,52 @@ def _mapped_stage_delta(delta, common_axes, settings):
     return mapped, tuple(axis for axis in _AXES if axis in set(mapped_axes))
 
 
+def registration_initial_layout(snapshots, settings, *, topology=None):
+    """Resolve evidence only; Auto discovery itself belongs in the worker.
+
+    Filename grid indices supply topology, not an invented overlap percentage.
+    Explicit Filename placement retains its historical overlap-prior behavior.
+    """
+    payload = infer_initial_layout(snapshots, settings).to_dict()
+    from madi3d_app.stitching.topology import validate_topology
+    topology = validate_topology(topology, {str(t["tile_id"]) for t in snapshots})
+    payload["topology"] = topology
+    if settings.mode == "auto":
+        if payload.get("semantic_kind") == "filename_grid":
+            payload["placement_deltas"] = {str(t["tile_id"]): np.eye(4).tolist() for t in snapshots}
+            payload["grid_step"] = None
+            payload["filename_grid_overlap_percent"] = None
+            payload["assumptions"] = []
+            for record in payload["records"]:
+                record["applied_axes"] = []
+                record["kept_current_pose"] = True
+            payload["summary"] = "Filename grid indices retained as topology; image discovery will measure the overlap."
+        payload["discovery_required"] = (
+            payload["status"] != "usable" or payload.get("semantic_kind") == "filename_grid"
+        )
+        payload["discovery_reason"] = payload["summary"] if payload["discovery_required"] else "Search unresolved or disconnected relationships if guided registration is insufficient."
+        if topology.get("step_xyz") is not None or topology.get("overlap_percent") is not None:
+            assigned = {r["tile_id"]: r for r in topology["assignments"]}
+            anchor = next((t for t in snapshots if t.get("anchor") and t["tile_id"] in assigned),
+                          next(t for t in snapshots if t["tile_id"] in assigned))
+            linear = np.asarray(anchor["world_affine"])[:3, :3]
+            norms = np.linalg.norm(linear, axis=0)
+            step = np.asarray(topology["step_xyz"], dtype=float) if topology.get("step_xyz") is not None else norms * np.asarray(anchor["dims"]) * (1. - float(topology["overlap_percent"])/100.)
+            reference = assigned[anchor["tile_id"]]
+            for tile, record in zip(snapshots, payload["records"]):
+                cell = assigned.get(tile["tile_id"])
+                if cell is None:
+                    continue
+                offset = np.array([cell["column"]-reference["column"], cell["row"]-reference["row"], 0.])
+                target = _world_origin(anchor) + (linear / norms) @ (step * offset)
+                delta = np.eye(4)
+                delta[:3, 3] = target - _world_origin(tile)
+                payload["placement_deltas"][tile["tile_id"]] = delta.tolist()
+                record.update(kept_current_pose=False, applied_axes=["X", "Y"], target_world_origin=target.tolist(), placement_evidence_class="explicit-user-grid-prior")
+            payload["assumptions"].append("User grid steps/overlap are placement priors; image overlap is measured separately.")
+    return payload
+
+
 def infer_initial_layout(
     snapshots: Sequence[Mapping[str, Any]],
     settings: InitialPlacementSettings,

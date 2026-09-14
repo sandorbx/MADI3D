@@ -14,22 +14,48 @@ class StitchRegistrationWorker(QtCore.QThread):
     completed = QtCore.Signal(object)
     failed = QtCore.Signal(str)
 
-    def __init__(self, tiles, settings, mode, parent=None):
+    def __init__(self, tiles, settings, mode, parent=None, *, reuse_result=None):
         super().__init__(parent)
         self._tiles = tiles
         self._settings = dict(settings)
         self._mode = str(mode)
+        self._reuse_result = reuse_result
+        self.was_cancelled = False
 
     def run(self):
+        def cancelled():
+            self.was_cancelled = self.was_cancelled or self.isInterruptionRequested()
+            return self.was_cancelled
         StitchRegistrationOperation(
             self._tiles,
             self._settings,
             self._mode,
             progress_callback=self.progress.emit,
-            cancelled=self.isInterruptionRequested,
+            cancelled=cancelled,
             completed_callback=self.completed.emit,
             failed_callback=self.failed.emit,
+            reuse_result=self._reuse_result,
         ).run()
+
+
+class StitchingInputValidationWorker(QtCore.QThread):
+    """Stream input hashes off the UI thread before consuming stored constraints."""
+
+    def __init__(self, tiles, fingerprints, parent=None):
+        super().__init__(parent)
+        self._tiles = tiles
+        self._fingerprints = dict(fingerprints)
+        self.error = ""
+        self.was_cancelled = False
+
+    def run(self):
+        from madi3d_app.stitching.discovery import verify_registration_pixels
+        try:
+            verify_registration_pixels(self._tiles, self._fingerprints, self.isInterruptionRequested)
+        except InterruptedError:
+            self.was_cancelled = True
+        except Exception as exc:
+            self.error = str(exc)
 
 
 class StitchFusionWorker(QtCore.QThread):

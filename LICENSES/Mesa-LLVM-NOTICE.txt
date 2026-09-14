@@ -1,0 +1,391 @@
+Mesa / LLVM software OpenGL renderer bundled with Qt on Windows
+
+The inspected PySide6 Essentials 6.9.3 opengl32sw.dll reports Mesa 11.2.2
+and LLVM 3.6.2. Its SHA-256 is
+1c162c98c06948b8359408eaf23a9d71ab37380351f9868a73bcc26b5e04e140.
+It is a separate bundled native renderer, not covered only by Qt's LGPL text.
+
+Qt build description: https://wiki.qt.io/MesaLlvmpipe
+Qt upstream binaries: https://download.qt.io/development_releases/prebuilt/llvmpipe/windows/
+
+The following original license texts/headers cover Mesa's MIT license,
+Gallium/llvmpipe, Khronos headers, C11 thread support, LLVM's University of
+Illinois/NCSA license and its retained third-party notices. Source URLs and
+hashes refer to the exact version files used for this notice collection.
+
+========================================================================
+https://gitlab.freedesktop.org/mesa/mesa/-/raw/mesa-11.2.2/docs/license.html
+Source SHA-256: 288ddfae338be168ef2492c21de42ee2f5c8ebc5a734b4e58b37007141bc2d6d
+
+Copyright (C) 1999-2007  Brian Paul   All Rights Reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a
+copy of this software and associated documentation files (the "Software"),
+to deal in the Software without restriction, including without limitation
+the rights to use, copy, modify, merge, publish, distribute, sublicense,
+and/or sell copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included
+in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+========================================================================
+https://gitlab.freedesktop.org/mesa/mesa/-/raw/mesa-11.2.2/src/gallium/drivers/llvmpipe/lp_context.c
+Source SHA-256: a3d06bd48eab5ab72e32b0056749d6ee1fd33a932e6049ea2ee8db4ec2e4bdef
+
+/**************************************************************************
+ * 
+ * Copyright 2007 VMware, Inc.
+ * All Rights Reserved.
+ * Copyright 2008 VMware, Inc.  All rights reserved.
+ * 
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the
+ * "Software"), to deal in the Software without restriction, including
+ * without limitation the rights to use, copy, modify, merge, publish,
+ * distribute, sub license, and/or sell copies of the Software, and to
+ * permit persons to whom the Software is furnished to do so, subject to
+ * the following conditions:
+ * 
+ * The above copyright notice and this permission notice (including the
+ * next paragraph) shall be included in all copies or substantial portions
+ * of the Software.
+ * 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+ * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
+ * IN NO EVENT SHALL VMWARE AND/OR ITS SUPPLIERS BE LIABLE FOR
+ * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+ * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+ * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ * 
+ **************************************************************************/
+
+========================================================================
+https://gitlab.freedesktop.org/mesa/mesa/-/raw/mesa-11.2.2/src/gallium/auxiliary/gallivm/lp_bld_init.c
+Source SHA-256: 1b3ca879446601a22d371e260498f54bc685ada501a8c17ab9333234f1cf8a0e
+
+/**************************************************************************
+ *
+ * Copyright 2009 VMware, Inc.
+ * All Rights Reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the
+ * "Software"), to deal in the Software without restriction, including
+ * without limitation the rights to use, copy, modify, merge, publish,
+ * distribute, sub license, and/or sell copies of the Software, and to
+ * permit persons to whom the Software is furnished to do so, subject to
+ * the following conditions:
+ *
+ * The above copyright notice and this permission notice (including the
+ * next paragraph) shall be included in all copies or substantial portions
+ * of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+ * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
+ * IN NO EVENT SHALL VMWARE AND/OR ITS SUPPLIERS BE LIABLE FOR
+ * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+ * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+ * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
+ **************************************************************************/
+
+========================================================================
+https://gitlab.freedesktop.org/mesa/mesa/-/raw/mesa-11.2.2/include/GL/glext.h
+Source SHA-256: 559c95f323962b9f3abfdc7be26cb661b6c136a7f27318ad2881a7680b051b27
+
+/*
+** Copyright (c) 2013-2015 The Khronos Group Inc.
+**
+** Permission is hereby granted, free of charge, to any person obtaining a
+** copy of this software and/or associated documentation files (the
+** "Materials"), to deal in the Materials without restriction, including
+** without limitation the rights to use, copy, modify, merge, publish,
+** distribute, sublicense, and/or sell copies of the Materials, and to
+** permit persons to whom the Materials are furnished to do so, subject to
+** the following conditions:
+**
+** The above copyright notice and this permission notice shall be included
+** in all copies or substantial portions of the Materials.
+**
+** THE MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+** EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+** MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+** IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+** CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+** TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+** MATERIALS OR THE USE OR OTHER DEALINGS IN THE MATERIALS.
+*/
+
+========================================================================
+https://gitlab.freedesktop.org/mesa/mesa/-/raw/mesa-11.2.2/include/c11/threads_win32.h
+Source SHA-256: 2d6c7d991c8f5c7a78da51cdff748bd1483a6d0558c75765253eafeff43e18d1
+
+/*
+ * C11 <threads.h> emulation library
+ *
+ * (C) Copyright yohhoy 2012.
+ * Distributed under the Boost Software License, Version 1.0.
+ *
+ * Permission is hereby granted, free of charge, to any person or organization
+ * obtaining a copy of the software and accompanying documentation covered by
+ * this license (the "Software") to use, reproduce, display, distribute,
+ * execute, and transmit the Software, and to prepare [[derivative work]]s of the
+ * Software, and to permit third-parties to whom the Software is furnished to
+ * do so, all subject to the following:
+ *
+ * The copyright notices in the Software and this entire statement, including
+ * the above license grant, this restriction and the following disclaimer,
+ * must be included in all copies of the Software, in whole or in part, and
+ * all derivative works of the Software, unless such copies or derivative
+ * works are solely in the form of machine-executable object code generated by
+ * a source language processor.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, TITLE AND NON-INFRINGEMENT. IN NO EVENT
+ * SHALL THE COPYRIGHT HOLDERS OR ANYONE DISTRIBUTING THE SOFTWARE BE LIABLE
+ * FOR ANY DAMAGES OR OTHER LIABILITY, WHETHER IN CONTRACT, TORT OR OTHERWISE,
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+ * DEALINGS IN THE SOFTWARE.
+ */
+
+========================================================================
+https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-3.6.2/llvm/LICENSE.TXT
+Source SHA-256: e3bc36440fc927c62d5cc24efeefe225a14d4e34ffeb0c92e430625cce9ee444
+
+==============================================================================
+LLVM Release License
+==============================================================================
+University of Illinois/NCSA
+Open Source License
+
+Copyright (c) 2003-2014 University of Illinois at Urbana-Champaign.
+All rights reserved.
+
+Developed by:
+
+    LLVM Team
+
+    University of Illinois at Urbana-Champaign
+
+    http://llvm.org
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal with
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+    * Redistributions of source code must retain the above copyright notice,
+      this list of conditions and the following disclaimers.
+
+    * Redistributions in binary form must reproduce the above copyright notice,
+      this list of conditions and the following disclaimers in the
+      documentation and/or other materials provided with the distribution.
+
+    * Neither the names of the LLVM Team, University of Illinois at
+      Urbana-Champaign, nor the names of its contributors may be used to
+      endorse or promote products derived from this Software without specific
+      prior written permission.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+CONTRIBUTORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS WITH THE
+SOFTWARE.
+
+==============================================================================
+Copyrights and Licenses for Third Party Software Distributed with LLVM:
+==============================================================================
+The LLVM software contains code written by third parties.  Such software will
+have its own individual LICENSE.TXT file in the directory in which it appears.
+This file will describe the copyrights, license, and restrictions which apply
+to that code.
+
+The disclaimer of warranty in the University of Illinois Open Source License
+applies to all code in the LLVM Distribution, and nothing in any of the
+other licenses gives permission to use the names of the LLVM Team or the
+University of Illinois to endorse or promote products derived from this
+Software.
+
+The following pieces of software have additional or alternate copyrights,
+licenses, and/or restrictions:
+
+Program             Directory
+-------             ---------
+Autoconf            llvm/autoconf
+                    llvm/projects/ModuleMaker/autoconf
+Google Test         llvm/utils/unittest/googletest
+OpenBSD regex       llvm/lib/Support/{reg*, COPYRIGHT.regex}
+pyyaml tests        llvm/test/YAMLParser/{*.data, LICENSE.TXT}
+ARM contributions   llvm/lib/Target/ARM/LICENSE.TXT
+md5 contributions   llvm/lib/Support/MD5.cpp llvm/include/llvm/Support/MD5.h
+
+========================================================================
+https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-3.6.2/llvm/lib/Support/COPYRIGHT.regex
+Source SHA-256: 0424e57d4303164dc59a8509c20dae0518b853692e5c2b0e98b11816fdbc97c7
+
+$OpenBSD: COPYRIGHT,v 1.3 2003/06/02 20:18:36 millert Exp $
+
+Copyright 1992, 1993, 1994 Henry Spencer.  All rights reserved.
+This software is not subject to any license of the American Telephone
+and Telegraph Company or of the Regents of the University of California.
+
+Permission is granted to anyone to use this software for any purpose on
+any computer system, and to alter it and redistribute it, subject
+to the following restrictions:
+
+1. The author is not responsible for the consequences of use of this
+   software, no matter how awful, even if they arise from flaws in it.
+
+2. The origin of this software must not be misrepresented, either by
+   explicit claim or by omission.  Since few users ever read sources,
+   credits must appear in the documentation.
+
+3. Altered versions must be plainly marked as such, and must not be
+   misrepresented as being the original software.  Since few users
+   ever read sources, credits must appear in the documentation.
+
+4. This notice may not be removed or altered.
+
+=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+/*-
+ * Copyright (c) 1994
+ *	The Regents of the University of California.  All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of the University nor the names of its contributors
+ *    may be used to endorse or promote products derived from this software
+ *    without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ *
+ *	@(#)COPYRIGHT	8.1 (Berkeley) 3/16/94
+ */
+
+========================================================================
+https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-3.6.2/llvm/lib/Support/MD5.cpp
+Source SHA-256: 19edb938505f839ba5d2d96c26d5db454542cc9d22d277652f5085c62d0ac792
+
+/*
+ * This code is derived from (original license follows):
+ *
+ * This is an OpenSSL-compatible implementation of the RSA Data Security, Inc.
+ * MD5 Message-Digest Algorithm (RFC 1321).
+ *
+ * Homepage:
+ * http://openwall.info/wiki/people/solar/software/public-domain-source-code/md5
+ *
+ * Author:
+ * Alexander Peslyak, better known as Solar Designer <solar at openwall.com>
+ *
+ * This software was written by Alexander Peslyak in 2001.  No copyright is
+ * claimed, and the software is hereby placed in the public domain.
+ * In case this attempt to disclaim copyright and place the software in the
+ * public domain is deemed null and void, then the software is
+ * Copyright (c) 2001 Alexander Peslyak and it is hereby released to the
+ * general public under the following terms:
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted.
+ *
+ * There's ABSOLUTELY NO WARRANTY, express or implied.
+ *
+ * (This is a heavily cut-down "BSD license".)
+ *
+ * This differs from Colin Plumb's older public domain implementation in that
+ * no exactly 32-bit integer data type is required (any 32-bit or wider
+ * unsigned integer data type will do), there's no compile-time endianness
+ * configuration, and the function prototypes match OpenSSL's.  No code from
+ * Colin Plumb's implementation has been reused; this comment merely compares
+ * the properties of the two independent implementations.
+ *
+ * The primary goals of this implementation are portability and ease of use.
+ * It is meant to be fast, but not as fast as possible.  Some known
+ * optimizations are not included to reduce source code size and avoid
+ * compile-time configuration.
+ */
+
+========================================================================
+https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-3.6.2/llvm/lib/Target/ARM/LICENSE.TXT
+Source SHA-256: 28cbd5f6dac844fc3d94e879dba83c3ca87328ece8e0d388284f8cec6a042a97
+
+ARM Limited
+
+Software Grant License Agreement ("Agreement")
+
+Except for the license granted herein to you, ARM Limited ("ARM") reserves all
+right, title, and interest in and to the Software (defined below).
+
+Definition
+
+"Software" means the code and documentation as well as any original work of
+authorship, including any modifications or additions to an existing work, that
+is intentionally submitted by ARM to llvm.org (http://llvm.org) ("LLVM") for
+inclusion in, or documentation of, any of the products owned or managed by LLVM
+(the "Work"). For the purposes of this definition, "submitted" means any form of
+electronic, verbal, or written communication sent to LLVM or its
+representatives, including but not limited to communication on electronic
+mailing lists, source code control systems, and issue tracking systems that are
+managed by, or on behalf of, LLVM for the purpose of discussing and improving
+the Work, but excluding communication that is conspicuously marked otherwise.
+
+1. Grant of Copyright License. Subject to the terms and conditions of this
+   Agreement, ARM hereby grants to you and to recipients of the Software
+   distributed by LLVM a perpetual, worldwide, non-exclusive, no-charge,
+   royalty-free, irrevocable copyright license to reproduce, prepare derivative
+   works of, publicly display, publicly perform, sublicense, and distribute the
+   Software and such derivative works.
+
+2. Grant of Patent License. Subject to the terms and conditions of this
+   Agreement, ARM hereby grants you and to recipients of the Software
+   distributed by LLVM a perpetual, worldwide, non-exclusive, no-charge,
+   royalty-free, irrevocable (except as stated in this section) patent license
+   to make, have made, use, offer to sell, sell, import, and otherwise transfer
+   the Work, where such license applies only to those patent claims licensable
+   by ARM that are necessarily infringed by ARM's Software alone or by
+   combination of the Software with the Work to which such Software was
+   submitted. If any entity institutes patent litigation against ARM or any
+   other entity (including a cross-claim or counterclaim in a lawsuit) alleging
+   that ARM's Software, or the Work to which ARM has contributed constitutes
+   direct or contributory patent infringement, then any patent licenses granted
+   to that entity under this Agreement for the Software or Work shall terminate
+   as of the date such litigation is filed.
+
+Unless required by applicable law or agreed to in writing, the software is
+provided on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND,
+either express or implied, including, without limitation, any warranties or
+conditions of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+PARTICULAR PURPOSE.
+
