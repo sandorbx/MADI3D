@@ -23,7 +23,6 @@ from .microscopy_metadata import (
     MicroscopyAcquisitionMetadata,
     MicroscopyChannelMetadata,
     MicroscopySourceMetadata,
-    SourceMemberRecord,
     StagePositionObservation,
 )
 
@@ -137,21 +136,6 @@ class _MemberEntry:
     reader_path: Optional[str] = None
     filesystem_path: Optional[str] = None
     warning: Optional[str] = None
-
-    def to_record(self, *, member_id: Optional[str] = None) -> SourceMemberRecord:
-        return SourceMemberRecord(
-            member_id=member_id or f"{self.location_kind}:{self.path}",
-            path=self.path,
-            role=self.role,
-            size_bytes=self.size_bytes,
-            checksum_state="not-computed" if self.exists else "unavailable",
-            structured_metadata={
-                "requirement": self.requirement,
-                "location_kind": self.location_kind,
-                "exists": self.exists,
-            },
-            warnings=(self.warning,) if self.warning else (),
-        )
 
 
 def require_oiffile():
@@ -1633,7 +1617,6 @@ def inspect_olympus_source(
             raw_fields = {
                 "olympus_axis_sections": copy.deepcopy(_axis_sections(main_settings)),
                 "olympus_spacing_evidence": copy.deepcopy(spacing_raw),
-                "source_member_paths": list(member_paths),
                 "time_point_count": time_count,
                 "time_interval": time_interval,
                 "time_units": time_units,
@@ -1670,7 +1653,6 @@ def inspect_olympus_source(
                     "series_index": index,
                     "series_identity": identity,
                     "name": series_name,
-                    "member_paths": list(member_paths),
                 }
             )
             axis_evidence.append(
@@ -1681,15 +1663,6 @@ def inspect_olympus_source(
                 }
             )
 
-        records = []
-        for entry in member_entries:
-            member_id = (
-                "primary"
-                if entry.location_kind == "filesystem"
-                and entry.path.casefold() == source.name.casefold()
-                else None
-            )
-            records.append(entry.to_record(member_id=member_id))
         raw_metadata = {
             "olympus_main_settings": main_settings,
             "olympus_auxiliary_settings": auxiliary,
@@ -1711,7 +1684,6 @@ def inspect_olympus_source(
             reader_version=reader_version,
             reported_vendor_format=container_format,
             reported_primary_source_path=str(source),
-            source_members=tuple(records),
             checksum_state="not-computed",
             raw_metadata=raw_metadata,
             source_series_evidence=series_evidence,
@@ -1721,8 +1693,7 @@ def inspect_olympus_source(
                 "source_bundle": {
                     "kind": "compound-file" if is_oib else "multi-file",
                     "manifest_identity": manifest_identity,
-                    "member_count": len(records),
-                    "member_checksums": "not-computed",
+                    "member_count": len(member_entries),
                 }
             },
         )

@@ -45,6 +45,16 @@ class DownloadResourceError(OSError):
     """A transfer would exceed its asset ceiling or destination disk budget."""
 
 
+class AssetChecksumError(IOError):
+    """A complete remote response contradicts retained checksum evidence."""
+    status = "unresolved"
+
+    def __init__(self, url, expected, observed):
+        super().__init__("NeuronBridge asset checksum does not match the supplied evidence.")
+        self.source_discrepancy = {"kind": "checksum-mismatch", "locator": url,
+                                   "expected_sha256": expected, "observed_sha256": observed}
+
+
 _WINDOWS_INVALID = frozenset('<>:"/\\|?*')
 _WINDOWS_RESERVED = frozenset(
     {"CON", "PRN", "AUX", "NUL"}
@@ -53,12 +63,16 @@ _WINDOWS_RESERVED = frozenset(
 )
 
 
-def neuronbridge_cache_root(*, platform_name=None, environ=None, home=None) -> Path:
-    """Return the per-user NeuronBridge cache root without creating it."""
+def neuronbridge_cache_root(
+    *, configured_root=None, platform_name=None, environ=None, home=None
+) -> Path:
+    """Return the effective per-user NeuronBridge asset-cache root."""
     env = os.environ if environ is None else environ
     override = env.get("NB_CACHE_DIR")
     if override:
         return Path(override).expanduser()
+    if configured_root:
+        return Path(configured_root).expanduser()
     return cache_dir(
         platform_name=platform_name,
         environ=env,
@@ -130,13 +144,30 @@ def cached_file_ready(path, *, expected_sha256=None, cancel_check=None) -> bool:
         return False
 
 
-def asset_cache_filename(*, library, release, data_version, alignment, asset_type, url, asset_id=None, checksum=None):
-    """Key the complete versioned asset, independently of result/channel identity."""
-    suffix = {"AlignedBodyOBJ": ".obj", "AlignedBodySWC": ".swc",
-              "VisuallyLosslessStack": ".h5j"}[asset_type]
+def _asset_cache_suffix(asset_type):
+    return {"AlignedBodyOBJ": ".obj", "AlignedBodySWC": ".swc",
+            "VisuallyLosslessStack": ".h5j"}[asset_type]
+
+
+def asset_cache_filename(*, library, release, data_version, alignment, asset_type, url=None,
+                         asset_id=None, checksum=None):
+    """Key a versioned asset by stable ID when supplied, otherwise by locator."""
+    locator = ["asset_id", asset_id] if asset_id else ["url", url]
+    identity = [library, release, data_version, alignment, asset_type, locator, checksum]
+    digest = hashlib.sha256(json.dumps(
+        identity, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")).hexdigest()
+    return "nb-" + digest + _asset_cache_suffix(asset_type)
+
+
+def legacy_asset_cache_filename(*, library, release, data_version, alignment, asset_type,
+                                url, asset_id=None, checksum=None):
+    """Return the previous URL-based key so existing downloads remain reusable."""
     identity = [library, release, data_version, alignment, asset_type, url, asset_id, checksum]
-    digest = hashlib.sha256(json.dumps(identity, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
-    return "nb-" + digest + suffix
+    digest = hashlib.sha256(json.dumps(
+        identity, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")).hexdigest()
+    return "nb-" + digest + _asset_cache_suffix(asset_type)
 
 
 def stream_download(
@@ -267,7 +298,7 @@ def stream_download(
         if not written:
             raise IOError("NeuronBridge returned an empty download.")
         if expected_sha256 and digest.hexdigest() != expected_sha256:
-            raise IOError("NeuronBridge asset checksum does not match the supplied evidence.")
+            raise AssetChecksumError(url, expected_sha256, digest.hexdigest())
         if cancel_check is not None and cancel_check():
             raise InterruptedError("NeuronBridge download cancelled.")
         os.replace(temp_path, destination)

@@ -21,7 +21,7 @@ import requests
 from urllib3.exceptions import HTTPError as Urllib3HTTPError
 
 from .records import (AssetIdentity, BiologicalIdentity, ChannelSelection, Diagnostic,
-                      ImageIdentity, MatchOccurrence, ResultField, SearchResults,
+                      ImageIdentity, MatchOccurrence, HitMetric, SearchResults,
                       SearchSession, SourceIdentity, SourceParameter)
 
 CLIENT_COMMIT = "15a268c68a33983cbff6243fd99aa2efbed371ab"
@@ -303,45 +303,60 @@ def retrieve_matches(transport, lookup_snapshot, image_index, method, *, limit=M
     session_id = str(uuid4())
     diagnostics = []
     occurrences = []
-    specs = (("type", "unknown"), ("normalizedScore", "score"), ("matchingPixels", "matched_pixels"),
-             ("pppmScore", "score"), ("pppmRank", "unknown"), ("mirrored", "mirror"))
-    for position, row in enumerate(rows):
+    for position, observed in enumerate(rows):
         checkpoint(transport.cancel)
-        problems, values = [], []
-        if not isinstance(row, dict):
-            row = {"malformedResponse": row}
+        problems, metrics = [], []
+        row = observed if isinstance(observed, dict) else {}
+        if not isinstance(observed, dict):
             problems.append(Diagnostic("malformed_match", "Malformed match retained as unresolved evidence.", row_index=position))
         target = row.get("image")
         if not isinstance(target, dict):
             target = {}
             problems.append(Diagnostic("missing_target_identity", "Target image is missing or malformed.", row_index=position))
         source = source_identity(target, config)
-        for key, role in specs:
-            raw = row.get(key)
-            raw_text = None if raw is None else str(raw) if isinstance(raw, str) else canonical(raw)
-            value = raw if role != "unknown" else raw_text
-            try:
-                field = ResultField(len(values), key, raw_text, value, role)
-            except ValueError:
-                field = ResultField(len(values), key, raw_text, None, role)
-                problems.append(Diagnostic("invalid_api_field", f"Invalid {key}; original value retained.", row_index=position))
-            values.append(field)
         expected = "CDSMatch" if method == "CDM" else "PPPMatch"
-        if row.get("type") != expected:
+        consistent = row.get("type") == expected
+        if not consistent:
             problems.append(Diagnostic("unknown_match_method", "Match method missing or inconsistent with requested method; retained without inference.", row_index=position))
-        occurrences.append(MatchOccurrence(str(position), session_id, source, position, tuple(values), tuple(problems)))
+        for key in ("normalizedScore", "pppmScore", "pppmRank"):
+            if key not in row:
+                continue
+            metric_method = "CDSMatch" if key == "normalizedScore" else "PPPMatch"
+            meaning = ("neuronbridge:" + metric_method + ":" + key) if consistent and row.get("type") == metric_method else None
+            try:
+                metric = HitMetric(key, row[key], meaning)
+            except ValueError:
+                metric = HitMetric(key, None, meaning)
+                problems.append(Diagnostic("invalid_api_field", f"Invalid {key}; original value retained.", row_index=position))
+            metrics.append(metric)
+        pixels, mirrored = row.get("matchingPixels"), row.get("mirrored")
+        if pixels is not None and (type(pixels) is not int or pixels < 0):
+            pixels = None
+            problems.append(Diagnostic("invalid_api_field", "Invalid matchingPixels; original value retained.", row_index=position))
+        if mirrored is not None and type(mirrored) is not bool:
+            mirrored = None
+            problems.append(Diagnostic("invalid_api_field", "Invalid mirrored; original value retained.", row_index=position))
+        occurrences.append(MatchOccurrence(f"{session_id}:{position}", session_id, source, position,
+            diagnostics=tuple(problems), metrics=tuple(metrics), matched_pixels=pixels, mirrored=mirrored,
+            evidence_ref="result_response", evidence_index=position))
     completeness["filters"] = {"selected_image_index": image_index,
         "image_id": image.get("id"), "library": image.get("libraryName"),
         "alignment_space": image.get("alignmentSpace"), "requested_method": method,
         "target_filter": None, "local_limit": limit}
     completeness["normalization_complete"] = not any(o.diagnostics for o in occurrences)
     diagnostics.extend(Diagnostic("incomplete_retrieval", reason) for reason in completeness["reasons"])
-    evidence = {"protocol": "neuronbridge-public-s3", "reference_client_commit": CLIENT_COMMIT,
-        "reference_client_package_version": "3.3.0", "adapter_version": "nb05-public-v1", "algorithm_version": None,
-        "lookup_snapshot": lookup_snapshot, "result_response": response}
+    evidence = {"result_response": {
+        "scope": "selected_results",
+        "selected_results": {str(index): row for index, row in enumerate(rows)},
+    }}
     session = SearchSession(session_id, "precomputed", version,
         query_reference=lookup_snapshot["identifier"], query_source=source_identity(image, config),
-        parameters=(SourceParameter("requested_method", method), SourceParameter("algorithm_version", None),
-                    SourceParameter("retrieval", completeness), SourceParameter("public_api_evidence", evidence)))
+        parameters=(SourceParameter("requested_method", method), SourceParameter("result_limit", limit)),
+        context={"backend": "neuronbridge-public-s3", "algorithm": None,
+                 "reference_revision": CLIENT_COMMIT, "implementation_revision": "nb05-public-v3",
+                 "retrieval": completeness,
+                 "counts": {"examined": None, "matched": None, "retained": len(occurrences)},
+                 "results_truncated": completeness["published_rows"] > len(occurrences)},
+        external_evidence=evidence, diagnostics=tuple(diagnostics))
     checkpoint(transport.cancel)
-    return SearchResults(session, tuple(occurrences), tuple(diagnostics))
+    return SearchResults(session, tuple(occurrences))

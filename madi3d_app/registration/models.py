@@ -34,6 +34,18 @@ from madi3d_app.volume.geometry import (
 
 REGISTRATION_CHAIN_SCHEMA_VERSION = 9
 REGISTRATION_ALGORITHM_VERSION = "staged-registration-severity-qc-v4"
+REGISTRATION_JOB_SCHEMA_VERSION = "MADI3D_registration_job_v1"
+REGISTRATION_WORKSPACE_SCHEMA_VERSION = "MADI3D_registration_workspace_v2"
+MAX_REGISTRATION_WORKSPACE_JOBS = 4096
+MAX_REGISTRATION_WORKSPACE_RESULTS = 4096
+MAX_REGISTRATION_WORKSPACE_POSE_CAPTURES = 4096
+
+REGISTRATION_WORKSPACE_RESOURCE_SETTINGS = frozenset({
+    "cmtk_linear_threads",
+    "cmtk_threads",
+    "gradient_memory_strategy",
+    "threads",
+})
 
 
 # Engineering review policy, not biological constants. Existing fixtures cover
@@ -242,6 +254,125 @@ class RegistrationSettings(dict):
         result = _plain_value(self)
         result["qc_thresholds"] = registration_qc_thresholds(result.get("qc_thresholds"))
         return result
+
+
+def registration_workspace_settings(values=None):
+    """Return material registration settings and output policy, not resource state."""
+
+    result = RegistrationSettings(values).to_dict()
+    for key in REGISTRATION_WORKSPACE_RESOURCE_SETTINGS:
+        result.pop(key, None)
+    # The editor/project state owns landmark definitions once. Execution views
+    # reconstruct the compact grouped form when a queued job is materialized.
+    result.pop("landmarks_by_dataset", None)
+    return result
+
+
+def _registration_project_state(value):
+    payload = _plain_value(dict(value or {}))
+    # Landmark tool activation and marker size are presentation/runtime state.
+    payload.pop("landmark_mode_active", None)
+    payload.pop("landmark_size_scale", None)
+    try:
+        json.dumps(payload, allow_nan=False, sort_keys=True)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Registration project state must contain finite JSON values.") from exc
+    return payload
+
+
+def _registration_landmarks_by_dataset(project_state):
+    grouped = {}
+    for raw_pair in project_state.get("landmarks") or ():
+        pair = dict(raw_pair or {})
+        fixed = pair.get("reference_world")
+        moving = pair.get("moving_world")
+        if fixed is None or moving is None:
+            continue
+        dataset_id = str(pair.get("dataset_id") or "")
+        grouped.setdefault(dataset_id, []).append({
+            "pair_id": str(pair.get("pair_id") or ""),
+            "name": str(pair.get("name") or "Landmark"),
+            "reference_world": _plain_value(fixed),
+            "moving_world": _plain_value(moving),
+            "weight": float(pair.get("weight", 1.0)),
+        })
+    return grouped
+
+
+def _registration_operation_ids(values):
+    operation_ids = []
+    for value in values or ():
+        operation_id = str(value or "").strip()
+        if not operation_id.startswith("registration:") or not operation_id[13:]:
+            raise ValueError(
+                "Registration workspace result references must be stable registration operation IDs."
+            )
+        if operation_id not in operation_ids:
+            operation_ids.append(operation_id)
+    return operation_ids
+
+
+def _persisted_queue_status(value):
+    status = validate_execution_status(value or "pending")
+    return "interrupted" if status == "running" else status
+
+
+def _registration_review_map(value):
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("Registration workspace reviews must be keyed by operation ID.")
+    result = {}
+    for raw_operation_id, raw_review in value.items():
+        operation_id, = _registration_operation_ids([raw_operation_id])
+        if not isinstance(raw_review, dict):
+            raise ValueError("Registration workspace review state must be a JSON object.")
+        review = _plain_value(raw_review)
+        unknown = set(review) - {
+            "decision", "stage_decisions", "post_registration_pose_captures",
+        }
+        if unknown:
+            raise ValueError(
+                "Registration workspace review contains unsupported fields: "
+                + ", ".join(sorted(unknown))
+                + "."
+            )
+        normalized = {
+            "decision": validate_user_decision(review.get("decision", "unapplied"))
+        }
+        stages = []
+        seen_indices = set()
+        for stage in review.get("stage_decisions") or ():
+            if not isinstance(stage, dict) or set(stage) != {
+                "stage_index", "stage_name", "decision",
+            }:
+                raise ValueError("Registration stage review has unsupported or missing fields.")
+            stage_index = int(stage["stage_index"])
+            if stage_index < 0 or stage_index in seen_indices:
+                raise ValueError("Registration stage review indices must be unique.")
+            seen_indices.add(stage_index)
+            stages.append({
+                "stage_index": stage_index,
+                "stage_name": str(stage["stage_name"]),
+                "decision": validate_user_decision(stage["decision"]),
+            })
+        if stages:
+            normalized["stage_decisions"] = stages
+        captures = _plain_value(review.get("post_registration_pose_captures") or [])
+        if not isinstance(captures, list) or any(
+            not isinstance(capture, dict) for capture in captures
+        ):
+            raise ValueError("Registration pose captures must be a JSON array of objects.")
+        if len(captures) > MAX_REGISTRATION_WORKSPACE_POSE_CAPTURES:
+            raise ValueError("Registration workspace contains too many pose captures.")
+        if captures:
+            normalized["post_registration_pose_captures"] = captures
+        try:
+            json.dumps(normalized, allow_nan=False, sort_keys=True)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Registration workspace review must contain finite JSON values.") from exc
+        result[operation_id] = normalized
+    return result
 
 
 class RegistrationOutputGrid(dict):
@@ -801,43 +932,250 @@ class RegistrationJob:
     error: str = ""
     results: list[RegistrationTransformChain] = field(default_factory=list)
     output_directory: str = ""
+    result_operation_ids: list[str] = field(default_factory=list)
 
     def __post_init__(self):
         self.execution_status = validate_execution_status(self.execution_status)
         self.qc_status = validate_qc_status(self.qc_status)
         self.user_decision = validate_user_decision(self.user_decision)
         self.settings = RegistrationSettings.from_dict(self.settings)
+        self.project_state = _registration_project_state(self.project_state)
+        self.result_operation_ids = _registration_operation_ids(
+            [
+                *self.result_operation_ids,
+                *("registration:" + str(result.registration_id) for result in self.results),
+            ]
+        )
 
     def to_dict(self):
+        result_operation_ids = _registration_operation_ids([
+            *self.result_operation_ids,
+            *("registration:" + str(result.registration_id) for result in self.results),
+        ])
+        persisted_status = _persisted_queue_status(self.execution_status)
+        if persisted_status == "succeeded" and not result_operation_ids:
+            raise ValueError(
+                "A completed registration job must reference its result operation."
+            )
         return {
+            "schema": REGISTRATION_JOB_SCHEMA_VERSION,
             "job_id": str(self.job_id),
             "name": str(self.name),
-            "project_state": _plain_value(self.project_state),
-            "settings": self.settings.to_dict(),
-            "execution_status": self.execution_status,
-            "qc_status": self.qc_status,
-            "user_decision": self.user_decision,
-            "execution_phase": str(self.execution_phase),
-            "error": str(self.error),
-            "output_directory": str(self.output_directory),
+            "project_state": _registration_project_state(self.project_state),
+            "settings": registration_workspace_settings(self.settings),
+            "execution_status": persisted_status,
+            "error": str(self.error)[-4000:],
+            "result_operation_ids": result_operation_ids,
         }
 
     @classmethod
     def from_dict(cls, payload, *, results=None):
         payload = dict(payload or {})
-        execution = str(payload.get("execution_status") or "pending")
-        if execution == "running":
-            execution = "pending"
+        schema = str(payload.get("schema") or REGISTRATION_JOB_SCHEMA_VERSION)
+        if schema != REGISTRATION_JOB_SCHEMA_VERSION:
+            raise ValueError(f"Unsupported registration job schema: {schema}")
+        execution = _persisted_queue_status(payload.get("execution_status") or "pending")
+        restored_results = list(results or ())
+        qc = (
+            aggregate_qc_status(result.qc_status for result in restored_results)
+            if restored_results else "not-evaluated"
+        )
+        decisions = {result.user_decision for result in restored_results}
+        decision = decisions.pop() if len(decisions) == 1 else "unapplied"
+        project_state = copy.deepcopy(payload.get("project_state") or {})
+        settings = copy.deepcopy(payload.get("settings") or {})
+        landmarks = _registration_landmarks_by_dataset(project_state)
+        if landmarks:
+            settings["landmarks_by_dataset"] = landmarks
         return cls(
             job_id=str(payload.get("job_id") or uuid.uuid4()),
             name=str(payload.get("name") or "Registration"),
-            project_state=copy.deepcopy(payload.get("project_state") or {}),
-            settings=copy.deepcopy(payload.get("settings") or {}),
+            project_state=project_state,
+            settings=settings,
             execution_status=execution,
-            qc_status=str(payload.get("qc_status") or "not-evaluated"),
-            user_decision=str(payload.get("user_decision") or "unapplied"),
+            qc_status=qc,
+            user_decision=decision,
             execution_phase="",
             error=str(payload.get("error") or ""),
-            results=list(results or ()),
-            output_directory=str(payload.get("output_directory") or ""),
+            results=restored_results,
+            output_directory="",
+            result_operation_ids=copy.deepcopy(
+                payload.get("result_operation_ids") or []
+            ),
         )
+
+
+@dataclass
+class RegistrationProjectState:
+    """Bounded active registration editor state."""
+
+    project_state: dict[str, Any]
+    settings: RegistrationSettings
+    result_operation_ids: list[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        self.project_state = _registration_project_state(self.project_state)
+        self.settings = RegistrationSettings(
+            registration_workspace_settings(self.settings)
+        )
+        self.result_operation_ids = _registration_operation_ids(
+            self.result_operation_ids
+        )
+
+    def to_dict(self):
+        return {
+            "project_state": _registration_project_state(self.project_state),
+            "settings": registration_workspace_settings(self.settings),
+            "result_operation_ids": list(self.result_operation_ids),
+        }
+
+    @classmethod
+    def from_dict(cls, payload):
+        if isinstance(payload, cls):
+            payload = payload.to_dict()
+        payload = dict(payload or {})
+        return cls(
+            project_state=copy.deepcopy(payload.get("project_state") or {}),
+            settings=copy.deepcopy(payload.get("settings") or {}),
+            result_operation_ids=copy.deepcopy(
+                payload.get("result_operation_ids") or []
+            ),
+        )
+
+
+@dataclass
+class RegistrationWorkspaceState:
+    """One schema shared by embedded and explicit registration workspaces."""
+
+    active_project: RegistrationProjectState | None = None
+    jobs: list[RegistrationJob] = field(default_factory=list)
+    result_operation_ids: list[str] = field(default_factory=list)
+    result_reviews: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    def __post_init__(self):
+        self.active_project = (
+            self.active_project
+            if isinstance(self.active_project, RegistrationProjectState)
+            else RegistrationProjectState.from_dict(self.active_project)
+            if self.active_project
+            else None
+        )
+        self.jobs = [
+            job if isinstance(job, RegistrationJob) else RegistrationJob.from_dict(job)
+            for job in self.jobs
+        ]
+        if len(self.jobs) > MAX_REGISTRATION_WORKSPACE_JOBS:
+            raise ValueError("Registration workspace contains too many queued jobs.")
+        job_ids = [job.job_id for job in self.jobs]
+        if len(job_ids) != len(set(job_ids)):
+            raise ValueError("Registration workspace job IDs must be unique.")
+        self.result_operation_ids = _registration_operation_ids(
+            self.result_operation_ids
+        )
+        self.result_reviews = _registration_review_map(self.result_reviews)
+        referenced = set(self.result_operation_ids)
+        if self.active_project is not None:
+            referenced.update(self.active_project.result_operation_ids)
+        for job in self.jobs:
+            referenced.update(job.result_operation_ids)
+        if len(referenced) > MAX_REGISTRATION_WORKSPACE_RESULTS:
+            raise ValueError("Registration workspace contains too many result references.")
+        unavailable_reviews = sorted(set(self.result_reviews) - referenced)
+        if unavailable_reviews:
+            raise ValueError(
+                "Registration workspace reviews refer to unlisted results: "
+                + ", ".join(unavailable_reviews)
+                + "."
+            )
+
+    @property
+    def is_empty(self):
+        return (
+            self.active_project is None
+            and not self.jobs
+            and not self.result_operation_ids
+            and not self.result_reviews
+        )
+
+    def to_dict(self):
+        if self.is_empty:
+            return {}
+        return {
+            "schema": REGISTRATION_WORKSPACE_SCHEMA_VERSION,
+            "active_project": (
+                self.active_project.to_dict()
+                if self.active_project is not None else None
+            ),
+            "jobs": [job.to_dict() for job in self.jobs],
+            "result_operation_ids": list(self.result_operation_ids),
+            "result_reviews": copy.deepcopy(self.result_reviews),
+        }
+
+    @classmethod
+    def from_dict(cls, payload):
+        if isinstance(payload, cls):
+            payload = payload.to_dict()
+        payload = dict(payload or {})
+        if not payload:
+            return cls()
+        # Schema 1 stored only current review overlays. Migrate them once into
+        # the bounded schema without reintroducing embedded result ownership.
+        if int(payload.get("version") or 0) == 1 and "results" in payload:
+            reviews = {}
+            for operation_id, state in dict(payload.get("results") or {}).items():
+                review = {
+                    "decision": state.get("user_decision", "unapplied"),
+                }
+                stages = [
+                    {
+                        "stage_index": entry["stage_index"],
+                        "stage_name": entry["stage_name"],
+                        "decision": entry["user_decision"],
+                    }
+                    for entry in state.get("stage_user_decisions") or ()
+                ]
+                if stages:
+                    review["stage_decisions"] = stages
+                captures = state.get("post_registration_pose_captures") or []
+                if captures:
+                    review["post_registration_pose_captures"] = copy.deepcopy(captures)
+                reviews[str(operation_id)] = review
+            operation_ids = list(reviews)
+            return cls(
+                result_operation_ids=operation_ids,
+                result_reviews=reviews,
+            )
+        schema = str(payload.get("schema") or "")
+        if schema != REGISTRATION_WORKSPACE_SCHEMA_VERSION:
+            raise ValueError(f"Unsupported registration workspace schema: {schema}")
+        unknown = set(payload) - {
+            "schema", "active_project", "jobs", "result_operation_ids",
+            "result_reviews",
+        }
+        if unknown:
+            raise ValueError(
+                "Registration workspace contains unsupported fields: "
+                + ", ".join(sorted(unknown))
+                + "."
+            )
+        return cls(
+            active_project=(
+                RegistrationProjectState.from_dict(payload["active_project"])
+                if payload.get("active_project") else None
+            ),
+            jobs=[RegistrationJob.from_dict(job) for job in payload.get("jobs") or []],
+            result_operation_ids=copy.deepcopy(
+                payload.get("result_operation_ids") or []
+            ),
+            result_reviews=copy.deepcopy(payload.get("result_reviews") or {}),
+        )
+
+    def write(self, path):
+        Path(path).write_text(
+            json.dumps(self.to_dict(), indent=2, allow_nan=False),
+            encoding="utf-8",
+        )
+
+    @classmethod
+    def read(cls, path):
+        return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))

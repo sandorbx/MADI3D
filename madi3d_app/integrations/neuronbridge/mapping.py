@@ -6,7 +6,7 @@ import os
 import numpy as np
 
 from .cdm_records import CDMMapping, canonical_json
-from .search_profiles import BRAIN, SEARCH_PROFILES, search_profile
+from .search_profiles import BRAIN, SEARCH_PROFILES, BRAIN_ISOTROPIC_DIMENSIONS_XYZ, search_profile
 from .query import digest
 from madi3d_app.volume.geometry import VolumeWorkingGrid
 
@@ -25,7 +25,7 @@ def exploratory_mapping(geometry, placement="automatic", *, reason=None, world_b
     assumptions = ["Template alignment is unverified; search matches may be unreliable."]
     if reason:
         assumptions.append("Recorded alignment could not be established: " + str(reason))
-    isotropic = profile == BRAIN and world_bounds is None and np.array_equal(dimensions, (1652, 773, 456))
+    isotropic = profile == BRAIN and world_bounds is None and np.array_equal(dimensions, BRAIN_ISOTROPIC_DIMENSIONS_XYZ)
     if placement == "isotropic" and not isotropic:
         raise ValueError("The 0.38 µm isotropic preset requires dimensions 1652 × 773 × 456. Use Automatic for this source.")
     if placement == "working":
@@ -121,7 +121,8 @@ def automatic_mapping(model, snapshots, channel_id, *, profile_id=None):
         pose = np.asarray(channel.working_geometry.pose)
         entry = {"channel_id": key, "acquisition_id": record.source_id,
                  "geometry_revision": channel.geometry_revision, "working_grid": grid.to_dict(),
-                 "pose": pose.tolist(), "transform_chain": acquisition.transform_chain}
+                 "pose": pose.tolist(),
+                 "producing_operation_id": channel.producing_operation_id}
         evidence.append(entry)
         def grid_matches(candidate):
             expected = np.eye(4)
@@ -144,17 +145,20 @@ def automatic_mapping(model, snapshots, channel_id, *, profile_id=None):
         template_grid = any(grid_matches(p) for p in
                             ((profile,) if profile is not None else SEARCH_PROFILES.values()))
 
-        lineage = acquisition.generated_lineage
-        if lineage:
-            relation = lineage["parent_index_relation"]
-            parent_key = relation["parent_channel_id"]
+        generated = model.generated_operation_index()["by_channel"].get(key)
+        if generated:
+            relation = generated["relation"]
+            consumed = generated["input_record"]
+            if consumed is None:
+                raise ValueError("Generated input's consumed volume revision is unavailable.")
+            parent_key = consumed["channel_id"]
             parent_mapping, parent, parent_grid, parent_pose = visit(parent_key)
-            if (relation["parent_acquisition_id"] != parent.acquisition_id or
-                    lineage.get("parent_geometry_revision") != parent.geometry_revision):
+            if (consumed["source_id"] != parent.acquisition_id or
+                    consumed["geometry_revision_id"] != parent.geometry_revision):
                 raise ValueError("Generated input's parent geometry revision is missing or changed.")
             step = np.eye(4)
-            step[:3, 3] = [relation["parent_extent"][i] for i in (0, 2, 4)]
-            entry["generated_lineage"] = lineage
+            step[:3, 3] = [relation.parent_extent[i] for i in (0, 2, 4)]
+            entry["parent_index_relation"] = relation.to_dict()
         else:
             operation = model.operation_records.get(record.producing_operation_id, {})
             operation_type = operation.get("operation_type", operation.get("operation"))
@@ -166,16 +170,24 @@ def automatic_mapping(model, snapshots, channel_id, *, profile_id=None):
                     raise TemplateVerificationRequired(channel, path)
             if (operation_type != "registration_reformat"
                     or operation.get("execution_status") != "completed"
-                    or operation.get("output_acquisition_id") != record.source_id
-                    or operation.get("output_channel_id", key) != key
                     or not operation.get("result_transform_id")):
                 raise ValueError("No proven path from this volume to the pinned NeuronBridge template. Import external mapping evidence if available.")
             revision = operation.get("output_geometry_revision")
             if revision and revision != channel.geometry_revision:
                 raise ValueError("Reformat output geometry changed since generation.")
-            parent_mapping, parent, parent_grid, parent_pose = visit(operation.get("reference_channel_id"))
-            if (operation.get("reference_acquisition_id") != parent.acquisition_id or
-                    operation.get("reference_geometry_revision") != parent.geometry_revision):
+            reference_record_id = operation.get("reference_input_record_id")
+            reference_record = model.scientific_records.get(reference_record_id)
+            if (
+                reference_record is None
+                or reference_record.get("record_kind") != "volume_revision"
+                or reference_record_id not in operation.get("input_record_ids", ())
+            ):
+                raise ValueError("Reformat reference volume revision is unavailable.")
+            parent_mapping, parent, parent_grid, parent_pose = visit(
+                reference_record["channel_id"]
+            )
+            if (reference_record.get("source_id") != parent.acquisition_id or
+                    reference_record.get("geometry_revision_id") != parent.geometry_revision):
                 raise ValueError("Reformat reference geometry revision is missing or changed.")
             step = np.linalg.inv(np.asarray(parent_grid.local_index_to_working_affine)) @ affine
             entry["producing_operation"] = operation

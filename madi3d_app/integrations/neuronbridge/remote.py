@@ -17,7 +17,7 @@ class RemoteSource:
     source: SourceIdentity
     data_version: str | None = None
     resolution: Mapping[str, Any] = field(default_factory=dict)
-    local_path: str = ""
+    local_path: str = field(default="", compare=False)
     problems: tuple[str, ...] = ()
 
     def __post_init__(self):
@@ -37,14 +37,26 @@ class RemoteSource:
             r"nb-[0-9a-f]{64}\.(obj|swc|h5j)", filename,
         )):
             raise ValueError("NeuronBridge cache filename must be a versioned asset key.")
-        if resolution and not all(resolution.get(k) for k in (
-            "asset_type", "url", "cache_filename", "resolved_at",
-        )):
+        if resolution and not resolution.get("asset_type"):
             raise ValueError("Incomplete NeuronBridge asset resolution.")
+        if resolution.get("url") and not resolution.get("resolved_at"):
+            raise ValueError("Incomplete NeuronBridge asset resolution.")
+        if resolution and not resolution.get("url") and not resolution.get("selected_asset"):
+            raise ValueError("Durable NeuronBridge asset evidence requires its selected identity.")
         if "selected_asset" in resolution:
             asset = AssetIdentity(**resolution["selected_asset"])
-            if asset.asset_type != resolution["asset_type"] or asset.url != resolution["url"]:
+            if (asset.asset_type != resolution["asset_type"]
+                    or (resolution.get("url") and asset.url != resolution["url"])):
                 raise ValueError("Selected asset conflicts with the resolution.")
+        if resolution.get("url") and not filename:
+            from .cache import asset_cache_filename
+            asset = self.selected_asset
+            resolution["cache_filename"] = asset_cache_filename(
+                library=self.source.library, release=self.source.library_release,
+                data_version=resolution.get("data_version", self.data_version),
+                alignment=self.source.image.alignment_space, asset_type=asset.asset_type,
+                url=asset.url, asset_id=asset.asset_id, checksum=asset.checksum_sha256,
+            )
         if not isinstance(self.local_path, str):
             raise ValueError("NeuronBridge local cache hint must be a string.")
         object.__setattr__(self, "resolution", resolution)
@@ -53,11 +65,12 @@ class RemoteSource:
         object.__setattr__(self, "problems", tuple(self.problems))
 
     def to_dict(self):
+        resolution = copy.deepcopy(dict(self.resolution))
+        resolution.pop("cache_filename", None)
         return {
             "type": "neuronbridge", "version": 1,
             "source": json.loads(json.dumps(self.source.to_dict())), "data_version": self.data_version,
-            "resolution": copy.deepcopy(dict(self.resolution)),
-            "local_path": self.local_path,
+            "resolution": resolution,
             "problems": list(self.problems),
         }
 
@@ -69,20 +82,73 @@ class RemoteSource:
         data["source"] = SourceIdentity.from_dict(data["source"])
         return cls(**data)
 
-    def cached_path(self):
-        """Cheap existence/stat probe only; retrieval workers verify integrity."""
-        from .cache import cached_file_ready, neuronbridge_cache_root
+    def cached_path(self, cache_root=None):
+        """Find this exact selected asset locally; retrieval workers verify integrity."""
+        from .cache import (
+            asset_cache_filename, cached_file_ready, legacy_asset_cache_filename,
+            neuronbridge_cache_root,
+        )
 
-        candidates = [Path(self.local_path)] if self.local_path else []
-        filename = self.resolution.get("cache_filename")
-        if filename:
-            candidates.append(neuronbridge_cache_root() / filename)
+        root = (Path(cache_root).expanduser() if cache_root is not None
+                else neuronbridge_cache_root())
+        candidates = []
+
+        def add(path):
+            if path is not None:
+                candidate = Path(path)
+                if candidate not in candidates:
+                    candidates.append(candidate)
+
+        if self.local_path:
+            add(self.local_path)
+        if self.resolution.get("cache_filename"):
+            add(root / self.resolution["cache_filename"])
+
+        selected = self.selected_asset
+        if selected is not None and selected.asset_type:
+            matches = [
+                asset for asset in self.source.assets
+                if asset.asset_type == selected.asset_type
+                and (not selected.asset_id or asset.asset_id == selected.asset_id)
+                and (not selected.url or asset.url == selected.url)
+            ]
+            if not matches:
+                matches = [selected]
+            version = self.resolution.get("data_version", self.data_version)
+            for asset in matches:
+                asset_id = selected.asset_id or asset.asset_id
+                url = selected.url or asset.url
+                checksum = selected.checksum_sha256 or asset.checksum_sha256
+                if asset_id or url:
+                    add(root / asset_cache_filename(
+                        library=self.source.library,
+                        release=self.source.library_release,
+                        data_version=version,
+                        alignment=self.source.image.alignment_space,
+                        asset_type=selected.asset_type,
+                        url=url,
+                        asset_id=asset_id,
+                        checksum=checksum,
+                    ))
+                if url:
+                    add(root / legacy_asset_cache_filename(
+                        library=self.source.library,
+                        release=self.source.library_release,
+                        data_version=version,
+                        alignment=self.source.image.alignment_space,
+                        asset_type=selected.asset_type,
+                        url=url,
+                        asset_id=asset_id,
+                        checksum=checksum,
+                    ))
         return next((path for path in candidates if cached_file_ready(path)), None)
 
     @property
     def selected_asset(self):
         if not self.resolution:
-            return None
+            durable = tuple(asset for asset in self.source.assets
+                            if asset.asset_id and asset.asset_type)
+            return durable[0] if len(durable) == 1 else None
         if "selected_asset" in self.resolution:
             return AssetIdentity(**self.resolution["selected_asset"])
         # Earlier NB-01B records identify selection by type and URL. Bind only
@@ -105,8 +171,12 @@ class RemoteSource:
         return (asset.checksum_sha256 if asset else None) or self.resolution.get("retrieved_sha256")
 
 
-def remote_from_metadata(metadata):
-    value = (metadata or {}).get("neuronbridge", {}).get("remote_source")
+def remote_from_metadata(metadata, project_metadata=None, *, sources=None):
+    evidence = (metadata or {}).get("neuronbridge", {})
+    value = evidence.get("remote_source")
+    if value is None and (evidence.get("selected_results") or evidence.get("source_ref")):
+        from .evidence import remote_for_reference
+        return remote_for_reference(evidence, project_metadata or {}, sources=sources)
     return RemoteSource.from_dict(value) if value is not None else None
 
 

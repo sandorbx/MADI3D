@@ -56,6 +56,16 @@ VNC = SearchProfile(
     "https://janelia-flylight-templates.s3.amazonaws.com/JRC2018_VNC_Unisex/JRC2018_VNC_UNISEX_461.nrrd",
 )
 SEARCH_PROFILES = MappingProxyType({p.profile_id: p for p in (BRAIN, VNC)})
+BRAIN_ISOTROPIC_DIMENSIONS_XYZ = (1652, 773, 456)
+
+
+def dimension_profile(dimensions_xyz):
+    """Suggest a target from an exact volume shape; this is not alignment evidence."""
+    dimensions = tuple(dimensions_xyz)
+    matches = [p for p in SEARCH_PROFILES.values()
+               if dimensions == p.template_shape_zyx[::-1]
+               or (p == BRAIN and dimensions == BRAIN_ISOTROPIC_DIMENSIONS_XYZ)]
+    return matches[0] if len(matches) == 1 else None
 
 
 def search_profile(profile_id):

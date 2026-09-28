@@ -329,6 +329,9 @@ class LibraryManager:
         payload, evidence = self._metadata(path, url, db, transport, cancel)
         if evidence.get("status") == "missing":
             return unknown, ["Public metadata is missing; this exact search member remains visible but cannot load an arbitrary neuron."], evidence
+        # The verified response already lives once in the metadata cache. Member
+        # records retain its identity and their own interpretation, not its table.
+        evidence = dict(evidence, response_ref=evidence["sha256"])
         display_key = f"{library.template_id}/{library.name}/{token}-{library.template_id}-CDM.png"
         expected_name = library.published_name_prefix + ":" + token
         matches = [image for image in payload["results"] if isinstance(image, dict) and
@@ -344,8 +347,24 @@ class LibraryManager:
             return unknown, ["Public body identity conflicts with the verified image name."], evidence
         source = replace(source, library_release=library.release,
                          biological=replace(source.biological, neuron_id=token))
-        return source, [], dict(evidence, resolved_image=image, lookup_token=token,
+        return source, [], dict(evidence, resolved_image_index=payload["results"].index(image), lookup_token=token,
                                resolution="exact_metadata_image_and_published_name")
+
+    def identity_observation(self, snapshot_id, evidence, cancel=None):
+        """Read the exact retained response while the caller holds the snapshot lease."""
+        if "response_ref" not in evidence:
+            # Earlier inventories embedded this observation. Keep their recorded
+            # content and inventory digest; no online refresh or repair is needed.
+            return evidence
+        path = self.path(snapshot_id) / "metadata" / (hashlib.sha256(evidence["url"].encode()).hexdigest() + ".json")
+        checkpoint(cancel)
+        with path.open("rb") as stream:
+            raw = stream.read(16 * 1024 * 1024 + 1)
+        checkpoint(cancel)
+        if (len(raw) > 16 * 1024 * 1024 or len(raw) != evidence["size"] or
+                evidence["response_ref"] != evidence["sha256"] or hashlib.sha256(raw).hexdigest() != evidence["sha256"]):
+            raise ValueError("Retained identity metadata changed. Repair this exact snapshot.")
+        return dict(evidence, observed_response=parse_json(raw))
 
     def _metadata(self, path, url, db, transport, cancel):
         cached = db.execute("SELECT evidence FROM metadata_cache WHERE url=?", (url,)).fetchone()

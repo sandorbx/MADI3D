@@ -73,26 +73,26 @@ def thumbnail_reference(occurrence, session):
         return None
     try:
         parameters = {p.name: p.value for p in session.parameters}
-        public = parameters.get("public_api_evidence")
+        public = session.external_evidence if session.source_kind == "precomputed" else None
         if public:
-            config = public["lookup_snapshot"]["config"]["payload"]
-            row = public["result_response"]["payload"]["results"][occurrence.row_index]
+            config = public.get("lookup_snapshot", {}).get("config", {}).get("payload", {})
+            row = session.evidence_for(occurrence)
             image = row.get("image", {})
             if str(image.get("id")) != occurrence.target.image.image_id:
                 return None
             if parameters.get("requested_method") == "PPPM":
                 return _reference(row, ("CDMBestThumbnail", "CDMBest"), config)
             return _reference(image, ("CDMThumbnail", "CDM"), config)
-        local = parameters.get("local_search")
+        local = session.context if session.context.get("backend") == "madi3d-local" else None
         if local:
-            field = next((f for f in occurrence.fields if f.header == "Identity metadata evidence"), None)
-            evidence = json.loads(field.value) if field and isinstance(field.value, str) else {}
-            image = evidence.get("resolved_image", {})
+            evidence = session.evidence_for(occurrence).get("identity", {})
+            image = (evidence["observed_response"]["results"][evidence["resolved_image_index"]]
+                     if "resolved_image_index" in evidence else evidence.get("resolved_image", {}))
             if str(image.get("id")) != occurrence.target.image.image_id:
                 return None
             # Local snapshots retain their catalog/config evidence. A fully
             # qualified file URL also works when an old snapshot lacks config.
-            catalog = local.get("catalog_evidence", {})
+            catalog = session.external_evidence.get("catalog", {})
             config = catalog.get("config", {}).get("payload", {})
             return _reference(image, ("CDMThumbnail", "CDM"), config)
         for asset in occurrence.target.assets:

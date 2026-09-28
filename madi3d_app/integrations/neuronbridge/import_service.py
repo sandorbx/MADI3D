@@ -6,7 +6,8 @@ from dataclasses import dataclass, replace
 
 from .csv_parser import read_csv_header, read_neuronbridge_csv
 from .evidence import (
-    OBJECT_KEY, SESSION_KEY, merge_sessions, object_metadata_for_match, reference,
+    OBJECT_KEY, _merge_selected_payloads, object_metadata_for_match,
+    scoped_search_results, selected_results,
 )
 from .remote import remote_from_metadata, same_source_identity
 from .records import SearchResults
@@ -79,7 +80,7 @@ def plan_reattachment(document, results, *, identities=None):
         if row.object_metadata.get(OBJECT_KEY, {}).get("derived_from"):
             conflicts.append(f"Object {row.row_id}: derived geometry keeps its parent references; unchanged.")
             continue
-        remote = remote_from_metadata(row.object_metadata)
+        remote = remote_from_metadata(row.object_metadata, document.project_metadata)
         identity = remote.source if remote else identities.get(row.row_id)
         if identity is None:
             conflicts.append(f"Object {row.row_id}: no reliable source identity; unchanged.")
@@ -87,14 +88,10 @@ def plan_reattachment(document, results, *, identities=None):
         matches = [o for o in results.occurrences if same_source_identity(identity, o.target)]
         if len(matches) > 1 and results.session.csv_provenance:
             original_rows = set()
-            for ref in row.object_metadata.get(OBJECT_KEY, {}).get("matches", ()):
-                payload = document.project_metadata.get(SESSION_KEY, {}).get(ref["session_id"])
-                if not payload:
-                    continue
-                previous = SearchResults.from_dict(payload)
+            for previous in selected_results(row.object_metadata):
                 provenance = previous.session.csv_provenance
                 if provenance and provenance.checksum_sha256 == results.session.csv_provenance.checksum_sha256:
-                    original_rows.update(o.row_index for o in previous.occurrences if o.occurrence_id == ref["occurrence_id"])
+                    original_rows.update(o.row_index for o in previous.occurrences)
             if original_rows:
                 matches = [o for o in matches if o.row_index in original_rows]
         if len(matches) != 1:
@@ -121,17 +118,15 @@ def apply_reattachment(document, plan):
         if OBJECT_KEY not in metadata:
             metadata.update(object_metadata_for_match(plan.results, matched[0]))
         evidence = metadata[OBJECT_KEY]
-        refs = evidence.setdefault("matches", [])
         for occurrence in matched:
-            ref = reference(occurrence)
-            if ref not in refs:
-                refs.append(ref)
+            evidence["selected_results"] = _merge_selected_payloads(
+                evidence.get("selected_results", ()),
+                scoped_search_results(plan.results, [occurrence.occurrence_id]),
+            )
         changes[row.row_id] = replace(row, object_metadata=metadata)
     if not changes:
         return document
-    metadata = document.project_metadata
-    if changes:
-        metadata = merge_sessions(metadata, {
-            plan.results.session.session_id: plan.results.to_dict(),
-        })
-    return replace(document, objects=tuple(changes.get(r.row_id, r) for r in document.objects), project_metadata=metadata)
+    return document.with_project_metadata(
+        document.project_metadata,
+        objects=(changes.get(r.row_id, r) for r in document.objects),
+    )

@@ -61,12 +61,43 @@ def check(root):
     manager.install(snapshot, transport=SyntheticTransport())
     reopened = LibraryManager(manager.root)
     matches = search_library(reopened, snapshot, json.loads(json.dumps(query)))
-    evidence = next(p.value for p in matches.session.parameters if p.name == "local_search")
+    evidence = matches.session.context
     if evidence["counts"] != {"total": 1, "examined": 1, "failed": 0, "matched": 1, "retained": 1}:
         raise ValueError("Frozen local search did not examine and retain its synthetic candidate.")
-    if matches.occurrences[0].fields_for("matched_pixels")[0].value != 2:
+    if matches.occurrences[0].matched_pixels != 2:
         raise ValueError("Frozen local positive-CDS count differs from its known fixture.")
     saved = json.loads(json.dumps(matches.to_dict()))
     reopened.remove(snapshot)
     if SearchResults.from_dict(saved) != matches:
         raise ValueError("Local results did not survive removal of their library.")
+    # Exercise the same persistence and standalone paths in every frozen target.
+    from madi3d_app.project.document import ProjectDocument, ProjectObjectRecord, ProjectObjectType
+    from madi3d_app.project.save_controller import publish_project_document
+    from madi3d_app.project.package_io import read_validated_madi3d_package
+    from madi3d_app.project.scientific_records import (
+        export_provenance_projection, write_object_metadata_sidecar, read_object_metadata_sidecar,
+    )
+    from .evidence import SESSION_KEY, object_metadata_for_match
+    from .query import QUERY_KEY, query_png
+    document = ProjectDocument(objects=(ProjectObjectRecord(1, 0, ProjectObjectType.REMOTE, "Synthetic hit",
+        object_metadata=object_metadata_for_match(matches, matches.occurrences[0])),),
+        project_metadata={SESSION_KEY: {matches.session.session_id: saved}, QUERY_KEY: {query["query_id"]: query}})
+    package = root / "provenance.madi3d"
+    publish_project_document(package, document)
+    del document
+    restored = read_validated_madi3d_package(package)
+    if query_png(restored.project_metadata[QUERY_KEY][query["query_id"]]) != query_png(query):
+        raise ValueError("Packaged query pixels changed across save/reload.")
+    geometry = root / "synthetic.obj"
+    geometry.write_bytes(b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n")
+    projection = export_provenance_projection(restored.objects[0].object_metadata, restored.volume_sources,
+                                              restored.project_metadata)
+    write_object_metadata_sidecar(geometry, projection)
+    fresh = ProjectDocument(objects=(ProjectObjectRecord(1, 0, ProjectObjectType.MESH, "Reimported",
+        object_metadata=read_object_metadata_sidecar(geometry)),))
+    publish_project_document(package, fresh)
+    del fresh
+    final = read_validated_madi3d_package(package)
+    occurrence = next(iter(final.neuronbridge_index.matches.values())).occurrence
+    if occurrence != matches.occurrences[0]:
+        raise ValueError("Standalone reimport changed historical numerical search evidence.")

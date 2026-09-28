@@ -516,7 +516,13 @@ class RegistrationOutputBundle:
             "path": self.relative(path),
         }
         entry.update({str(k): copy.deepcopy(v) for k, v in metadata.items() if v is not None})
-        self.manifest.setdefault("artifacts", []).append(entry)
+        artifacts = self.manifest.setdefault("artifacts", [])
+        existing = next((index for index, value in enumerate(artifacts)
+                         if value["kind"] == entry["kind"] and value["path"] == entry["path"]), None)
+        if existing is None:
+            artifacts.append(entry)
+        else:
+            artifacts[existing] = entry
         self.write_manifest()
 
     def add_warning(self, message: str) -> None:
@@ -558,8 +564,11 @@ class RegistrationOutputBundle:
 
     def write_log(self, text: str) -> Path:
         path = self.artifact_path("logs", "registration", ".log")
-        path.write_text(str(text or ""), encoding="utf-8")
-        self.record_artifact("run_log", path)
+        data = str(text or "").encode("utf-8")
+        limit = 256 * 1024
+        path.write_bytes(data[:limit])
+        self.record_artifact("run_log", path, truncated=len(data) > limit,
+                             original_size_bytes=len(data), retained_size_bytes=min(len(data), limit))
         return path
 
     def finalize(self, status: str = "complete") -> Path:

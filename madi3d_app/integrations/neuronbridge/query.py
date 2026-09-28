@@ -113,6 +113,7 @@ class QueryInput:
     # deterministic checksum, never process addresses or VTK modification times.
     content_revision: tuple | None = field(default=None, compare=False)
     scientific_revision: str | None = None
+    scientific_capture: object | None = field(default=None, compare=False, repr=False)
 
     def dependency(self, *, binary=False, cancel=None, pixel_checksum=None):
         result = {"selection": self.selection.to_dict(), "geometry": self.geometry.to_dict(),
@@ -152,47 +153,123 @@ class QueryLaunch:
                 dtype = value.pixels.dtype.newbyteorder("=")
                 buffers[key] = np.frombuffer(value.pixels.astype(dtype, copy=False).tobytes(), dtype=dtype).reshape(value.pixels.shape)
             pixels = buffers[key]
-            return QueryInput(value.selection, value.geometry, pixels, value.content_revision, value.scientific_revision)
+            return QueryInput(
+                value.selection,
+                value.geometry,
+                pixels,
+                value.content_revision,
+                value.scientific_revision,
+                value.scientific_capture,
+            )
         return cls(freeze(signal), None if mask is None else freeze(mask), mapping, parameters)
-
-    def dependencies(self, *, cancel=None, artifact=None):
-        binary = self.parameters.mode == "binary_mask"
-        values = [] if binary else [self.signal.dependency(cancel=cancel,
-            pixel_checksum=artifact.source_pixel_sha256 if artifact else None)]
-        if self.mask is not None:
-            values.append(self.mask.dependency(binary=True, cancel=cancel,
-                pixel_checksum=artifact.mask_pixel_sha256 if artifact else None))
-        return values
 
     def generate(self, cancel=None):
         binary = self.parameters.mode == "binary_mask"
-        return generate_cdm(None if binary else self.signal.pixels,
+        if self.mask is not None and (self.signal.geometry.working_grid != self.mask.geometry.working_grid
+                                     or self.signal.geometry.pose != self.mask.geometry.pose):
+            raise ValueError("Mask and signal must share the exact working grid and pose.")
+        result = generate_cdm(None if binary else self.signal.pixels,
             selection=self.signal.selection, geometry=self.signal.geometry,
             mapping=self.mapping, parameters=self.parameters,
             mask=None if self.mask is None else self.mask.pixels,
             mask_selection=None if self.mask is None else self.mask.selection,
             mask_revision=None if self.mask is None else self.mask.selection.source_revision,
             cancel=cancel)
+        artifact = replace(result.artifact,
+            source_scientific_revision=None if binary else self.signal.scientific_revision,
+            mask_scientific_revision=None if self.mask is None else self.mask.scientific_revision,
+            mask_geometry_revision=None if self.mask is None else self.mask.geometry.revision)
+        return replace(result, artifact=artifact)
 
 
 def complete_query(launch, destination, query_id, label, cancel=None):
     result = launch.generate(cancel)
-    dependencies = launch.dependencies(cancel=cancel, artifact=result.artifact)
     checkpoint(cancel)
     artifact = export_cdm(result, destination, cancel=cancel, label=label)
     # Export's rename is the commit point. Retain committed evidence even if a
     # cancellation/supersession arrives immediately afterwards.
     from .cdm_export import cdm_image_name
     png = (Path(destination) / cdm_image_name(label)).read_bytes()
-    record = {"version": 1, "query_id": query_id, "label": label,
-              "artifact": artifact.to_dict(), "dependencies": dependencies,
-              "export_directory": str(Path(destination).absolute()),
+    record = {"version": 3, "query_id": query_id, "label": label,
+              "artifact": artifact.to_dict(),
               "png_base64": base64.b64encode(png).decode("ascii"), "out_of_date": []}
     return result, json.loads(canonical_json(record))
 
 
 def query_png(record):
     return base64.b64decode(record["png_base64"], validate=True)
+
+
+def query_dependencies(record):
+    """Project validated generation facts without rehashing mapping histories."""
+    if record["version"] == 2:
+        return []
+    if record["version"] == 1:
+        return copy.deepcopy(record["dependencies"])
+    artifact = record["artifact"]
+    inputs = []
+    if artifact["parameters"]["mode"] != "binary_mask":
+        inputs.append((artifact["selection"], artifact["geometry"], artifact["source_pixel_sha256"],
+                       artifact.get("source_scientific_revision")))
+    if artifact["mask_selection"] is not None:
+        geometry = artifact.get("mask_geometry") or dict(artifact["geometry"], revision=artifact["mask_geometry_revision"])
+        inputs.append((artifact["mask_selection"], geometry, artifact["mask_pixel_sha256"],
+                       artifact.get("mask_scientific_revision")))
+    values = []
+    for selection, geometry, pixels, revision in inputs:
+        values.append(QueryInput(CDMSelection.from_dict(selection), CDMGeometry.from_dict(geometry), None,
+            scientific_revision=revision).dependency(pixel_checksum=pixels))
+    return values
+
+
+def normalize_query_metadata(metadata):
+    """Migrate at publication/load boundaries, never during validation or review.
+
+    Check duplicated legacy facts before collapsing them. No live source is
+    consulted: saved grids and revisions remain the ones actually consumed.
+    """
+    result = dict(metadata)
+    registry = dict(result.get(QUERY_KEY, {}))
+    for key, original in registry.items():
+        if original["version"] != 1 and "export_directory" not in original:
+            continue
+        validate_queries({QUERY_KEY: {key: original}})
+        record = copy.deepcopy(original)
+        record.pop("export_directory", None)
+        if record["version"] == 1:
+            artifact = CDMArtifact.from_dict(record["artifact"])
+            dependencies = record.pop("dependencies")
+            binary = artifact.parameters.mode == "binary_mask"
+            additions = {"source_scientific_revision": None if binary else dependencies[0].get("scientific_revision")}
+            if artifact.mask_selection is not None:
+                mask = dependencies[-1]
+                geometry = CDMGeometry.from_dict(mask["geometry"])
+                additions.update(mask_scientific_revision=mask.get("scientific_revision"),
+                    mask_geometry_revision=geometry.revision,
+                    mask_geometry=geometry if (geometry.working_grid != artifact.geometry.working_grid or
+                                              geometry.pose != artifact.geometry.pose) else None)
+            record["artifact"] = replace(artifact, **additions).to_dict()
+            record["version"] = 3
+        registry[key] = record
+    if registry:
+        result[QUERY_KEY] = registry
+    # Older local searches copied the entire mapping. Collapse only a proven
+    # duplicate of the retained query; unmatched external evidence stays intact.
+    sessions = dict(result.get("neuronbridge_sessions", {}))
+    for session_id, payload in sessions.items():
+        context = payload.get("session", {}).get("context", {})
+        query = registry.get(context.get("query_id"))
+        if context.get("backend") != "madi3d-local" or "query_mapping" not in context or query is None:
+            continue
+        evidence = query_image_evidence(query)
+        if (context.get("query_png_sha256") == evidence["png_file_sha256"] and
+                context.get("query_pixel_sha256") == evidence["rgb_pixel_sha256"] and
+                canonical_json(context["query_mapping"]) == canonical_json(evidence["mapping"])):
+            context = {key: value for key, value in context.items() if key != "query_mapping"}
+            sessions[session_id] = dict(payload, session=dict(payload["session"], context=context))
+    if sessions:
+        result["neuronbridge_sessions"] = sessions
+    return result
 
 
 def _read_query_file(path, limit, cancel):
@@ -249,6 +326,9 @@ def import_query_image(path, query_id, cancel=None):
                 record = manifest["imported_query"]
                 if record.get("version") != 2:
                     raise ValueError("Unsupported imported Color-Depth MIP manifest.")
+                record = dict(record)
+                record.setdefault("png_base64", base64.b64encode(png).decode("ascii"))
+                record = normalize_query_metadata({QUERY_KEY: {record["query_id"]: record}})[QUERY_KEY][record["query_id"]]
                 validate_queries({QUERY_KEY: {record["query_id"]: record}})
                 if query_png(record) != png:
                     raise ValueError("Color-Depth MIP manifest disagrees with the selected image.")
@@ -263,7 +343,7 @@ def import_query_image(path, query_id, cancel=None):
         hashlib.sha256(pixels.tobytes()).hexdigest(), manifest_json)
     record = {"version": 2, "query_id": query_id, "label": path.stem,
               "imported_image": imported.to_dict(), "dependencies": [], "out_of_date": [],
-              "export_directory": str(path.parent), "png_base64": base64.b64encode(png).decode("ascii")}
+              "png_base64": base64.b64encode(png).decode("ascii")}
     validate_queries({QUERY_KEY: {query_id: record}})
     checkpoint(cancel)
     return json.loads(canonical_json(record))
@@ -291,8 +371,9 @@ def restore_query(record, destination, cancel=None):
         try:
             from .cdm_export import cdm_image_name
             image_name = cdm_image_name(record["label"])
+            evidence = {key: value for key, value in record.items() if key not in ("png_base64", "export_directory")}
             files = {image_name: query_png(record),
-                     "manifest.json": canonical_json({"image": image_name, "imported_query": record}).encode("utf-8")}
+                     "manifest.json": canonical_json({"image": image_name, "imported_query": evidence}).encode("utf-8")}
             for name, content in files.items():
                 checkpoint(cancel)
                 with (staging / name).open("xb") as stream:
@@ -310,13 +391,14 @@ def restore_query(record, destination, cancel=None):
     with Image.open(io.BytesIO(query_png(record))) as image:
         pixels = np.asarray(image).copy()
     artifact = CDMArtifact.from_dict(record["artifact"])
-    return export_cdm(CDMResult(pixels, artifact, None), destination, cancel=cancel, label=record["label"])
+    return export_cdm(CDMResult(pixels, artifact, None), destination, cancel=cancel, label=record["label"],
+                      retained_png=query_png(record))
 
 
 def validate_queries(metadata):
     queries = metadata.get(QUERY_KEY, {})
     for key, record in queries.items():
-        if record["version"] not in (1, 2) or key != record["query_id"] or not record["label"]:
+        if record["version"] not in (1, 2, 3) or key != record["query_id"] or not record["label"]:
             raise ValueError("Invalid saved NeuronBridge query identity.")
         if record["version"] == 2:
             imported = ImportedCDMImage.from_dict(record["imported_image"])
@@ -335,34 +417,51 @@ def validate_queries(metadata):
                 raise ValueError("Imported images cannot invent live generation dependencies or geometry.")
             continue
         artifact = CDMArtifact.from_dict(record["artifact"])
+        if record["version"] == 3:
+            if "dependencies" in record or "export_directory" in record:
+                raise ValueError("Query inputs belong to the generation artifact; export hints belong to preferences.")
+            if artifact.mask_selection is not None and artifact.mask_geometry_revision is None:
+                raise ValueError("Missing consumed mask geometry revision.")
         png = query_png(record)
         if len(png) > 8 * 1024 * 1024 or hashlib.sha256(png).hexdigest() != artifact.png_file_sha256:
             raise ValueError("Saved query PNG checksum mismatch.")
         with Image.open(io.BytesIO(png)) as image:
-            if image.mode != "RGB" or image.size != search_profile(artifact.profile).search_canvas_yx[::-1]:
+            _require_rgb8(image, png)
+            if image.format != "PNG" or image.size != search_profile(artifact.profile).search_canvas_yx[::-1]:
                 raise ValueError("Invalid saved query canvas.")
             if hashlib.sha256(image.tobytes()).hexdigest() != artifact.rgb_pixel_sha256:
                 raise ValueError("Saved query pixels disagree with generation evidence.")
         expected = 2 if artifact.parameters.mode == "signal_mask" else 1
-        if len(record["dependencies"]) != expected:
+        dependencies = query_dependencies(record)
+        if len(dependencies) != expected:
             raise ValueError("Missing consumed query inputs.")
-        for dependency in record["dependencies"]:
+        for dependency in dependencies:
             CDMSelection.from_dict(dependency["selection"])
             CDMGeometry.from_dict(dependency["geometry"])
             revision = dependency.get("scientific_revision")
             if revision is not None and (not isinstance(revision, str) or len(revision) != 64 or
                                          any(c not in "0123456789abcdef" for c in revision)):
                 raise ValueError("Invalid query scientific revision.")
-        first = record["dependencies"][0]
+        first = dependencies[0]
         if (CDMSelection.from_dict(first["selection"]) != artifact.selection or
                 CDMGeometry.from_dict(first["geometry"]) != artifact.geometry or
                 first["pixels"] != (artifact.source_pixel_sha256 or artifact.mask_pixel_sha256)):
             raise ValueError("Query dependency disagrees with consumed generation evidence.")
+        if (artifact.source_scientific_revision is not None and
+                first.get("scientific_revision") != artifact.source_scientific_revision):
+            raise ValueError("Query dependency disagrees with the consumed scientific revision.")
         if artifact.mask_selection is not None:
-            last = record["dependencies"][-1]
+            last = dependencies[-1]
             if (CDMSelection.from_dict(last["selection"]) != artifact.mask_selection or
                     last["pixels"] != artifact.mask_pixel_sha256):
                 raise ValueError("Query mask dependency disagrees with generation evidence.")
+            if ((artifact.mask_scientific_revision is not None and
+                    last.get("scientific_revision") != artifact.mask_scientific_revision) or
+                    (artifact.mask_geometry_revision is not None and
+                     last["geometry"]["revision"] != artifact.mask_geometry_revision) or
+                    (artifact.mask_geometry is not None and
+                     CDMGeometry.from_dict(last["geometry"]) != artifact.mask_geometry)):
+                raise ValueError("Query mask dependency disagrees with the consumed geometry or scientific revision.")
         validate_query_freshness(record)
     validate_query_associations(metadata)
 
@@ -380,7 +479,8 @@ def validate_query_associations(metadata):
 
 
 def add_query(metadata, record):
-    result = copy.deepcopy(dict(metadata))
+    result = copy.deepcopy(normalize_query_metadata(metadata))
+    record = normalize_query_metadata({QUERY_KEY: {record["query_id"]: record}})[QUERY_KEY][record["query_id"]]
     registry = dict(result.get(QUERY_KEY, {}))
     result[QUERY_KEY] = registry
     key = record["query_id"]
@@ -410,7 +510,8 @@ def associate_query(metadata, session_id, query_id):
 
 def merge_query_metadata(metadata, incoming):
     """Merge separately imported projects/CSV carriers without guessing links."""
-    result = copy.deepcopy(dict(metadata))
+    result = copy.deepcopy(normalize_query_metadata(metadata))
+    incoming = normalize_query_metadata(incoming)
     for field in (QUERY_KEY, ASSOCIATION_KEY):
         values = incoming.get(field, {})
         if not values:
@@ -447,7 +548,7 @@ def invalidate_queries(metadata, resolve, *, dependency_cache=None, resolve_mapp
                     reasons.append("Consumed template mapping provenance changed.")
             except (ValueError, LookupError, RuntimeError) as exc:
                 reasons.append(str(exc))
-        for i, previous in enumerate(record["dependencies"]):
+        for i, previous in enumerate(query_dependencies(record)):
             selection = previous["selection"]
             binary = record["artifact"]["parameters"]["mode"] == "binary_mask" or i == 1
             cache_key = (digest(selection), binary)

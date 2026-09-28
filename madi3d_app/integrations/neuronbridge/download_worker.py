@@ -13,11 +13,13 @@ class NBDownloadThread(QtCore.QThread):
     progress = QtCore.Signal(int)
     error = QtCore.Signal(object, object)
 
-    def __init__(self, jobs, parent=None, *, client_factory=make_nb_client, fetch=fetch_source):
+    def __init__(self, jobs, parent=None, *, client_factory=make_nb_client,
+                 fetch=fetch_source, cache_root=None):
         super().__init__(parent)
         self.jobs = tuple(jobs)
         self.client_factory = client_factory
         self.fetch = fetch
+        self.cache_root = cache_root
         self.cancel_event = Event()
 
     def requestInterruption(self):
@@ -46,10 +48,13 @@ class NBDownloadThread(QtCore.QThread):
             if self.isInterruptionRequested():
                 break
             try:
-                resolved = self.fetch(
-                    remote, client, cancel_check=self.isInterruptionRequested,
-                    on_resolved=lambda value: self.source_resolved.emit(token, value),
-                )
+                kwargs = {
+                    "cancel_check": self.isInterruptionRequested,
+                    "on_resolved": lambda value: self.source_resolved.emit(token, value),
+                }
+                if self.cache_root is not None:
+                    kwargs["cache_root"] = self.cache_root
+                resolved = self.fetch(remote, client, **kwargs)
                 if self.isInterruptionRequested():
                     break
                 self.file_ready.emit(token, resolved)

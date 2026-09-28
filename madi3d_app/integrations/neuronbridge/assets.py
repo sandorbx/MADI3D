@@ -72,6 +72,54 @@ def _choose_asset(options, candidates=()):
         asset_options=options,
     )
 
+def _asset_matches_selection(selected, candidate):
+    if selected is None:
+        return True
+    if selected.asset_type and candidate.asset_type != selected.asset_type:
+        return False
+    if selected.asset_id and candidate.asset_id != selected.asset_id:
+        return False
+    if selected.url and candidate.url and candidate.url != selected.url:
+        return False
+    if (selected.checksum_sha256 and candidate.checksum_sha256
+            and selected.checksum_sha256 != candidate.checksum_sha256):
+        return False
+    return True
+
+
+def _merge_selected_asset(selected, candidate):
+    if selected is None:
+        return candidate
+    return replace(
+        candidate,
+        asset_type=selected.asset_type or candidate.asset_type,
+        asset_id=selected.asset_id or candidate.asset_id,
+        checksum_sha256=selected.checksum_sha256 or candidate.checksum_sha256,
+    )
+
+
+def _same_selected_asset(expected, actual):
+    if expected is None or actual is None:
+        return expected is actual
+    if expected.asset_type != actual.asset_type:
+        return False
+    if expected.asset_id:
+        if expected.asset_id != actual.asset_id:
+            return False
+    elif expected.url:
+        if expected.url != actual.url:
+            return False
+    elif expected.checksum_sha256:
+        if expected.checksum_sha256 != actual.checksum_sha256:
+            return False
+    else:
+        return False
+    return not (
+        expected.checksum_sha256 and actual.checksum_sha256
+        and expected.checksum_sha256 != actual.checksum_sha256
+    )
+
+
 
 def _json_metadata(value):
     if isinstance(value, Enum):
@@ -166,11 +214,11 @@ def lm_stack_channel(remote, matches=()):
     # Earlier public results retained the API response but not its index base.
     # Read the indexed match evidence, including for already-saved projects.
     for match in matches:
-        public = next((p.value for p in match.session.parameters if p.name == "public_api_evidence"), None)
+        public = match.session.external_evidence if match.session.source_kind == "precomputed" else None
         if not public:
             continue
         try:
-            image = public["result_response"]["payload"]["results"][match.occurrence.row_index]["image"]
+            image = match.session.evidence_for(match.occurrence)["image"]
             if str(image.get("id")) == match.occurrence.target.image.image_id:
                 images.append(image)
         except (KeyError, IndexError, TypeError, AttributeError):
@@ -216,17 +264,26 @@ def validate_resolution_request(remote):
 
 
 def resolve_source(remote, nb, *, cancel_check=None):
-    """Require one image and one requested geometry asset; report every ambiguity."""
+    """Resolve the exact retained asset choice; never substitute another format."""
     _check_cancel(cancel_check)
     validate_resolution_request(remote)
     source = remote.source
+    selected = remote.selected_asset
     supplied = [a for a in source.assets if a.url and a.asset_type in ASSET_SUFFIXES]
+    if selected is not None:
+        supplied = [
+            asset for asset in supplied
+            if _asset_matches_selection(selected, asset)
+        ]
     if supplied:
         options = []
         for asset in supplied:
             if (source.kind == "lm") != (asset.asset_type == "VisuallyLosslessStack"):
                 raise ResolutionError("The supplied asset type conflicts with the target type.")
-            options.append(_resolved_asset(remote, asset, remote.data_version, {}))
+            options.append(_resolved_asset(
+                remote, _merge_selected_asset(selected, asset),
+                remote.data_version, {},
+            ))
         return _choose_asset(options)
     else:
         name = source.biological.neuron_id if source.kind == "em" else source.biological.line_name
@@ -256,10 +313,11 @@ def resolve_source(remote, nb, *, cancel_check=None):
         supported = ("VisuallyLosslessStack",) if source.kind == "lm" else ("AlignedBodyOBJ", "AlignedBodySWC")
         files = api.get("files", {})
         available = [key for key in supported if files.get(key) and (
-            not source.assets or any(
+            (selected is None or selected.asset_type == key)
+            and (not source.assets or any(
                 a.asset_type == key or (a.asset_type is None and a.asset_id in (None, files[key]))
                 for a in source.assets
-            )
+            ))
         )]
         version = getattr(nb, "version", remote.data_version)
         if remote.data_version and version != remote.data_version:
@@ -283,12 +341,20 @@ def resolve_source(remote, nb, *, cancel_check=None):
                 raise ResolutionError("Multiple identities describe the same asset; resolve the conflicting evidence.",
                                       status="ambiguous", candidates=[api])
             asset = evidence[0] if evidence else AssetIdentity()
+            if selected is not None:
+                if selected.asset_id and selected.asset_id != asset_id:
+                    raise ResolutionError(
+                        "The recorded selected asset is not available in this data release.",
+                        candidates=[api],
+                    )
+                asset = _merge_selected_asset(selected, asset)
             if asset.asset_id and asset.asset_id != asset_id:
                 raise ResolutionError("The resolved asset does not match the supplied asset ID.", candidates=[api])
             url = nb._get_files_url(api["files"], asset_type)
             if not url:
                 continue
-            if asset.url and asset.url != url:
+            if asset.url and asset.url != url and not (
+                    asset.asset_id and asset.asset_id == asset_id):
                 raise ResolutionError("The resolved asset does not match the supplied URL.", candidates=[api])
             options.append(_resolved_asset(remote, replace(
                 asset, asset_type=asset_type, asset_id=asset_id, url=url,
@@ -326,25 +392,61 @@ def candidate_options(remote, candidate):
     return tuple(options)
 
 
-def fetch_source(remote, client_factory, *, cancel_check=None, cache_root=None, download=stream_download, on_resolved=None):
-    """Called only for explicit retrieval. Missing local data never erases evidence."""
+def fetch_source(remote, client_factory, *, cancel_check=None, cache_root=None,
+                 download=stream_download, on_resolved=None):
+    """Retrieve one exact asset, reusing a verified cache before any network access."""
     _check_cancel(cancel_check)
-    if not remote.resolution:
-        validate_resolution_request(remote)
-        direct = any(a.url and a.asset_type in ASSET_SUFFIXES for a in remote.source.assets)
-        nb = None if direct else client_factory(remote.data_version)
-        _check_cancel(cancel_check)
-        remote = resolve_source(remote, nb, cancel_check=cancel_check)
-    if on_resolved is not None:
-        on_resolved(remote)
+    root = (Path(cache_root).expanduser() if cache_root is not None
+            else neuronbridge_cache_root())
+
     checksum = remote.expected_sha256
-    existing = remote.cached_path()
-    if existing and cached_file_ready(existing, expected_sha256=checksum, cancel_check=cancel_check):
+    existing = (remote.cached_path(cache_root=root)
+                if remote.resolution else None)
+    if existing and cached_file_ready(
+            existing, expected_sha256=checksum, cancel_check=cancel_check):
         _check_cancel(cancel_check)
         return _record_retrieval(remote, existing, checksum, cancel_check)
-    root = Path(cache_root) if cache_root is not None else neuronbridge_cache_root()
+
+    if not remote.resolution.get("url"):
+        retained = dict(remote.resolution)
+        retained_selection = remote.selected_asset
+        validate_resolution_request(remote)
+        supplied = [
+            asset for asset in remote.source.assets
+            if asset.url and asset.asset_type in ASSET_SUFFIXES
+            and _asset_matches_selection(retained_selection, asset)
+        ]
+        nb = None if supplied else client_factory(remote.data_version)
+        _check_cancel(cancel_check)
+        resolved = resolve_source(remote, nb, cancel_check=cancel_check)
+        if retained_selection is not None and not _same_selected_asset(
+                retained_selection, resolved.selected_asset):
+            raise ResolutionError(
+                "Resolved asset identity differs from the recorded selection; "
+                "the cached or remote source was not loaded."
+            )
+        if retained:
+            resolution = dict(resolved.resolution)
+            for key in ("retrieved_sha256", "retrieved_at", "provider_verification",
+                        "user_resolution"):
+                if key in retained:
+                    resolution[key] = copy.deepcopy(retained[key])
+            resolved = replace(resolved, resolution=resolution)
+        remote = resolved
+
+    if on_resolved is not None:
+        on_resolved(remote)
+
+    checksum = remote.expected_sha256
+    existing = remote.cached_path(cache_root=root)
+    if existing and cached_file_ready(
+            existing, expected_sha256=checksum, cancel_check=cancel_check):
+        _check_cancel(cancel_check)
+        return _record_retrieval(remote, existing, checksum, cancel_check)
+
     destination = (root / remote.resolution["cache_filename"]).resolve()
-    if existing != destination and cached_file_ready(destination, expected_sha256=checksum, cancel_check=cancel_check):
+    if existing != destination and cached_file_ready(
+            destination, expected_sha256=checksum, cancel_check=cancel_check):
         _check_cancel(cancel_check)
         return _record_retrieval(remote, destination, checksum, cancel_check)
     kwargs = {"cancel_check": cancel_check}
@@ -352,10 +454,12 @@ def fetch_source(remote, client_factory, *, cancel_check=None, cache_root=None, 
         kwargs["expected_sha256"] = checksum
     download(remote.resolution["url"], destination, **kwargs)
     _check_cancel(cancel_check)
-    return _record_retrieval(remote, destination, checksum, cancel_check)
+    return _record_retrieval(
+        remote, destination, checksum, cancel_check, downloaded=True
+    )
 
 
-def _record_retrieval(remote, path, checksum, cancel_check):
+def _record_retrieval(remote, path, checksum, cancel_check, *, downloaded=False):
     if checksum is None:
         digest = hashlib.sha256()
         with Path(path).open("rb") as handle:
@@ -366,8 +470,44 @@ def _record_retrieval(remote, path, checksum, cancel_check):
     _check_cancel(cancel_check)
     resolution = dict(remote.resolution)
     resolution["retrieved_sha256"] = checksum
-    resolution.setdefault("retrieved_at", datetime.now(timezone.utc).isoformat())
+    if downloaded:
+        resolution.setdefault("retrieved_at", datetime.now(timezone.utc).isoformat())
+    provider_checksum = remote.selected_asset.checksum_sha256
+    if provider_checksum:
+        resolution["provider_verification"] = {"checksum_sha256": provider_checksum, "status": "matched"}
     return replace(remote, local_path=str(path), resolution=resolution)
+
+
+def bind_remote_volume_plan(batch, remote):
+    """Bind a newly inspected cache file to its durable external locator.
+
+    This runs before publication; local loader requests keep their runtime path.
+    Existing user-file and generated-output backings are never modified here.
+    """
+    batch = copy.deepcopy(batch)
+    locator = remote.resolution["url"]
+    for plan in batch.publication_plans:
+        backings = (plan.backing_source,) if hasattr(plan, "backing_source") else plan.backing_sources
+        for backing in backings:
+            bind_remote_backing(backing, locator, remote.local_path)
+    return batch
+
+
+def bind_remote_backing(backing, locator, cache_path):
+    """Remove disposable cache/transport locators from durable backing state."""
+    backing.remote_locator = ""
+    for field in ("primary_path", "alternate_path"):
+        if getattr(backing, field) == cache_path:
+            setattr(backing, field, "")
+    metadata = backing.microscopy_source_metadata
+    if metadata is not None:
+        backing.microscopy_source_metadata = replace(
+            metadata,
+            reported_primary_source_path=("" if metadata.reported_primary_source_path in {cache_path, locator}
+                                          else metadata.reported_primary_source_path),
+            source_members=tuple(replace(member, path="") if member.path in {cache_path, locator} else member
+                                 for member in metadata.source_members),
+        )
 
 
 class AssetMetadataClient:

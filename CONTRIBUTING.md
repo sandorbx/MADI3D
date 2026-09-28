@@ -30,11 +30,16 @@ Contributions must:
 - keep algorithms independent from GUI state where practical;
 - preserve cross-platform behavior on Windows, macOS Intel, macOS Apple
   Silicon, and Ubuntu;
-- include focused tests for behavior that can be tested automatically;
+- include focused regression tests for scientific/data meaning, hidden correctness,
+  persistence, destructive actions and affected failure/cancellation behavior;
+  low-risk cosmetic edits need automated tests only when useful and stable;
 - avoid compatibility wrappers, duplicate replacement files, versioned source
   copies, hidden legacy routing, and other avoidable maintenance debt; and
 - document externally licensed code, data, assets, or binaries before they are
   introduced.
+
+Follow the [General development policy](docs/General%20MADI3D%20development%20instructions.txt)
+for risk-based validation and [AGENTS.md](AGENTS.md) for execution/navigation.
 
 The project maintainers decide whether and when a contribution is accepted,
 modified, postponed, rejected, or designated for open-source publication.

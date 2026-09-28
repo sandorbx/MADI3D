@@ -146,11 +146,57 @@
       "filename": "SDL2-2.28.4.tar.gz",
       "size": 7344208,
       "sha256": "888b8c39f36ae2035d023d1b14ab0191eb1d26403c3cf4d4d5ede30e66a4942c"
+    },
+    {
+      "component": "pylibCZIrw",
+      "owner": "pylibczirw",
+      "platforms": [
+        "Windows-x64",
+        "Linux-x64",
+        "macOS-arm64",
+        "macOS-x64"
+      ],
+      "filename": "pylibczirw-6.1.0.tar.gz",
+      "url": "https://files.pythonhosted.org/packages/be/67/c294b4595787d3233fee487815a5a86c2a2159eb2947c028e8409d8763d5/pylibczirw-6.1.0.tar.gz",
+      "size": 6101249,
+      "sha256": "84df00d0fd7e631fac4f7a6d092de9e46b62f8713a583be939fb5d78af5b0b30",
+      "revision": "3fd66f681d82f5781e404fa56d783e5b8b74684f"
+    },
+    {
+      "component": "zstd-CZI",
+      "owner": "pylibczirw",
+      "platforms": [
+        "Windows-x64",
+        "Linux-x64",
+        "macOS-arm64",
+        "macOS-x64"
+      ],
+      "filename": "zstd-f8745da6ff1ad1e7bab384bd1f9d742439278e99.tar.gz",
+      "url": "https://codeload.github.com/facebook/zstd/tar.gz/f8745da6ff1ad1e7bab384bd1f9d742439278e99",
+      "size": 2453329,
+      "sha256": "4b0bd1f0cfb25e61b9103c35f27395530ff5b4c0d2513a00fd745849e85ea52c",
+      "revision": "f8745da6ff1ad1e7bab384bd1f9d742439278e99"
+    },
+    {
+      "component": "Eigen3-CZI",
+      "owner": "pylibczirw",
+      "platforms": [
+        "Windows-x64",
+        "Linux-x64",
+        "macOS-arm64",
+        "macOS-x64"
+      ],
+      "filename": "eigen-3147391d946bb4b6c68edd901f2add6ac1f31f8c.tar.gz",
+      "url": "https://github.com/eigen-mirror/eigen/archive/3147391d946bb4b6c68edd901f2add6ac1f31f8c.tar.gz",
+      "size": 2710482,
+      "sha256": "0c8c490764f9c2a793133491adca0cd073b73e0bde965c68cbe58d91b5ed4261",
+      "revision": "3147391d946bb4b6c68edd901f2add6ac1f31f8c"
     }
   ],
   "source_required_owners": [
     "pygame",
-    "opencv-python-headless"
+    "opencv-python-headless",
+    "pylibczirw"
   ],
   "native_provenance": [],
   "local_materials": [
@@ -175,7 +221,16 @@
     "MADI3D.spec",
     "madi3d_version.py",
     "docs/third-party-source-delivery.md",
-    "scripts/build_pygame.py"
+    "scripts/build_pygame.py",
+    "scripts/build_czi.py",
+    "scripts/patches/czi/pylibczirw-6.1.0-subblock-inspection.patch",
+    "constraints-build.txt",
+    ".github/workflows/build-native-dependencies.yml",
+    ".github/workflows/czi-macos-wheel.yml",
+    "LICENSES/pylibCZIrw-NOTICE.md",
+    "LICENSES/libCZI-LGPL-3.0.txt",
+    "LICENSES/libCZI-THIRD-PARTY-LICENSES.txt",
+    "LICENSES/pybind11-LICENSE.txt"
   ],
   "investigations": [
     {
@@ -417,6 +472,24 @@
         "ffmpeg-8.1.2.tar.xz"
       ],
       "rationale": "Controlled source build; actual source inputs, build configuration and native hashes are retained and checked."
+    },
+    {
+      "owner": "pylibczirw",
+      "platforms": [
+        "Windows-x64",
+        "Linux-x64",
+        "macOS-arm64",
+        "macOS-x64"
+      ],
+      "recipe": "scripts/build_czi.py",
+      "source_archives": [
+        "pylibczirw-6.1.0.tar.gz",
+        "zstd-f8745da6ff1ad1e7bab384bd1f9d742439278e99.tar.gz",
+        "eigen-3147391d946bb4b6c68edd901f2add6ac1f31f8c.tar.gz"
+      ],
+      "source_patch_sha256": "abf1c19048bb8492ca89942edd68e6a93e76b9f4e649fc087475ea7e8da2c724",
+      "patched_source_artifact_sha256": "2f517b781dba803cef29efb89cf6357b03440bdcdd64a78107bebdf95b6cf194",
+      "rationale": "Controlled, patched source build on every supported platform. The exact upstream sdist, bundled libCZI and pybind11 source, pinned zstd source, reviewed patch, build receipt, and native input hashes accompany the application."
     }
   ]
 }

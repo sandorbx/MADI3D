@@ -7,6 +7,7 @@ import hashlib
 import io
 import math
 import re
+from dataclasses import replace
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -242,6 +243,7 @@ def parse_neuronbridge_csv(
     session = SearchSession(
         session_id=session_id if session_id is not None else str(uuid4()),
         source_kind="imported_csv",
+        context={"backend": "csv-import"},
         neuronbridge_data_version=neuronbridge_data_version,
         query_reference=query_reference, query_source=query_source, parameters=parameters,
         csv_provenance=CSVProvenance(
@@ -255,7 +257,13 @@ def parse_neuronbridge_csv(
     headers = ()
 
     def result(complete: bool) -> SearchResults:
-        return SearchResults(session, tuple(occurrences), tuple(diagnostics), headers, data, complete)
+        completed = replace(session, diagnostics=tuple(diagnostics), context={
+            **session.context, "completed_at": datetime.now(timezone.utc).isoformat(),
+            "counts": {"examined": None, "matched": None, "retained": len(occurrences)},
+            "results_truncated": None,
+        })
+        return SearchResults(completed, tuple(occurrences), csv_headers=headers, csv_bytes=data,
+                             csv_parse_complete=complete)
 
     try:
         canonical_encoding = codecs.lookup(chosen_encoding).name

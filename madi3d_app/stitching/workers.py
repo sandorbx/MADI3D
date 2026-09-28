@@ -14,15 +14,20 @@ class StitchRegistrationWorker(QtCore.QThread):
     completed = QtCore.Signal(object)
     failed = QtCore.Signal(str)
 
-    def __init__(self, tiles, settings, mode, parent=None, *, reuse_result=None):
+    def __init__(self, tiles, settings, mode, parent=None, *, reuse_result=None,
+                 scientific_capture=None):
         super().__init__(parent)
         self._tiles = tiles
         self._settings = dict(settings)
         self._mode = str(mode)
         self._reuse_result = reuse_result
+        self.scientific_capture = scientific_capture
         self.was_cancelled = False
 
     def run(self):
+        def failed(message):
+            self.failed.emit(message)
+
         def cancelled():
             self.was_cancelled = self.was_cancelled or self.isInterruptionRequested()
             return self.was_cancelled
@@ -33,7 +38,7 @@ class StitchRegistrationWorker(QtCore.QThread):
             progress_callback=self.progress.emit,
             cancelled=cancelled,
             completed_callback=self.completed.emit,
-            failed_callback=self.failed.emit,
+            failed_callback=failed,
             reuse_result=self._reuse_result,
         ).run()
 
@@ -74,6 +79,8 @@ class StitchFusionWorker(QtCore.QThread):
         bundle_writer_callback=None,
         ffmpeg_executable=None,
         parent=None,
+        *,
+        supporting_operations=(),
     ):
         super().__init__(parent)
         self._operation_arguments = {
@@ -85,15 +92,21 @@ class StitchFusionWorker(QtCore.QThread):
             "writer_callback": writer_callback,
             "bundle_writer_callback": bundle_writer_callback,
             "ffmpeg_executable": ffmpeg_executable,
+            "supporting_operations": tuple(supporting_operations),
         }
 
     def run(self):
+        def failed(message):
+            self.failed.emit(message)
+        def succeeded(result):
+            self.completed.emit(result)
+
         StitchFusionOperation(
             **self._operation_arguments,
             progress_callback=self.progress.emit,
             cancelled=self.isInterruptionRequested,
-            completed_callback=self.completed.emit,
-            failed_callback=self.failed.emit,
+            completed_callback=succeeded,
+            failed_callback=failed,
         ).run()
 
 

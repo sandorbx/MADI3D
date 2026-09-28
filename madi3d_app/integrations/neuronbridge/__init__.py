@@ -10,6 +10,7 @@ from .records import (
     Diagnostic,
     ImageIdentity,
     MatchOccurrence,
+    HitMetric,
     NeuronBridgeRecordError,
     ResultField,
     SearchResults,
@@ -20,7 +21,7 @@ from .records import (
 
 __all__ = [
     "SCHEMA_VERSION", "AssetIdentity", "BiologicalIdentity", "ChannelSelection",
-    "CSVProvenance", "Diagnostic", "ImageIdentity", "MatchOccurrence",
+    "CSVProvenance", "Diagnostic", "ImageIdentity", "MatchOccurrence", "HitMetric",
     "NeuronBridgeRecordError", "ResultField", "SearchResults", "SearchSession",
     "SourceIdentity", "SourceParameter", "parse_neuronbridge_csv", "read_neuronbridge_csv",
 ]

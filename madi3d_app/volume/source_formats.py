@@ -46,6 +46,7 @@ class VolumeSourceFormat:
     source_replacement_checks_channels: bool = False
     source_replacement_reason: str = ""
     prefer_model_decode_contract: bool = False
+    requires_typed_decode_contract: bool = False
 
 
 _MIB = 1024**2
@@ -115,6 +116,7 @@ VOLUME_SOURCE_FORMATS = (
             "is unsupported."
         ),
         prefer_model_decode_contract=True,
+        requires_typed_decode_contract=True,
     ),
     VolumeSourceFormat(
         key="oib",
@@ -130,6 +132,7 @@ VOLUME_SOURCE_FORMATS = (
             "is unsupported."
         ),
         prefer_model_decode_contract=True,
+        requires_typed_decode_contract=True,
     ),
     VolumeSourceFormat(
         key="lif",
@@ -145,6 +148,39 @@ VOLUME_SOURCE_FORMATS = (
             "MADI3D output format instead of replacing the source file."
         ),
         prefer_model_decode_contract=True,
+        requires_typed_decode_contract=True,
+    ),
+    VolumeSourceFormat(
+        key="nd2",
+        suffixes=(".nd2",),
+        reader_mode="nikon",
+        container_formats=("nikon-nd2",),
+        reader_dependencies=("nd2",),
+        decode_memory_factor=4.0,
+        decode_memory_floor_bytes=384 * _MIB,
+        source_replacement_supported=False,
+        source_replacement_reason=(
+            "Nikon ND2 sources are read-only; use Save As or export to a supported "
+            "MADI3D format instead of replacing the source file."
+        ),
+        prefer_model_decode_contract=True,
+        requires_typed_decode_contract=True,
+    ),
+    VolumeSourceFormat(
+        key="czi",
+        suffixes=(".czi",),
+        reader_mode="zeiss-czi",
+        container_formats=("zeiss-czi",),
+        reader_dependencies=("pylibCZIrw",),
+        decode_memory_factor=4.0,
+        decode_memory_floor_bytes=384 * _MIB,
+        source_replacement_supported=False,
+        source_replacement_reason=(
+            "ZEISS CZI sources are read-only; use Save As or export to a supported "
+            "MADI3D format instead of replacing the source file."
+        ),
+        prefer_model_decode_contract=True,
+        requires_typed_decode_contract=True,
     ),
     VolumeSourceFormat(
         key="h5j",
@@ -264,6 +300,16 @@ def volume_prefers_model_decode_contract(
     )
 
 
+def volume_requires_typed_decode_contract(
+    path: os.PathLike[str] | str | None,
+) -> bool:
+    """Whether this source family has no safe untyped decoder route."""
+    source_format = volume_source_format(path)
+    return bool(
+        source_format is not None and source_format.requires_typed_decode_contract
+    )
+
+
 def estimated_volume_decode_bytes(
     path: os.PathLike[str] | str,
     *,
@@ -276,6 +322,10 @@ def estimated_volume_decode_bytes(
             file_size_bytes = 256 * _MIB
     file_size_bytes = max(1, int(file_size_bytes))
     source_format = volume_source_format(path)
+    if source_format is not None and source_format.key == "czi":
+        # Compressed CZI size does not bound the decoded volume or native plane.
+        # Typed T/Z/Y/X sizes are checked by the import and decode resource guards.
+        return int(source_format.decode_memory_floor_bytes)
     if source_format is None:
         factor, floor = 6.0, 512 * _MIB
     else:
@@ -338,6 +388,8 @@ __all__ = [
     "SourceBundleError",
     "estimated_volume_decode_bytes",
     "is_supported_volume_path",
+    "nifti_runtime_time_unit",
+    "nifti_time_unit",
     "oif_companion_source",
     "recovery_path_supports_container",
     "source_error_container_format",
@@ -347,11 +399,20 @@ __all__ = [
     "volume_file_globs",
     "volume_path_suffix",
     "volume_prefers_model_decode_contract",
+    "volume_requires_typed_decode_contract",
     "volume_reader_dependency_modules",
     "volume_reader_mode",
     "volume_source_format",
     "volume_source_format_for_container",
 ]
+
+
+def nifti_runtime_time_unit(value) -> str:
+    """Map absent NIfTI timing units to explicit frame-index timing."""
+    unit = str(value or "").strip()
+    if unit.casefold() in {"", "none", "unknown"}:
+        return "frame"
+    return unit
 
 
 def nifti_time_unit(value):

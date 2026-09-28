@@ -1722,6 +1722,21 @@
       },
       "native_evidence": {},
       "status": "inspected: only selected MADI3D codec extensions are frozen"
+    },
+    {
+      "filename": "pylibczirw-6.1.0-cp311-cp311-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/15/b5/22d4bfbcb5f51cbf229635de3fdc7dee3a56a096f3f2d02a08a46402b9c9/pylibczirw-6.1.0-cp311-cp311-win_amd64.whl",
+      "size": 1387521,
+      "sha256": "7b604897d3262560598c3d63b60ba7f2b8927c509525d7d9f2bcc7b66c8f9d12",
+      "native_files": [
+        "_pylibCZIrw.cp311-win_amd64.pyd"
+      ],
+      "native_sha256": {
+        "_pylibCZIrw.cp311-win_amd64.pyd": "c78f9ea582d2c71e4cb3c3c68d97e06b855755b64d5f5b2625158250d113e315"
+      },
+      "native_evidence": {},
+      "reviewed_at": "2026-09-28",
+      "status": "inspected: official ZEISS wheel; native CZI round-trip passed locally"
     }
   ],
   "native_builds": [

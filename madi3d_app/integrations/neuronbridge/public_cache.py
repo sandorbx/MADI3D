@@ -23,6 +23,7 @@ class PublicSnapshotCache:
     def save(self, value, kind, cancel=None):
         if kind == "results":
             parsed = SearchResults.from_dict(value)
+            value = parsed.to_dict()
             key = parsed.session.session_id
             label = f"{parsed.session.query_reference} — {parsed.session.neuronbridge_data_version}"
         elif kind == "lookup":

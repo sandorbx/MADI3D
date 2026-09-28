@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import time
 import tempfile
+from threading import Event, Lock
 from urllib.parse import quote, unquote, urlsplit
 
 import requests
@@ -91,6 +92,33 @@ class ObjectMissing(FileNotFoundError):
     pass
 
 
+class CancellationEvent(Event):
+    """Event that can also wake resources blocked outside Python checkpoints."""
+
+    def __init__(self):
+        super().__init__()
+        self._callback_lock = Lock()
+        self._callbacks = set()
+
+    def set(self):
+        with self._callback_lock:
+            super().set()
+            callbacks = tuple(self._callbacks)
+        for callback in callbacks:
+            callback()
+
+    def add_callback(self, callback):
+        with self._callback_lock:
+            if not self.is_set():
+                self._callbacks.add(callback)
+                return
+        callback()
+
+    def remove_callback(self, callback):
+        with self._callback_lock:
+            self._callbacks.discard(callback)
+
+
 class BulkTransport:
     """Serial GETs; each object has a byte limit, 90s deadline and two retries.
 
@@ -99,13 +127,47 @@ class BulkTransport:
     """
 
     def __init__(self, cancel=None, *, session=None):
-        from threading import Event
         self.cancel = cancel or Event()
         self.session = session or requests.Session()
         self.session.trust_env = False
+        self._response_lock = Lock()
+        self._active_response = None
+        self._cancel_callback = self._abort_active_request
+        add_callback = getattr(self.cancel, "add_callback", None)
+        if add_callback is not None:
+            add_callback(self._cancel_callback)
 
     def close(self):
+        remove_callback = getattr(self.cancel, "remove_callback", None)
+        if remove_callback is not None:
+            remove_callback(self._cancel_callback)
+        self._abort_active_request()
         self.session.close()
+
+    def _abort_active_request(self):
+        with self._response_lock:
+            response = self._active_response
+        if response is not None:
+            shutdown = getattr(response.raw, "shutdown", None)
+            try:
+                if shutdown is not None:
+                    shutdown()
+                else:
+                    response.close()
+            except (OSError, RuntimeError, ValueError):
+                # The worker may have released the connection concurrently.
+                pass
+
+    def _activate(self, response):
+        with self._response_lock:
+            self._active_response = response
+        if self.cancel.is_set():
+            self._abort_active_request()
+
+    def _deactivate(self, response):
+        with self._response_lock:
+            if self._active_response is response:
+                self._active_response = None
 
     def download(self, url, path, *, max_bytes):
         bulk_url(url)
@@ -124,57 +186,63 @@ class BulkTransport:
                 check()
                 delay = 2 ** attempt
                 try:
-                    with self.session.get(url, stream=True, timeout=(5, 5), allow_redirects=False,
-                                          headers={"Accept-Encoding": "identity"}) as response:
-                        status = response.status_code
-                        if status == 404:
-                            raise ObjectMissing(f"Public search object is missing: {url}")
-                        if status in (429, 500, 502, 503, 504):
-                            retry = response.headers.get("Retry-After")
-                            if retry:
-                                try:
-                                    delay = float(retry)
-                                except ValueError:
-                                    delay = (parsedate_to_datetime(retry) - datetime.now(timezone.utc)).total_seconds()
-                            if not math.isfinite(delay) or not 0 <= delay <= 15 or attempt == 2:
-                                raise OSError(f"HTTP {status}; bounded retry limit reached. Resume later.")
-                        elif status != 200:
-                            raise OSError(f"Public object returned HTTP {status}: {url}")
-                        else:
-                            if response.headers.get("Content-Encoding", "identity").lower() != "identity":
-                                raise ValueError("Compressed HTTP transfer is unsupported for search objects.")
-                            length = response.headers.get("Content-Length")
-                            if length is not None and (not length.isdigit() or int(length) > max_bytes):
-                                raise ValueError("Object exceeds its bounded download size.")
-                            h, size = hashlib.sha256(), 0
-                            with partial.open("wb") as stream:
-                                while True:
-                                    check()
-                                    chunk = response.raw.read1(64 * 1024, decode_content=False)
-                                    check()
-                                    if not chunk:
-                                        break
-                                    size += len(chunk)
-                                    if size > max_bytes:
-                                        raise ValueError("Object exceeds its bounded download size.")
-                                    stream.write(chunk)
-                                    h.update(chunk)
-                                stream.flush()
-                                os.fsync(stream.fileno())
-                            if length is not None and size != int(length):
-                                raise OSError("Truncated object; resume will restart it.")
+                    response = self.session.get(url, stream=True, timeout=(5, 5), allow_redirects=False,
+                                                headers={"Accept-Encoding": "identity"})
+                    self._activate(response)
+                    try:
+                        with response:
                             check()
-                            evidence = {"url": url, "retrieved_at": now(), "size": size,
-                                        "sha256": h.hexdigest(), "hash_authority": "locally_observed",
-                                        "etag": response.headers.get("ETag"),
-                                        "last_modified": response.headers.get("Last-Modified"),
-                                        "provider_checksum_sha256": response.headers.get("x-amz-checksum-sha256"),
-                                        "provider_checksum_type": response.headers.get("x-amz-checksum-type")}
-                            if evidence["provider_checksum_sha256"] and evidence["provider_checksum_type"] == "FULL_OBJECT":
-                                if base64.b64encode(h.digest()).decode("ascii") != evidence["provider_checksum_sha256"]:
-                                    raise ValueError("Provider whole-object SHA-256 verification failed.")
-                            os.replace(partial, path)
-                            return evidence
+                            status = response.status_code
+                            if status == 404:
+                                raise ObjectMissing(f"Public search object is missing: {url}")
+                            if status in (429, 500, 502, 503, 504):
+                                retry = response.headers.get("Retry-After")
+                                if retry:
+                                    try:
+                                        delay = float(retry)
+                                    except ValueError:
+                                        delay = (parsedate_to_datetime(retry) - datetime.now(timezone.utc)).total_seconds()
+                                if not math.isfinite(delay) or not 0 <= delay <= 15 or attempt == 2:
+                                    raise OSError(f"HTTP {status}; bounded retry limit reached. Resume later.")
+                            elif status != 200:
+                                raise OSError(f"Public object returned HTTP {status}: {url}")
+                            else:
+                                if response.headers.get("Content-Encoding", "identity").lower() != "identity":
+                                    raise ValueError("Compressed HTTP transfer is unsupported for search objects.")
+                                length = response.headers.get("Content-Length")
+                                if length is not None and (not length.isdigit() or int(length) > max_bytes):
+                                    raise ValueError("Object exceeds its bounded download size.")
+                                h, size = hashlib.sha256(), 0
+                                with partial.open("wb") as stream:
+                                    while True:
+                                        check()
+                                        chunk = response.raw.read1(64 * 1024, decode_content=False)
+                                        check()
+                                        if not chunk:
+                                            break
+                                        size += len(chunk)
+                                        if size > max_bytes:
+                                            raise ValueError("Object exceeds its bounded download size.")
+                                        stream.write(chunk)
+                                        h.update(chunk)
+                                    stream.flush()
+                                    os.fsync(stream.fileno())
+                                if length is not None and size != int(length):
+                                    raise OSError("Truncated object; resume will restart it.")
+                                check()
+                                evidence = {"url": url, "retrieved_at": now(), "size": size,
+                                            "sha256": h.hexdigest(), "hash_authority": "locally_observed",
+                                            "etag": response.headers.get("ETag"),
+                                            "last_modified": response.headers.get("Last-Modified"),
+                                            "provider_checksum_sha256": response.headers.get("x-amz-checksum-sha256"),
+                                            "provider_checksum_type": response.headers.get("x-amz-checksum-type")}
+                                if evidence["provider_checksum_sha256"] and evidence["provider_checksum_type"] == "FULL_OBJECT":
+                                    if base64.b64encode(h.digest()).decode("ascii") != evidence["provider_checksum_sha256"]:
+                                        raise ValueError("Provider whole-object SHA-256 verification failed.")
+                                os.replace(partial, path)
+                                return evidence
+                    finally:
+                        self._deactivate(response)
                 except (requests.RequestException, Urllib3HTTPError) as exc:
                     if attempt == 2:
                         raise OSError("Download failed after three attempts. Resume later.") from exc

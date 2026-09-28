@@ -24,8 +24,74 @@ from madi3d_app.volume.geometry import (
 )
 
 
-STITCHING_JOB_SCHEMA_VERSION = "MADI3D_stitching_job_v2"
-STITCHING_WORKSPACE_SCHEMA_VERSION = "MADI3D_stitching_workspace_v1"
+STITCHING_JOB_SCHEMA_VERSION = "MADI3D_stitching_job_v3"
+STITCHING_WORKSPACE_SCHEMA_VERSION = "MADI3D_stitching_workspace_v2"
+UNAVAILABLE_STITCHING_RESULT_CODE = "unavailable-result"
+_LEGACY_STITCHING_JOB_SCHEMAS = {"MADI3D_stitching_job_v2"}
+_LEGACY_STITCHING_WORKSPACE_SCHEMAS = {"MADI3D_stitching_workspace_v1"}
+
+_REGISTRATION_RESULT_FIELDS = {
+    "assumptions",
+    "base_matrices_by_source",
+    "channel_grid_revisions",
+    "components",
+    "corrections",
+    "edges",
+    "input_pixel_fingerprints",
+    "initial_layout",
+    "mode",
+    "mosaic_corrections",
+    "mosaic_geometry",
+    "pose_graph_qc",
+    "registration_channel_key",
+    "registration_channel_label",
+    "registration_inputs",
+    "rejections",
+    "requested_mode",
+    "search_coverage",
+    "settings",
+    "target_matrices_by_source",
+    "tile_ids",
+    "translation_acceptance_contract",
+    "warnings",
+}
+_REGISTRATION_RUNTIME_SETTING_FIELDS = {
+    "initial_layout",
+    "preview_cache_mb",
+    "registration_channel_key",
+    "registration_channel_label",
+    "registration_memory_mb",
+    "resolved_worker_count",
+    "worker_count",
+    "worker_resolution",
+}
+_INITIAL_LAYOUT_CONVENIENCE_FIELDS = {
+    "anchor_display_name",
+    "kind",
+    "label",
+    "partial",
+    "requires_review",
+    "summary",
+}
+_WORKSPACE_RESULT_OVERRIDE_FIELDS = {
+    "project_revision",
+    "user_decision",
+}
+_WORKSPACE_RESOURCE_SETTING_FIELDS = {
+    "chunk_depth",
+    "h5j_conversion_confirmed",
+    "registration_memory_mb",
+    "worker_count",
+}
+_MATERIAL_FUSION_PARAMETER_FIELDS = {
+    "custom_spacing",
+    "fusion_mode",
+    "interpolation",
+    "output_dtype",
+    "output_format",
+    "padding",
+    "spacing_mode",
+}
 
 
 def _json_value(value):
@@ -162,22 +228,44 @@ def _float_vector(value, length, field_name, default):
     return tuple(float(component) for component in array)
 
 
-_POSE_DEPENDENT_GEOMETRY_FIELDS = {
-    "effective_support",
-    "index_to_world_affine",
-    "pose",
-}
+_STITCHING_NUMERICAL_GRID_FIELDS = (
+    "dimensions",
+    "spacing",
+    "origin",
+    "direction",
+    "physical_units",
+)
 
 
-def stitching_grid_revision(working_geometry):
-    """Return a stable revision for a channel-local grid, excluding scene pose."""
+def _stitching_numerical_grid_payload(working_geometry):
+    """Return only grid fields that can change stitching calculations."""
     if not isinstance(working_geometry, Mapping) or not working_geometry:
         raise ValueError("A stitching source requires exact working geometry.")
     payload = {
-        str(key): _json_value(value)
-        for key, value in working_geometry.items()
-        if str(key) not in _POSE_DEPENDENT_GEOMETRY_FIELDS
+        field: _json_value(working_geometry[field])
+        for field in _STITCHING_NUMERICAL_GRID_FIELDS
+        if field in working_geometry
     }
+    if not payload:
+        raise ValueError("A stitching source requires numerical grid fields.")
+    return payload
+
+
+def stitching_grid_mismatches(reference_geometry, candidate_geometry):
+    """Return operation-relevant numerical grid fields that differ."""
+    reference = _stitching_numerical_grid_payload(reference_geometry)
+    candidate = _stitching_numerical_grid_payload(candidate_geometry)
+    missing = object()
+    return tuple(
+        field
+        for field in _STITCHING_NUMERICAL_GRID_FIELDS
+        if reference.get(field, missing) != candidate.get(field, missing)
+    )
+
+
+def stitching_grid_revision(working_geometry):
+    """Return a stable revision for the numerical channel grid used by stitching."""
+    payload = _stitching_numerical_grid_payload(working_geometry)
     encoded = json.dumps(
         payload,
         allow_nan=False,
@@ -524,6 +612,15 @@ def detached_stitching_settings(value, field_name="Stitching settings"):
     return payload
 
 
+def workspace_stitching_settings(value, field_name="Stitching workspace settings"):
+    """Keep material configuration and output policy, not runtime resource state."""
+
+    payload = detached_stitching_settings(value, field_name)
+    for key in _WORKSPACE_RESOURCE_SETTING_FIELDS:
+        payload.pop(key, None)
+    return payload
+
+
 @dataclass
 class StitchingRegistrationResult(MutableMapping[str, Any]):
     data: dict[str, Any] = field(default_factory=dict)
@@ -632,27 +729,476 @@ class StitchingRegistrationResult(MutableMapping[str, Any]):
 
 
 def _matrix_payload(matrix):
-    return np.asarray(matrix, dtype=float).round(12).tolist()
+    return np.asarray(matrix, dtype=float).tolist()
 
 
-def _tile_field(tile, name, default=None):
-    if isinstance(tile, Mapping):
-        return tile.get(name, default)
-    return getattr(tile, name, default)
+def _material_initial_layout(value):
+    payload = _finite_json_value(
+        value or {}, "Stitching registration initial placement"
+    )
+    for key in _INITIAL_LAYOUT_CONVENIENCE_FIELDS:
+        payload.pop(key, None)
+    placement_deltas = payload.get("placement_deltas") or {}
+    current_identity_layout = (
+        str(payload.get("mode") or "current") == "current"
+        and not payload.get("records")
+        and not payload.get("warnings")
+        and not payload.get("assumptions")
+        and not payload.get("base_pose_provenance")
+        and all(
+            np.allclose(np.asarray(matrix, dtype=float), np.eye(4), atol=0.0, rtol=0.0)
+            for matrix in placement_deltas.values()
+        )
+    )
+    return {} if current_identity_layout else payload
 
 
-def _json_safe_pose_state(value):
-    state = copy.deepcopy(value or {})
-    for field_name in ("before_matrices", "after_matrices", "exact_target_matrices"):
-        if field_name in state:
-            state[field_name] = {
-                key: _matrix_payload(matrix)
-                for key, matrix in state[field_name].items()
+def _material_registration_settings(value):
+    return {
+        str(key): copy.deepcopy(item)
+        for key, item in _finite_json_value(
+            value or {}, "Stitching registration settings"
+        ).items()
+        if str(key) not in _REGISTRATION_RUNTIME_SETTING_FIELDS
+    }
+
+
+def _registration_result_payload(result):
+    """Project one completed solve into its canonical scientific payload."""
+    payload = StitchingRegistrationResult.from_runtime(result).to_provenance_dict()
+    projected = {
+        key: copy.deepcopy(payload[key])
+        for key in _REGISTRATION_RESULT_FIELDS
+        if key in payload
+    }
+    settings = _material_registration_settings(
+        payload.get("settings") or {}
+    )
+    if settings:
+        projected["settings"] = settings
+    else:
+        projected.pop("settings", None)
+    layout = _material_initial_layout(
+        payload.get("initial_layout") or payload.get("placement_evidence") or {}
+    )
+    if layout:
+        projected["initial_layout"] = layout
+    else:
+        projected.pop("initial_layout", None)
+    for item in projected.get("registration_inputs", ()):
+        item.pop("display_name", None)
+        item.pop("source_operation_ids", None)
+    for item in (*projected.get("edges", ()), *projected.get("rejections", ())):
+        item.pop("fixed_name", None)
+        item.pop("moving_name", None)
+    return _finite_json_value(projected, "Stitching registration result")
+
+
+def materialize_stitching_registration(record):
+    """Return the typed view of one canonical stitching-registration record."""
+    record = dict(record or {})
+    if record.get("operation_type") != "stitching_registration":
+        raise ValueError("Scientific operation is not a stitching registration result.")
+    operation_id = str(record.get("operation_id") or "")
+    prefix = "stitching-registration:"
+    if not operation_id.startswith(prefix) or not operation_id[len(prefix):]:
+        raise ValueError("Stitching registration operation has an invalid identity.")
+    payload = copy.deepcopy(dict(record.get("result") or {}))
+    payload["registration_id"] = operation_id[len(prefix):]
+    payload["execution_status"] = record.get("execution_status", "succeeded")
+    payload["qc_status"] = record.get("qc_status", "not-evaluated")
+    payload.setdefault("user_decision", "unapplied")
+    algorithm = record.get("algorithm") or {}
+    if isinstance(algorithm, Mapping) and algorithm.get("version"):
+        payload["algorithm_version"] = str(algorithm["version"])
+    return StitchingRegistrationResult.from_dict(payload)
+
+
+def normalize_stitching_registration_operations(
+    model, *, tolerate_unavailable=False
+):
+    """Replace historical full-result payloads with the current canonical form."""
+    legacy_workspace_overrides = {}
+    for operation_id, raw_record in list(model.operation_records.items()):
+        if raw_record.get("operation_type") != "stitching_registration":
+            continue
+        legacy_result = raw_record.get("result") or {}
+        overrides = {
+            key: copy.deepcopy(legacy_result[key])
+            for key in _WORKSPACE_RESULT_OVERRIDE_FIELDS
+            if key in legacy_result
+        }
+        if "user_decision" in raw_record:
+            overrides.setdefault(
+                "user_decision", copy.deepcopy(raw_record["user_decision"])
+            )
+        if overrides:
+            legacy_workspace_overrides[operation_id] = overrides
+        try:
+            typed = materialize_stitching_registration(raw_record)
+        except (AttributeError, KeyError, TypeError, ValueError):
+            if not tolerate_unavailable:
+                raise
+            model.operation_records.pop(operation_id, None)
+            model.unavailable_history_operation_ids.add(operation_id)
+            continue
+        record = copy.deepcopy(raw_record)
+        record["result"] = _registration_result_payload(typed)
+        record["execution_status"] = typed.execution_status
+        record["qc_status"] = typed.qc_status
+        record.pop("user_decision", None)
+        algorithm_version = str(typed.get("algorithm_version") or "").strip()
+        if algorithm_version:
+            record["algorithm"] = {
+                "name": "MADI3D stitching registration",
+                "version": algorithm_version,
             }
-    for item in (state.get("before_states") or {}).values():
-        if isinstance(item, dict) and "matrix" in item:
-            item["matrix"] = _matrix_payload(item["matrix"])
-    return _finite_json_value(state, "Stitching applied pose state")
+        model.operation_records[operation_id] = record
+    return legacy_workspace_overrides
+
+
+def retain_stitching_registration(model, result, *, capture=None):
+    """Retain each solved attempt independently of later fusion and review."""
+    from madi3d_app.operation_status import execution_succeeded
+
+    typed = StitchingRegistrationResult.from_runtime(result)
+    if not execution_succeeded(typed.execution_status):
+        raise ValueError(
+            "Only a successfully completed stitching registration can become "
+            "scientific provenance."
+        )
+    registration_id = str(typed.get("registration_id") or "").strip()
+    if not registration_id:
+        raise ValueError("Completed stitching registration requires a stable identity.")
+    operation_id = "stitching-registration:" + registration_id
+    payload = _registration_result_payload(typed)
+    algorithm_version = str(typed.get("algorithm_version") or "").strip()
+    algorithm = (
+        {
+            "name": "MADI3D stitching registration",
+            "version": algorithm_version,
+        }
+        if algorithm_version
+        else None
+    )
+    existing = model.operation_records.get(operation_id)
+    if existing is not None:
+        if (
+            existing.get("operation_type") != "stitching_registration"
+            or _registration_result_payload(
+                materialize_stitching_registration(existing)
+            ) != payload
+            or existing.get("execution_status") != typed.execution_status
+            or existing.get("qc_status") != typed.qc_status
+            or existing.get("algorithm") != algorithm
+        ):
+            raise ValueError(
+                f"Stitching registration {registration_id!r} has conflicting evidence."
+            )
+        return operation_id
+
+    raw_payload = typed.to_provenance_dict()
+    source_operation_ids = list(dict.fromkeys(
+        oid for item in raw_payload.get("registration_inputs", [])
+        for oid in (item.get("source_operation_ids") or [])
+    ))
+    modeled_channel_ids = list(dict.fromkeys(
+        str(item.get("channel_id") or "")
+        for item in raw_payload.get("registration_inputs", ())
+        if str(item.get("channel_id") or "")
+    ))
+    operation = {
+        "operation_id": operation_id,
+        "operation_type": "stitching_registration",
+        "input_operation_ids": source_operation_ids,
+        "result": payload,
+        "input_backing_source_ids": list(dict.fromkeys(
+            item["backing_source_id"]
+            for item in raw_payload.get("registration_inputs", [])
+            if item.get("backing_source_id")
+        )),
+        "execution_status": typed.execution_status,
+        "qc_status": typed.qc_status,
+    }
+    if algorithm is not None:
+        operation["algorithm"] = algorithm
+    if modeled_channel_ids:
+        if capture is None:
+            raise ValueError(
+                "A new modeled-volume stitching result requires its dispatch-time input capture."
+            )
+        captured_channel_ids = {
+            str(record.get("channel_id") or "")
+            for record in capture.get("direct_records", {}).values()
+        }
+        missing = set(modeled_channel_ids).difference(captured_channel_ids)
+        if missing:
+            raise ValueError(
+                "Stitching dispatch capture is missing modeled channel(s): "
+                + ", ".join(sorted(missing))
+            )
+        from madi3d_app.volume.provenance import (
+            publish_captured_volume_operation,
+        )
+        captured_producers = {
+            record.get("producing_operation_id")
+            for record in capture.get("direct_records", {}).values()
+            if record.get("producing_operation_id")
+        }
+        operation["input_operation_ids"] = [
+            source_id
+            for source_id in source_operation_ids
+            if source_id not in captured_producers
+        ]
+        publish_captured_volume_operation(model, [capture], operation)
+    else:
+        model.publish_operation(operation)
+    return operation_id
+
+
+def material_stitching_fusion_parameters(options):
+    """Keep only parameters that can change fused scientific output."""
+    values = _finite_json_value(options or {}, "Stitching fusion parameters")
+    return {
+        key: copy.deepcopy(values[key])
+        for key in _MATERIAL_FUSION_PARAMETER_FIELDS
+        if key in values
+    }
+
+
+def stitching_export_operation_projection(model, manifest):
+    """Bounded transport closure for output companions, never manifest state."""
+    manifest = dict(manifest or {})
+    inputs = list(dict.fromkeys([
+        *(
+            [str(manifest["registration_operation_id"])]
+            if manifest.get("registration_operation_id")
+            else []
+        ),
+        *(
+            str(operation_id)
+            for tiles in (manifest.get("channel_layouts") or {}).values()
+            for tile in tiles
+            for operation_id in tile.get("source_operation_ids", ())
+            if str(operation_id).strip()
+        ),
+    ]))
+    if not inputs:
+        return []
+    return [
+        copy.deepcopy(model.operation_records[operation_id])
+        for operation_id in model.operation_dependency_closure(inputs)
+    ]
+
+
+def stitching_fusion_operation_record(manifest, options, mosaic_geometry, operation_id):
+    """One operation owns membership, propagation and the actual fusion layout."""
+    estimation_id = manifest.get("registration_operation_id")
+    evidence = {
+        key: copy.deepcopy(manifest[key])
+        for key in (
+            "registration_operation_id",
+            "fusion_pose_source",
+            "channel_layouts",
+            "mosaic_coordinate_space_id",
+        )
+        if key in manifest
+    }
+    input_ids = list(dict.fromkeys([
+        *([estimation_id] if estimation_id else []),
+        *(oid for tiles in manifest.get("channel_layouts", {}).values()
+          for tile in tiles for oid in tile.get("source_operation_ids", [])),
+    ]))
+    fusion_parameters = material_stitching_fusion_parameters(options)
+    geometry = copy.deepcopy(mosaic_geometry)
+    fusion_warnings = list(geometry.get("warnings") or ())
+    fusion_assumptions = list(geometry.get("assumptions") or ())
+    return _finite_json_value({
+        "operation_id": operation_id, "operation_type": "tile_stitching",
+        "input_operation_ids": input_ids,
+        "input_backing_source_ids": list(dict.fromkeys(
+            tile["backing_source_id"] for tiles in manifest.get("channel_layouts", {}).values()
+            for tile in tiles if tile.get("backing_source_id")
+        )),
+        "execution_status": "succeeded",
+        "qc_status": "warning" if fusion_warnings or fusion_assumptions else "passed",
+        "algorithm": {
+            "name": "MADI3D tile stitching fusion",
+            "version": str(manifest.get("stitching_algorithm_version") or ""),
+        },
+        "evidence": evidence,
+        "fusion_parameters": fusion_parameters,
+        "mosaic_geometry": geometry,
+        "transform_application": "channel_layout_world_index_affines_baked_once",
+    }, "Stitching fusion operation")
+
+
+def project_workspace_results(
+    workspace,
+    operation_records,
+    *,
+    restore=False,
+    legacy_result_overrides=None,
+    unavailable_operation_ids=None,
+    tolerate_unavailable=False,
+):
+    """Project bounded result references and expand them only for live UI use."""
+
+    payload = copy.deepcopy(workspace or {})
+    if not payload:
+        return {}
+    reviews = copy.deepcopy(payload.get("result_reviews") or {})
+    unavailable_operation_ids = (
+        unavailable_operation_ids
+        if unavailable_operation_ids is not None
+        else set()
+    )
+    owners = [payload.get("active_project"), *payload.get("jobs", [])]
+    for owner in owners:
+        if not owner:
+            continue
+        result = owner.get("registration_result")
+        result_ids = [
+            str(value)
+            for value in owner.get("result_operation_ids") or ()
+            if str(value).strip()
+        ]
+        if restore:
+            legacy_operation_id = str(
+                (result or {}).get("operation_id") or ""
+            ).strip()
+            if legacy_operation_id:
+                result_ids = list(dict.fromkeys([
+                    legacy_operation_id, *result_ids,
+                ]))
+            missing_result_ids = [
+                operation_id for operation_id in result_ids
+                if operation_id not in operation_records
+            ]
+            undeclared_missing = [
+                operation_id for operation_id in missing_result_ids
+                if operation_id not in unavailable_operation_ids
+            ]
+            if undeclared_missing and not tolerate_unavailable:
+                raise ValueError(
+                    "Stitching workspace references an unavailable completed result."
+                )
+            if tolerate_unavailable:
+                unavailable_operation_ids.update(missing_result_ids)
+
+            binding_issues = [
+                copy.deepcopy(issue)
+                for issue in owner.get("binding_issues") or ()
+                if isinstance(issue, Mapping)
+                and issue.get("code") != UNAVAILABLE_STITCHING_RESULT_CODE
+            ]
+            if missing_result_ids:
+                shown = missing_result_ids[:5]
+                suffix = (
+                    f" (+{len(missing_result_ids) - len(shown)} more)"
+                    if len(missing_result_ids) > len(shown)
+                    else ""
+                )
+                binding_issues.append({
+                    "code": UNAVAILABLE_STITCHING_RESULT_CODE,
+                    "result_operation_ids": shown,
+                    "unavailable_result_count": len(missing_result_ids),
+                    "message": (
+                        "Historical stitching result unavailable: "
+                        + ", ".join(shown)
+                        + suffix
+                        + ". Recalculate registration or use current visible poses."
+                    ),
+                })
+            owner["binding_issues"] = binding_issues
+            registration_operation_id = next(
+                (
+                    operation_id for operation_id in result_ids
+                    if operation_records.get(operation_id, {}).get("operation_type")
+                    == "stitching_registration"
+                ),
+                "",
+            )
+            if not registration_operation_id:
+                owner.pop("registration_result", None)
+                owner["result_operation_ids"] = list(dict.fromkeys(result_ids))
+                continue
+            record = operation_records.get(registration_operation_id)
+            overrides = copy.deepcopy(
+                (legacy_result_overrides or {}).get(registration_operation_id, {})
+            )
+            if result:
+                overrides.update(copy.deepcopy(result.get("result_overrides") or {}))
+            unsupported = sorted(set(overrides) - _WORKSPACE_RESULT_OVERRIDE_FIELDS)
+            if unsupported:
+                raise ValueError(
+                    "Stitching workspace registration reference contains unsupported "
+                    "overrides: " + ", ".join(unsupported) + "."
+                )
+            expanded = materialize_stitching_registration(record).to_dict()
+            expanded.update(overrides)
+            review = reviews.get(registration_operation_id) or {}
+            if review:
+                expanded["user_decision"] = validate_user_decision(
+                    review.get("decision", "unapplied")
+                )
+            owner["registration_result"] = expanded
+            owner["result_operation_ids"] = list(dict.fromkeys(result_ids or [
+                registration_operation_id
+            ]))
+            continue
+
+        if result and result.get("registration_id"):
+            operation_id = "stitching-registration:" + str(result["registration_id"])
+            record = operation_records.get(operation_id)
+            if record is None:
+                raise ValueError(
+                    "Stitching workspace result has no canonical registration operation."
+                )
+            result_ids.insert(0, operation_id)
+            decision = validate_user_decision(
+                result.get("user_decision", "unapplied")
+            )
+            if decision != "unapplied":
+                prior = reviews.get(operation_id)
+                review = {"decision": decision}
+                if prior is not None and prior != review:
+                    raise ValueError(
+                        "Stitching workspace contains conflicting review state for "
+                        f"{operation_id}."
+                    )
+                reviews[operation_id] = review
+        result_ids = list(dict.fromkeys(result_ids))
+        for operation_id in result_ids:
+            if (
+                operation_id not in operation_records
+                and operation_id not in unavailable_operation_ids
+            ):
+                raise ValueError(
+                    "Stitching workspace references an unavailable completed result."
+                )
+        owner["result_operation_ids"] = result_ids
+        owner["settings"] = workspace_stitching_settings(owner.get("settings"))
+        if owner.get("execution_status") == "running":
+            owner["execution_status"] = "interrupted"
+        owner.pop("registration_result", None)
+        for field_name in (
+            "binding_issues",
+            "created",
+            "execution_phase",
+            "loaded_job_id",
+            "outputs",
+            "pose_undo_stack",
+            "qc_status",
+            "selection_descriptors",
+            "user_decision",
+        ):
+            owner.pop(field_name, None)
+    payload["schema"] = STITCHING_WORKSPACE_SCHEMA_VERSION
+    for job in payload.get("jobs", []):
+        job["schema"] = STITCHING_JOB_SCHEMA_VERSION
+    payload["result_reviews"] = reviews
+    return payload
 
 
 def build_stitching_fusion_manifest(
@@ -660,54 +1206,51 @@ def build_stitching_fusion_manifest(
     schema,
     algorithm_version,
     result,
-    initial_layout,
-    applied_state,
-    registration_channel,
-    registration_channel_key,
-    registration_channel_label,
-    selected_initial_pose_source,
-    tiles,
-    project_state,
     channel_sets,
-    queue_job=None,
+    pose_source,
+    operation_model=None,
 ):
-    """Build the detached scientific manifest shared by interactive and queued fusion."""
-    tiles = list(tiles)
+    """Build the bounded scientific manifest shared by interactive and queued fusion."""
     channel_sets = list(channel_sets)
     result = result or {}
-    serialized_result = StitchingRegistrationResult.from_runtime(
-        result
-    ).to_provenance_dict()
-    edges = serialized_result["edges"]
-    rejections = serialized_result["rejections"]
-    raw_initial = initial_layout or {
-        "mode": "current",
-        "summary": "Current MADI3D poses used as the initial layout.",
-        "placement_deltas": {},
-        "records": [],
-    }
-    serialized_initial = {
-        key: copy.deepcopy(value)
-        for key, value in raw_initial.items()
-        if key != "placement_deltas"
-    }
-    serialized_initial["placement_deltas"] = {
-        tile_id: _matrix_payload(matrix)
-        for tile_id, matrix in raw_initial.get("placement_deltas", {}).items()
-    }
+    pose_source = str(pose_source or "current")
+    registration_operation_id = None
+    if pose_source == "registered" and result.get("registration_id"):
+        registration_operation_id = (
+            "stitching-registration:" + str(result["registration_id"])
+        )
+        if operation_model is not None:
+            retain_stitching_registration(operation_model, result)
+
+    def captured_record_id(channel, tile):
+        capture = channel.get("scientific_inputs") or {}
+        channel_id = str(tile.get("channel_id") or "")
+        refs, _origin = (capture.get("by_channel") or {}).get(
+            channel_id, ((), {})
+        )
+        records = getattr(capture.get("model"), "scientific_records", {})
+        return next(
+            (
+                str(reference.get("record_id") or "")
+                for reference in refs
+                if (records.get(str(reference.get("record_id") or "")) or {}).get(
+                    "record_kind"
+                )
+                == "volume_revision"
+            ),
+            "",
+        )
+
     channel_layouts = {
         str(channel["label"]): [
             {
                 "tile_id": tile["tile_id"],
-                "display_name": tile["display_name"],
                 "source_id": tile.get("source_id", ""),
                 "channel_id": tile.get("channel_id", ""),
                 "backing_source_id": tile.get("backing_source_id", ""),
-                "channel_selector": tile.get("channel"),
-                "channel_role": tile.get("channel_role", "other"),
-                "channel_order": int(tile.get("channel_order", 0)),
-                "source_path": tile.get("source_path", tile.get("name", "")),
+                "input_record_id": captured_record_id(channel, tile),
                 "source_operation_ids": list(tile.get("source_operation_ids", [])),
+                "geometry_revision": tile.get("geometry_revision"),
                 "dims_xyz": list(tile["dims"]),
                 "dtype": str(tile["dtype"]),
                 "world_index_affine": _matrix_payload(tile["world_affine"]),
@@ -716,100 +1259,15 @@ def build_stitching_fusion_manifest(
         ]
         for channel in channel_sets
     }
-    corrections = serialized_result.get("corrections", {})
     payload = {
         "schema": str(schema),
         "stitching_algorithm_version": str(algorithm_version),
-        "created": datetime.now().isoformat(timespec="seconds"),
-        "registration_mode": result.get("mode", "current_poses"),
-        "execution_status": serialized_result.get("execution_status", "pending"),
-        "qc_status": serialized_result.get("qc_status", "not-evaluated"),
-        "user_decision": serialized_result.get("user_decision", "unapplied"),
-        "registration_channel": str(registration_channel or ""),
-        "registration_channel_key": copy.deepcopy(registration_channel_key),
-        "registration_channel_label": str(registration_channel_label or ""),
-        "selected_initial_pose_source": str(
-            selected_initial_pose_source or "current"
-        ),
-        "initial_layout": serialized_initial,
-        "tile_count": len(tiles),
-        "project_tree": copy.deepcopy(project_state),
-        "applied_state": _json_safe_pose_state(applied_state),
-        "channels": [channel["label"] for channel in channel_sets],
+        "registration_operation_id": registration_operation_id,
+        "fusion_pose_source": pose_source,
         "channel_layouts": channel_layouts,
         "mosaic_coordinate_space_id": (
             (result.get("mosaic_geometry") or {}).get("coordinate_space_id")
         ),
-        "registration_mosaic_geometry": copy.deepcopy(
-            result.get("mosaic_geometry") or {}
-        ),
-        "corrections": corrections,
-        "registered_actor_matrices": {
-            key: _matrix_payload(value)
-            for key, value in (result.get("target_matrices_by_source") or {}).items()
-        },
-        "edges": edges,
-        "rejections": rejections,
-        "registration_inputs": copy.deepcopy(result.get("registration_inputs", [])),
-        "candidate_pairs": copy.deepcopy(result.get("candidate_pairs", [])),
-        "pair_evaluations": copy.deepcopy(result.get("pair_evaluations", [])),
-        "candidate_pair_count": int(
-            result.get("candidate_pair_count", len(edges) + len(rejections))
-        ),
-        "evaluated_pair_count": int(
-            result.get("evaluated_pair_count", len(edges) + len(rejections))
-        ),
-        "accepted_edge_count": int(result.get("accepted_edge_count", len(edges))),
-        "below_minimum_score_count": int(
-            result.get(
-                "below_minimum_score_count",
-                sum(item.get("code") == "below_minimum_score" for item in rejections),
-            )
-        ),
-        "invalid_pair_count": int(result.get("invalid_pair_count", 0)),
-        "global_inconsistency_rejected_count": int(
-            result.get("global_inconsistency_rejected_count", 0)
-        ),
-        "translation_acceptance_contract": copy.deepcopy(
-            result.get("translation_acceptance_contract")
-        ),
-        "numerical_failure_count": int(
-            result.get(
-                "numerical_failure_count",
-                sum(item.get("code") == "numerical_failure" for item in rejections),
-            )
-        ),
-        "pair_failures": copy.deepcopy(result.get("pair_failures", [])),
-        "components": copy.deepcopy(result.get("components", [])),
-        "pose_graph_qc": copy.deepcopy(result.get("pose_graph_qc") or {}),
-        "registration_warnings": copy.deepcopy(result.get("warnings", [])),
-        "registration_assumptions": copy.deepcopy(result.get("assumptions", [])),
-        "completed_with_warnings": bool(result.get("completed_with_warnings")),
-        "registration_settings": copy.deepcopy(result.get("settings", {})),
-        "anchor_tile": next(
-            (
-                str(_tile_field(tile, "display_name", ""))
-                for tile in tiles
-                if bool(_tile_field(tile, "anchor", False))
-            ),
-            None,
-        ),
-        "queue_job": copy.deepcopy(queue_job),
-        "tiles": [
-            {
-                "tile_id": str(_tile_field(tile, "tile_id", "")),
-                "display_name": str(_tile_field(tile, "display_name", "")),
-                "multichannel": bool(_tile_field(tile, "multichannel", False)),
-                "anchor": bool(_tile_field(tile, "anchor", False)),
-                "reference_enabled": bool(
-                    _tile_field(tile, "reference_enabled", True)
-                ),
-                "channels": copy.deepcopy(
-                    _tile_field(tile, "channel_labels", {})
-                ),
-            }
-            for tile in tiles
-        ],
     }
     return _finite_json_value(payload, "Stitching fusion manifest")
 
@@ -828,6 +1286,7 @@ class StitchingProjectState:
     qc_status: str = "not-evaluated"
     user_decision: str = "unapplied"
     binding_issues: list[dict[str, Any]] = field(default_factory=list)
+    result_operation_ids: list[str] = field(default_factory=list)
 
     def __post_init__(self):
         self.project_state = _validated_project_state(self.project_state)
@@ -841,6 +1300,18 @@ class StitchingProjectState:
             if self.registration_result
             else None
         )
+        if self.registration_result is not None:
+            registration_id = str(
+                self.registration_result.get("registration_id") or ""
+            ).strip()
+            if registration_id:
+                self.result_operation_ids = [
+                    "stitching-registration:" + registration_id,
+                    *self.result_operation_ids,
+                ]
+        self.result_operation_ids = list(dict.fromkeys(
+            str(value) for value in self.result_operation_ids if str(value).strip()
+        ))
         self.applied_state = _validated_pose_state(
             self.applied_state, "Stitching applied state"
         )
@@ -863,41 +1334,44 @@ class StitchingProjectState:
     def to_dict(self):
         return {
             "project_state": copy.deepcopy(self.project_state),
-            "settings": copy.deepcopy(self.settings),
-            "registration_result": (
-                self.registration_result.to_dict()
-                if self.registration_result is not None
-                else None
-            ),
+            "settings": workspace_stitching_settings(self.settings),
             "initial_layout": copy.deepcopy(self.initial_layout),
             "applied_state": copy.deepcopy(self.applied_state),
-            "pose_undo_stack": copy.deepcopy(self.pose_undo_stack),
-            "loaded_job_id": self.loaded_job_id,
-            "qc_status": self.qc_status,
-            "user_decision": self.user_decision,
-            "binding_issues": copy.deepcopy(self.binding_issues),
+            "result_operation_ids": list(self.result_operation_ids),
         }
 
     @classmethod
     def from_dict(cls, payload):
         payload = dict(payload or {})
+        registration_result = (
+            StitchingRegistrationResult.from_dict(payload["registration_result"])
+            if payload.get("registration_result")
+            else None
+        )
         return cls(
             project_state=copy.deepcopy(payload.get("project_state") or {}),
             settings=detached_stitching_settings(
                 payload.get("settings"), "Stitching project settings"
             ),
-            registration_result=(
-                StitchingRegistrationResult.from_dict(payload["registration_result"])
-                if payload.get("registration_result")
-                else None
-            ),
+            registration_result=registration_result,
             initial_layout=copy.deepcopy(payload.get("initial_layout") or {}),
             applied_state=copy.deepcopy(payload.get("applied_state") or {}),
             pose_undo_stack=copy.deepcopy(payload.get("pose_undo_stack") or []),
             loaded_job_id=payload.get("loaded_job_id"),
-            qc_status=payload.get("qc_status", "not-evaluated"),
-            user_decision=payload.get("user_decision", "unapplied"),
+            qc_status=payload.get(
+                "qc_status",
+                registration_result.qc_status
+                if registration_result is not None else "not-evaluated",
+            ),
+            user_decision=payload.get(
+                "user_decision",
+                registration_result.user_decision
+                if registration_result is not None else "unapplied",
+            ),
             binding_issues=copy.deepcopy(payload.get("binding_issues") or []),
+            result_operation_ids=copy.deepcopy(
+                payload.get("result_operation_ids") or []
+            ),
         )
 
 
@@ -923,6 +1397,7 @@ class StitchingJob:
     created: str = field(
         default_factory=lambda: datetime.now().isoformat(timespec="seconds")
     )
+    result_operation_ids: list[str] = field(default_factory=list)
 
     def __post_init__(self):
         self.job_id = int(self.job_id)
@@ -939,6 +1414,18 @@ class StitchingJob:
             if self.registration_result
             else None
         )
+        if self.registration_result is not None:
+            registration_id = str(
+                self.registration_result.get("registration_id") or ""
+            ).strip()
+            if registration_id:
+                self.result_operation_ids = [
+                    "stitching-registration:" + registration_id,
+                    *self.result_operation_ids,
+                ]
+        self.result_operation_ids = list(dict.fromkeys(
+            str(value) for value in self.result_operation_ids if str(value).strip()
+        ))
         self.project_state = _finite_json_value(
             self.project_state or {}, "Stitching job project state"
         )
@@ -957,36 +1444,43 @@ class StitchingJob:
         self.binding_issues = [dict(value) for value in issues]
 
     def to_dict(self):
+        persisted_status = (
+            "interrupted" if self.execution_status == "running"
+            else self.execution_status
+        )
+        if persisted_status == "succeeded" and not self.result_operation_ids:
+            raise ValueError(
+                "A completed stitching job must reference its result operation."
+            )
         return {
             "schema": STITCHING_JOB_SCHEMA_VERSION,
             "job_id": self.job_id,
             "name": str(self.name),
             "registration_mode": str(self.registration_mode),
-            "settings": copy.deepcopy(self.settings),
+            "settings": workspace_stitching_settings(self.settings),
             "project_state": _json_value(self.project_state),
-            "registration_result": (
-                self.registration_result.to_dict() if self.registration_result else None
-            ),
             "initial_layout": copy.deepcopy(self.initial_layout),
             "applied_state": _json_value(self.applied_state),
-            "pose_undo_stack": _json_value(self.pose_undo_stack),
-            "selection_descriptors": _json_value(self.selection_descriptors),
-            "execution_status": self.execution_status,
-            "qc_status": self.qc_status,
-            "user_decision": self.user_decision,
-            "execution_phase": str(self.execution_phase),
-            "outputs": [str(path) for path in self.outputs],
-            "error": str(self.error),
-            "binding_issues": copy.deepcopy(self.binding_issues),
-            "created": str(self.created),
+            "execution_status": persisted_status,
+            "error": str(self.error)[-4000:],
+            "result_operation_ids": list(self.result_operation_ids),
         }
 
     @classmethod
     def from_dict(cls, payload):
         payload = dict(payload or {})
         schema = str(payload.get("schema") or STITCHING_JOB_SCHEMA_VERSION)
-        if schema != STITCHING_JOB_SCHEMA_VERSION:
+        if schema not in {
+            STITCHING_JOB_SCHEMA_VERSION, *_LEGACY_STITCHING_JOB_SCHEMAS,
+        }:
             raise ValueError(f"Unsupported stitching job schema: {schema}")
+        execution_status = payload.get("execution_status", "pending")
+        if execution_status == "running":
+            execution_status = "interrupted"
+        registration_result = (
+            StitchingRegistrationResult.from_dict(payload["registration_result"])
+            if payload.get("registration_result") else None
+        )
         return cls(
             job_id=payload["job_id"],
             name=payload.get("name", "Stitching job"),
@@ -995,24 +1489,32 @@ class StitchingJob:
                 payload.get("settings"), "Stitching job settings"
             ),
             project_state=copy.deepcopy(payload.get("project_state") or {}),
-            registration_result=(
-                StitchingRegistrationResult.from_dict(payload["registration_result"])
-                if payload.get("registration_result") else None
-            ),
+            registration_result=registration_result,
             initial_layout=copy.deepcopy(payload.get("initial_layout") or {}),
             applied_state=copy.deepcopy(payload.get("applied_state") or {}),
             pose_undo_stack=copy.deepcopy(payload.get("pose_undo_stack") or []),
             selection_descriptors=copy.deepcopy(
                 payload.get("selection_descriptors") or []
             ),
-            execution_status=payload.get("execution_status", "pending"),
-            qc_status=payload.get("qc_status", "not-evaluated"),
-            user_decision=payload.get("user_decision", "unapplied"),
+            execution_status=execution_status,
+            qc_status=payload.get(
+                "qc_status",
+                registration_result.qc_status
+                if registration_result is not None else "not-evaluated",
+            ),
+            user_decision=payload.get(
+                "user_decision",
+                registration_result.user_decision
+                if registration_result is not None else "unapplied",
+            ),
             execution_phase=payload.get("execution_phase", ""),
             outputs=[str(path) for path in payload.get("outputs") or []],
             error=payload.get("error", ""),
             binding_issues=copy.deepcopy(payload.get("binding_issues") or []),
             created=payload.get("created", ""),
+            result_operation_ids=copy.deepcopy(
+                payload.get("result_operation_ids") or []
+            ),
         )
 
 
@@ -1023,6 +1525,7 @@ class StitchingWorkspaceState:
     active_project: StitchingProjectState | None = None
     jobs: list[StitchingJob] = field(default_factory=list)
     job_counter: int = 0
+    result_reviews: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def __post_init__(self):
         self.active_project = (
@@ -1036,6 +1539,54 @@ class StitchingWorkspaceState:
             job if isinstance(job, StitchingJob) else StitchingJob.from_dict(job)
             for job in self.jobs
         ]
+        reviews = _finite_json_value(
+            self.result_reviews or {}, "Stitching workspace reviews"
+        )
+        if not isinstance(reviews, dict):
+            raise ValueError("Stitching workspace reviews must be keyed by operation ID.")
+        for owner in [self.active_project, *self.jobs]:
+            if owner is None or owner.registration_result is None:
+                continue
+            operation_id = next((
+                value for value in owner.result_operation_ids
+                if value.startswith("stitching-registration:")
+            ), "")
+            decision = owner.registration_result.user_decision
+            if operation_id and decision != "unapplied":
+                review = {"decision": decision}
+                if operation_id in reviews and reviews[operation_id] != review:
+                    raise ValueError(
+                        "Stitching workspace contains conflicting review state for "
+                        f"{operation_id}."
+                    )
+                reviews[operation_id] = review
+        for operation_id, review in reviews.items():
+            if not str(operation_id).strip() or not isinstance(review, Mapping):
+                raise ValueError("Stitching workspace review entries are invalid.")
+            unknown = set(review) - {"decision"}
+            if unknown:
+                raise ValueError(
+                    "Stitching workspace review contains unsupported fields: "
+                    + ", ".join(sorted(unknown))
+                    + "."
+                )
+            review["decision"] = validate_user_decision(
+                review.get("decision", "unapplied")
+            )
+        referenced_result_ids = {
+            operation_id
+            for owner in [self.active_project, *self.jobs]
+            if owner is not None
+            for operation_id in owner.result_operation_ids
+        }
+        orphan_reviews = sorted(set(reviews) - referenced_result_ids)
+        if orphan_reviews:
+            raise ValueError(
+                "Stitching workspace reviews refer to unlisted results: "
+                + ", ".join(orphan_reviews)
+                + "."
+            )
+        self.result_reviews = reviews
         job_ids = [job.job_id for job in self.jobs]
         if len(job_ids) != len(set(job_ids)):
             raise ValueError("Stitching workspace job IDs must be unique.")
@@ -1060,7 +1611,7 @@ class StitchingWorkspaceState:
 
     @property
     def is_empty(self):
-        return self.active_project is None and not self.jobs
+        return self.active_project is None and not self.jobs and not self.result_reviews
 
     def to_dict(self):
         return {
@@ -1072,6 +1623,7 @@ class StitchingWorkspaceState:
             ),
             "jobs": [job.to_dict() for job in self.jobs],
             "job_counter": self.job_counter,
+            "result_reviews": copy.deepcopy(self.result_reviews),
         }
 
     @classmethod
@@ -1080,7 +1632,10 @@ class StitchingWorkspaceState:
         if not payload:
             return cls()
         schema = str(payload.get("schema") or STITCHING_WORKSPACE_SCHEMA_VERSION)
-        if schema != STITCHING_WORKSPACE_SCHEMA_VERSION:
+        if schema not in {
+            STITCHING_WORKSPACE_SCHEMA_VERSION,
+            *_LEGACY_STITCHING_WORKSPACE_SCHEMAS,
+        }:
             raise ValueError(f"Unsupported stitching workspace schema: {schema}")
         return cls(
             active_project=(
@@ -1090,6 +1645,7 @@ class StitchingWorkspaceState:
             ),
             jobs=[StitchingJob.from_dict(job) for job in payload.get("jobs") or []],
             job_counter=payload.get("job_counter", 0),
+            result_reviews=copy.deepcopy(payload.get("result_reviews") or {}),
         )
 
 
@@ -1097,15 +1653,24 @@ __all__ = [
     "PoseGraphResidual",
     "STITCHING_JOB_SCHEMA_VERSION",
     "STITCHING_WORKSPACE_SCHEMA_VERSION",
+    "UNAVAILABLE_STITCHING_RESULT_CODE",
     "StitchingEdgeResult",
     "StitchingJob",
     "detached_stitching_settings",
+    "workspace_stitching_settings",
     "StitchingMosaicGeometry",
     "StitchingProjectState",
     "StitchingRegistrationResult",
     "StitchingRejection",
     "StitchingWorkspaceState",
     "build_stitching_fusion_manifest",
+    "material_stitching_fusion_parameters",
+    "materialize_stitching_registration",
+    "normalize_stitching_registration_operations",
+    "retain_stitching_registration",
+    "stitching_export_operation_projection",
+    "stitching_fusion_operation_record",
+    "stitching_grid_mismatches",
     "stitching_grid_revision",
     "stitching_geometry_status",
 ]

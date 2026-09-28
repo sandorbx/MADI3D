@@ -61,6 +61,8 @@ from madi3d_app.stitching.models import (
     StitchingMosaicGeometry,
     StitchingRegistrationResult,
     StitchingRejection,
+    material_stitching_fusion_parameters,
+    stitching_grid_mismatches,
     stitching_grid_revision,
 )
 from madi3d_app.stitching.correlation import (
@@ -349,6 +351,10 @@ def _validated_source_working_geometry(
         descriptor.get("source_checksum") or ""
     ).strip()
     current_source_checksum = str(tile.get("source_checksum") or "").strip()
+    frozen_grid = descriptor.get("channel_local_working_grid")
+    current_grid = tile.get("channel_local_working_grid") or tile.get(
+        "working_grid"
+    )
 
     if (
         frozen_source_checksum
@@ -361,6 +367,22 @@ def _validated_source_working_geometry(
             "continuing."
         )
 
+    comparable_grids = (
+        isinstance(frozen_grid, dict)
+        and bool(frozen_grid)
+        and isinstance(current_grid, dict)
+        and bool(current_grid)
+    )
+    grid_changes = None
+    if comparable_grids:
+        try:
+            grid_changes = stitching_grid_mismatches(frozen_grid, current_grid)
+        except ValueError as exc:
+            raise ValueError(
+                f"{subject} has an invalid captured/current channel-local grid "
+                "payload and cannot verify stitching freshness."
+            ) from exc
+
     if frozen_revision:
         if not current_revision:
             raise ValueError(
@@ -368,12 +390,19 @@ def _validated_source_working_geometry(
                 "the current MADI3D source. Refresh this source in the stitching "
                 "project before continuing."
             )
-        if current_revision != frozen_revision:
+        if grid_changes:
+            changed = ", ".join(grid_changes)
             raise ValueError(
                 f"{subject} captured channel-local grid is stale because its "
-                "numerical geometry changed after it was added to the stitching "
-                "project. Refresh the captured project geometry and recalculate "
-                "registration before continuing."
+                f"numerical geometry changed in: {changed}. Refresh the captured "
+                "project geometry and recalculate registration before continuing."
+            )
+        if current_revision != frozen_revision and grid_changes is None:
+            raise ValueError(
+                f"{subject} channel-local geometry evidence changed after project "
+                "capture, and the numerical grid cannot be verified as equivalent. "
+                "Refresh the captured project geometry and recalculate registration "
+                "before continuing."
             )
     elif legacy_revision and current_revision:
         raise ValueError(
@@ -382,24 +411,11 @@ def _validated_source_working_geometry(
             "grid. Refresh this source in the stitching project before continuing."
         )
 
-    frozen_grid = descriptor.get("channel_local_working_grid")
-    current_grid = tile.get("channel_local_working_grid") or tile.get(
-        "working_grid"
-    )
-    if frozen_revision and frozen_grid:
-        if not isinstance(current_grid, dict) or not current_grid:
-            raise ValueError(
-                f"{subject} has no current channel-local working grid to verify "
-                "against its captured stitching descriptor."
-            )
-        if stitching_grid_revision(frozen_grid) != stitching_grid_revision(
-            current_grid
-        ):
-            raise ValueError(
-                f"{subject} captured grid payload disagrees with the current "
-                "channel-local grid despite its recorded revision. Refresh the "
-                "stitching project source before continuing."
-            )
+    if frozen_revision and frozen_grid and not comparable_grids:
+        raise ValueError(
+            f"{subject} has no current channel-local working grid to verify "
+            "against its captured stitching descriptor."
+        )
 
     runtime_geometry = tile.get("working_geometry")
     if frozen_revision and not runtime_geometry:
@@ -427,7 +443,6 @@ def _validated_source_working_geometry(
         or stitching_grid_revision(current_grid or frozen_grid or geometry)
     )
     return geometry, revision
-
 
 def _canonical_units_or_none(raw_units):
     try:
@@ -767,10 +782,6 @@ def _prepare_stitching_geometry(
             "source_checksum": copy.deepcopy(
                 tile.get("source_checksum")
                 or descriptor.get("source_checksum")
-            ),
-            "geometry_checksum": copy.deepcopy(
-                tile.get("geometry_checksum")
-                or descriptor.get("geometry_checksum")
             ),
             "data_shape_zyx": (
                 list(item["data_shape"])
@@ -1299,7 +1310,7 @@ def _affine_linear_metrics(matrix3):
 
 
 def _matrix_to_json(matrix):
-    return np.asarray(matrix, dtype=float).round(12).tolist()
+    return np.asarray(matrix, dtype=float).tolist()
 
 
 def matrix_maps_equal(first, second, tolerance=1e-6):
@@ -2860,6 +2871,14 @@ class StitchRegistrationOperation:
                     {
                         "tile_id": tile["tile_id"],
                         "display_name": tile["display_name"],
+                        **{key: copy.deepcopy(tile.get(key)) for key in (
+                            "source_id", "channel_id", "backing_source_id", "channel",
+                            "channel_selector", "series_index", "series_identity",
+                            "channel_index", "channel_identity", "time_index",
+                            "position_index", "geometry_revision",
+                            "acquisition_geometry_revision", "dependency_revision",
+                            "source_operation_ids",
+                        )},
                         "world_affine": _matrix_to_json(tile["world_affine"]),
                         "support_bounds": {
                             "minimum_xyz": np.asarray(
@@ -4398,7 +4417,7 @@ def _fuse_one_channel(
                     "ffmpeg_executable": ffmpeg_executable,
                     "cancel_check": cancelled,
                 }
-            writer_callback(
+            writer_result = writer_callback(
                 str(temporary),
                 output_map,
                 str(options.get("output_format", "nrrd")),
@@ -4408,14 +4427,22 @@ def _fuse_one_channel(
                 channel_tiles[0].get("space_units"),
                 **writer_kwargs,
             )
+            if (
+                isinstance(writer_result, (tuple, list))
+                and len(writer_result) >= 3
+                and writer_result[2]
+            ):
+                grid["provenance_warning"] = str(writer_result[2])
             # Explicitly close our private mmap before deleting its backing file.
             if owns_output_map:
                 mmap_obj = getattr(output_map, "_mmap", None)
                 if mmap_obj is not None:
                     mmap_obj.close()
                 output_map = None
-            os.replace(temporary, output_path)
+            from madi3d_app.volume.export import publish_staged_volume_pair
+            publish_staged_volume_pair(temporary, output_path, cancel_check=cancelled)
     except Exception:
+        Path(str(temporary)+".madi3d-provenance.json").unlink(missing_ok=True)
         try:
             if temporary.exists():
                 temporary.unlink()
@@ -4452,7 +4479,7 @@ class StitchFusionOperation:
     def __init__(
         self, channel_sets, output_dir, base_name, options, project_payload,
         writer_callback=None, bundle_writer_callback=None,
-        ffmpeg_executable=None, *, progress_callback=None, cancelled=None,
+        ffmpeg_executable=None, supporting_operations=(), *, progress_callback=None, cancelled=None,
         completed_callback=None, failed_callback=None,
     ):
         self.channel_sets = channel_sets
@@ -4463,6 +4490,9 @@ class StitchFusionOperation:
         self.writer_callback = writer_callback
         self.bundle_writer_callback = bundle_writer_callback
         self.ffmpeg_executable = os.fspath(ffmpeg_executable) if ffmpeg_executable else None
+        self.supporting_operations = tuple(
+            copy.deepcopy(record) for record in supporting_operations
+        )
         self._progress_callback = progress_callback or (lambda _value, _text: None)
         self._cancelled = cancelled or (lambda: False)
         self._completed_callback = completed_callback or (lambda _result: None)
@@ -4545,6 +4575,55 @@ class StitchFusionOperation:
                 offset += tile_count
             self.channel_sets = prepared_channel_sets
             mosaic_provenance = preparation.provenance.to_dict()
+            from .models import stitching_fusion_operation_record
+            fusion_record = stitching_fusion_operation_record(
+                self.project_payload, self.options, mosaic_provenance,
+                "stitching-fusion:" + str(uuid.uuid4()),
+            )
+            raw_operation_inputs = [
+                channel.get("scientific_operation_inputs")
+                for channel in self.channel_sets
+            ]
+            scientific_inputs = []
+            if raw_operation_inputs and all(raw_operation_inputs):
+                scientific_inputs = list({
+                    id(capture): capture for capture in raw_operation_inputs
+                }.values())
+                fusion_record["input_record_ids"] = list(dict.fromkeys(
+                    reference["record_id"]
+                    for capture in scientific_inputs
+                    for reference in capture.get("references", ())
+                ))
+                captured_producers = {
+                    capture["direct_records"][reference["record_id"]].get(
+                        "producing_operation_id"
+                    )
+                    for capture in scientific_inputs
+                    for reference in capture.get("references", ())
+                }
+                fusion_record["input_operation_ids"] = [
+                    operation_id
+                    for operation_id in fusion_record.get("input_operation_ids", ())
+                    if operation_id not in captured_producers
+                ]
+            fusion_id = fusion_record["operation_id"]
+            fusion_record["output_grids"] = {}
+            for channel in self.channel_sets:
+                output_grid = _output_grid(
+                    channel["tiles"], self.options["spacing_mode"],
+                    self.options["custom_spacing"], self.options["padding"],
+                )
+                fusion_record["output_grids"][str(channel["label"])] = {
+                    "dims_xyz": list(output_grid["dims"]),
+                    "world_index_affine": np.asarray(output_grid["affine"]).tolist(),
+                    "output_dtype": str(np.dtype(np.uint8) if self.options["output_format"] == "h5j"
+                                        else _fusion_output_dtype(channel["tiles"], self.options)),
+                }
+            self.options["scientific_provenance"] = {
+                "producing_operation_id": fusion_id,
+                "producing_operation": fusion_record,
+                "supporting_operations": copy.deepcopy(self.supporting_operations),
+            }
             out_dir = Path(self.output_dir)
             out_dir.mkdir(parents=True, exist_ok=True)
             outputs = []
@@ -4634,13 +4713,27 @@ class StitchFusionOperation:
                         "ffmpeg_executable": self.ffmpeg_executable,
                         "cancel_check": self._cancelled,
                     }
+                final_path = self._unique_output_path(requested_path)
                 bundle_options = dict(self.options)
+                inputs = [channel.get("scientific_inputs") for channel in self.channel_sets]
+                if all(inputs):
+                    from madi3d_app.volume.provenance import volume_result_projection
+                    bundle_options["portable_projection"] = volume_result_projection(inputs,
+                        [{"display_name": label} for label in labels], [fusion_record]*len(labels),
+                        supporting_operations=self.supporting_operations)
                 bundle_options["stitching_mosaic_geometry"] = mosaic_provenance
-                self.bundle_writer_callback(
+                bundle_writer_result = self.bundle_writer_callback(
                     str(bundle_temporary), combined_map, output_format, bundle_grid,
                     labels, bundle_options,
                     bundle_grid.get("space_units"),
                     **bundle_writer_kwargs,
+                )
+                bundle_warning = (
+                    str(bundle_writer_result[2])
+                    if isinstance(bundle_writer_result, (tuple, list))
+                    and len(bundle_writer_result) >= 3
+                    and bundle_writer_result[2]
+                    else None
                 )
                 if self._cancelled():
                     raise InterruptedError("Stitching fusion was cancelled.")
@@ -4659,9 +4752,11 @@ class StitchFusionOperation:
                 if self._cancelled():
                     raise InterruptedError("Stitching fusion was cancelled.")
                 final_path = self._unique_output_path(requested_path)
-                if self._cancelled():
-                    raise InterruptedError("Stitching fusion was cancelled.")
-                os.replace(bundle_temporary, final_path)
+                from madi3d_app.volume.export import publish_staged_volume_pair
+                publish_staged_volume_pair(bundle_temporary, final_path, cancel_check=self._cancelled)
+                final_companion = Path(str(final_path)+".madi3d-provenance.json")
+                if final_companion.is_file():
+                    published_outputs.append(final_companion)
                 bundle_temporary = None
                 published_outputs.append(final_path)
                 outputs.append({
@@ -4691,6 +4786,7 @@ class StitchFusionOperation:
                         ),
                     },
                     "geometry_provenance": preparation.provenance.to_dict(),
+                    **({"provenance_warning": bundle_warning} if bundle_warning else {}),
                 })
             else:
                 for channel_index, channel in enumerate(self.channel_sets, 1):
@@ -4703,7 +4799,14 @@ class StitchFusionOperation:
                         requested_path, "scalar"
                     )
                     scalar_temporaries.append(staged_path)
+                    path = self._unique_output_path(requested_path)
                     local_options = dict(self.options)
+                    inputs = [member.get("scientific_inputs") for member in self.channel_sets]
+                    if all(inputs):
+                        from madi3d_app.volume.provenance import volume_result_projection
+                        local_options["portable_projection"] = volume_result_projection(inputs,
+                            [{"display_name": label}], [fusion_record],
+                            supporting_operations=self.supporting_operations)
                     local_options["channel_label"] = label
                     local_options["stitching_mosaic_geometry"] = (
                         mosaic_provenance
@@ -4739,9 +4842,11 @@ class StitchFusionOperation:
                     if self._cancelled():
                         raise InterruptedError("Stitching fusion was cancelled.")
                     path = self._unique_output_path(requested_path)
-                    if self._cancelled():
-                        raise InterruptedError("Stitching fusion was cancelled.")
-                    os.replace(staged_path, path)
+                    from madi3d_app.volume.export import publish_staged_volume_pair
+                    publish_staged_volume_pair(staged_path, path, cancel_check=self._cancelled)
+                    final_companion = Path(str(path)+".madi3d-provenance.json")
+                    if final_companion.is_file():
+                        published_outputs.append(final_companion)
                     scalar_temporaries.remove(staged_path)
                     published_outputs.append(path)
                     outputs.append({
@@ -4770,21 +4875,44 @@ class StitchFusionOperation:
                             ),
                         },
                         "geometry_provenance": preparation.provenance.to_dict(),
+                        **(
+                            {"provenance_warning": grid["provenance_warning"]}
+                            if grid.get("provenance_warning")
+                            else {}
+                        ),
                     })
 
             payload = dict(self.project_payload)
-            payload["outputs"] = outputs
-            payload["fusion_options"] = self.options
-            payload["mosaic_coordinate_space_id"] = (
-                preparation.provenance.coordinate_space_id
+            payload["outputs"] = [
+                {
+                    key: copy.deepcopy(entry[key])
+                    for key in ("path", "label", "channels", "multichannel")
+                    if key in entry
+                }
+                | {
+                    "grid": {
+                        key: copy.deepcopy(entry["grid"][key])
+                        for key in (
+                            "dims", "origin", "spacing", "affine",
+                            "orientation_mode", "reference_tile_id",
+                            "coordinate_space_id", "space_units",
+                            "geometry_status",
+                        )
+                        if key in entry["grid"]
+                    }
+                }
+                for entry in outputs
+            ]
+            payload["fusion_parameters"] = material_stitching_fusion_parameters(
+                self.options
             )
+            payload.pop("mosaic_coordinate_space_id", None)
+            payload["operation_id"] = fusion_id
+            payload["execution_status"] = "completed"
             payload["mosaic_geometry"] = preparation.provenance.to_dict()
-            registration_rejections = list(payload.get("rejections") or [])
             completed_with_warnings = bool(
                 preparation.warnings
                 or preparation.assumptions
-                or registration_rejections
-                or payload.get("completed_with_warnings")
             )
             payload["completed_with_warnings"] = completed_with_warnings
             if self._cancelled():
@@ -4806,6 +4934,8 @@ class StitchFusionOperation:
                 {
                     "outputs": outputs,
                     "project_path": str(project_path),
+                    "operation_record": fusion_record,
+                    "scientific_inputs": scientific_inputs,
                     "completed_with_warnings": completed_with_warnings,
                     "warnings": preparation.warnings,
                     "assumptions": preparation.assumptions,
@@ -4832,12 +4962,14 @@ class StitchFusionOperation:
                         pass
             if bundle_temporary is not None:
                 try:
+                    Path(str(bundle_temporary)+".madi3d-provenance.json").unlink(missing_ok=True)
                     if Path(bundle_temporary).exists():
                         Path(bundle_temporary).unlink()
                 except Exception:
                     pass
             for scalar_temporary in scalar_temporaries:
                 try:
+                    Path(str(scalar_temporary)+".madi3d-provenance.json").unlink(missing_ok=True)
                     if Path(scalar_temporary).exists():
                         Path(scalar_temporary).unlink()
                 except Exception:

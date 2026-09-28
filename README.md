@@ -510,6 +510,7 @@ MADI3D supports common microscopy and morphology formats including:
 
 - **TIFF / TIF**
 - **Zeiss LSM**
+- **ZEISS CZI** (read-only grayscale fluorescence volumes)
 - **Olympus OIF / OIB**
 - **NRRD**
 - **NIfTI / NII**

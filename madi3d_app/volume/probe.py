@@ -31,6 +31,16 @@ from .leica_lif import (
     LeicaInspectionError,
     LeicaSourceInspection,
 )
+from .nikon_nd2 import (
+    inspect_nikon_nd2_source,
+    NikonInspectionError,
+    NikonSourceInspection,
+)
+from .zeiss_czi import (
+    inspect_zeiss_czi_source,
+    CziInspectionError,
+    CziSourceInspection,
+)
 from .olympus import (
     inspect_olympus_source,
     OlympusInspectionError,
@@ -39,11 +49,11 @@ from .olympus import (
 from .provenance import (
     axis_contract,
     first_explicit_text,
-    geometry_checksum,
     h5j_position_attribute_subset,
     scalar_descriptor,
 )
 from .source_formats import (
+    nifti_runtime_time_unit,
     source_error_container_format,
     tiff_container_format,
     volume_reader_mode,
@@ -156,25 +166,11 @@ class VolumeSourceProbe:
     def source_axis_semantics(self) -> tuple[str, ...]:
         return axis_contract(self.axis_semantics)[1]
 
-    @property
-    def geometry_checksum(self) -> Optional[str]:
-        return geometry_checksum(
-            dimensions=self.dimensions,
-            spacing=self.spacing,
-            spatial_units=self.space_units,
-            origin=self.origin,
-            direction=self.direction,
-            time_point_count=self.time_count,
-            time_interval=self.time_interval,
-            time_units=self.time_units,
-        )
-
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
         result.update({
             "source_axis_order": self.source_axis_order,
             "source_axis_semantics": self.source_axis_semantics,
-            "geometry_checksum": self.geometry_checksum,
         })
         return result
 
@@ -2172,7 +2168,6 @@ def _probe_nifti(path: str, *, image=None) -> VolumeSourceProbe:
         spatial_unit, time_unit = "unknown", "unknown"
     spatial_unit = str(spatial_unit or "unknown")
     time_unit = str(time_unit or "unknown")
-    known_time = time_unit.lower() not in {"", "unknown", "none"}
 
     semantics = ["space-x", "space-y"]
     if len(shape) >= 3:
@@ -2313,7 +2308,7 @@ def _probe_nifti(path: str, *, image=None) -> VolumeSourceProbe:
         direction=direction_value,
         time_count=time_count,
         time_interval=time_interval,
-        time_units=time_unit if known_time else "frame",
+        time_units=nifti_runtime_time_unit(time_unit),
         scalar_dtype=scalar_dtype,
         scalar_bit_depth=scalar_bit_depth,
         ambiguities=tuple(ambiguities),
@@ -2548,6 +2543,285 @@ def _probe_leica(
             selected.acquisition_metadata
         ),
         microscopy_channel_metadata=copy.deepcopy(channel_metadata),
+    )
+
+
+def _probe_nikon(
+    path: str,
+    *,
+    series_index: Optional[int] = None,
+    source_subselection: Optional[dict[str, int]] = None,
+    axis_resolution: Optional[dict[Any, str]] = None,
+    channel_order: Optional[tuple[str, ...]] = None,
+    resolution_source: str = "explicit-import-plan",
+    cancel_check=None,
+    inspection: Optional[NikonSourceInspection] = None,
+) -> VolumeSourceProbe:
+    """Resolve one ND2 position without treating P as a voxel dimension."""
+    try:
+        source = inspection or inspect_nikon_nd2_source(
+            path, cancel_check=cancel_check
+        )
+    except NikonInspectionError as exc:
+        return VolumeSourceProbe(
+            container_format="nikon-nd2", errors=(str(exc),)
+        )
+    candidates = tuple(
+        SeriesCandidate(item.index, item.identity, "".join(item.axes), item.shape)
+        for item in source.series
+    )
+    if not candidates:
+        return VolumeSourceProbe(
+            container_format="nikon-nd2",
+            errors=("Nikon ND2 source contains no supported image positions.",),
+            microscopy_source_metadata=source.source_metadata,
+        )
+    if series_index is None and len(candidates) > 1:
+        return VolumeSourceProbe(
+            container_format="nikon-nd2",
+            series_candidates=candidates,
+            ambiguities=(
+                "Nikon ND2 contains several positions; select a position before import.",
+            ),
+            resolution_required=True,
+            microscopy_source_metadata=source.source_metadata,
+        )
+    selected_index = candidates[0].index if series_index is None else series_index
+    selected = next(
+        (item for item in source.series if item.index == selected_index), None
+    )
+    if selected is None:
+        return VolumeSourceProbe(
+            container_format="nikon-nd2",
+            series_candidates=candidates,
+            errors=(f"Nikon ND2 position {selected_index!r} is unavailable.",),
+            microscopy_source_metadata=source.source_metadata,
+        )
+    labels = tuple(selected.axes)
+    shape = tuple(selected.shape)
+    errors = []
+    ambiguities = []
+    if axis_resolution:
+        errors.append(
+            "Nikon ND2 nonstandard axes cannot be remapped as biological volume axes."
+        )
+    supplied = dict(source_subselection or {})
+    expected_subselection = (
+        {"P": selected.index}
+        if selected.raw_fields.get("has_position_axis")
+        else {}
+    )
+    if supplied and supplied != expected_subselection:
+        errors.append(
+            "Nikon ND2 position selection does not match the selected source position."
+        )
+    if selected.raw_fields.get("has_position_axis") and not supplied and len(candidates) > 1:
+        errors.append("Nikon ND2 position requires an explicit P selection.")
+    if len(labels) != len(shape) or len(set(labels)) != len(labels):
+        errors.append("Nikon ND2 source axes are duplicated or inconsistent.")
+    for required in ("X", "Y"):
+        if labels.count(required) != 1:
+            errors.append(f"Nikon ND2 image must declare exactly one {required} axis.")
+    semantics = tuple(
+        {"X": "space-x", "Y": "space-y", "Z": "space-z", "T": "time",
+         "C": "channel", "S": "component"}.get(label, "unknown")
+        for label in labels
+    )
+    for label, size, semantic in zip(labels, shape, semantics):
+        if size > 1 and semantic in {"component", "unknown"}:
+            ambiguities.append(
+                f"Nikon ND2 axis {label!r} has unsupported size {size}; "
+                "it cannot be interpreted as a biological channel or volume axis."
+            )
+    for dtype in selected.channel_scalar_dtypes or (selected.scalar_dtype,):
+        scalar_error = _scalar_type_error(dtype, "Nikon ND2")
+        if scalar_error:
+            errors.append(scalar_error)
+    channel_count = shape[labels.index("C")] if "C" in labels else 1
+    names = tuple(selected.channel_names)
+    metadata = tuple(selected.channel_metadata)
+    dtypes = tuple(selected.channel_scalar_dtypes)
+    bit_depths = tuple(selected.channel_scalar_bit_depths)
+    if len(names) != channel_count or len(metadata) != channel_count:
+        errors.append("Nikon ND2 channel metadata does not match source channel count.")
+    channel_indices = list(range(channel_count))
+    provenance = [{
+        "decision": "series-selection",
+        "source": str(resolution_source),
+        "series_index": selected.index,
+        "series_identity": selected.identity,
+        "source_subselection": expected_subselection,
+    }]
+    if channel_count > 1 and channel_order is not None:
+        requested = tuple(str(value) for value in channel_order)
+        if len(set(names)) != len(names) or len(set(requested)) != len(requested) or set(requested) != set(names):
+            errors.append("Nikon ND2 channel order does not match the source channels.")
+        else:
+            channel_indices = [names.index(name) for name in requested]
+            names = requested
+            metadata = tuple(metadata[index] for index in channel_indices)
+            dtypes = tuple(dtypes[index] for index in channel_indices)
+            bit_depths = tuple(bit_depths[index] for index in channel_indices)
+            provenance.append({
+                "decision": "channel-order", "source": str(resolution_source),
+                "order": list(names),
+            })
+    selectors = tuple({
+        "series_index": selected.index,
+        "series_identity": selected.identity,
+        "source_subselection": expected_subselection,
+        "channel": index if channel_count > 1 else None,
+        "axes": list(labels),
+        "scalar_dtype": selected.channel_scalar_dtypes[index],
+        "significant_bit_depth": selected.channel_scalar_bit_depths[index],
+        "time_count": selected.time_count,
+    } for index in channel_indices)
+    return VolumeSourceProbe(
+        container_format="nikon-nd2",
+        series_identity=selected.identity,
+        series_index=selected.index,
+        series_candidates=candidates,
+        axis_semantics=tuple(
+            AxisSemantic(index, size, semantic, labels[index])
+            for index, (size, semantic) in enumerate(zip(shape, semantics))
+        ),
+        channel_count=channel_count,
+        channel_selectors=selectors,
+        channel_names=names,
+        dimensions=_spatial_dimensions(shape, semantics),
+        spacing=selected.spacing,
+        space_units=selected.space_units,
+        origin=None,
+        direction=None,
+        time_count=selected.time_count,
+        time_interval=selected.time_interval,
+        time_units=selected.time_units,
+        scalar_dtype=selected.scalar_dtype,
+        scalar_bit_depth=selected.scalar_bit_depth,
+        channel_scalar_dtypes=dtypes,
+        channel_scalar_bit_depths=bit_depths,
+        ambiguities=tuple(ambiguities),
+        errors=tuple(errors),
+        missing_fields=selected.missing_fields,
+        raw_fields=copy.deepcopy(selected.raw_fields),
+        physical_geometry_diagnostics=selected.physical_geometry_diagnostics,
+        resolution_required=bool(ambiguities),
+        resolution_provenance=tuple(provenance),
+        microscopy_source_metadata=copy.deepcopy(source.source_metadata),
+        microscopy_acquisition_metadata=copy.deepcopy(selected.acquisition_metadata),
+        microscopy_channel_metadata=copy.deepcopy(metadata),
+    )
+
+
+def _probe_czi(
+    path: str,
+    *,
+    series_index: Optional[int] = None,
+    source_subselection: Optional[dict[str, int]] = None,
+    axis_resolution: Optional[dict[Any, str]] = None,
+    channel_order: Optional[tuple[str, ...]] = None,
+    resolution_source: str = "explicit-import-plan",
+    cancel_check=None,
+    inspection: Optional[CziSourceInspection] = None,
+) -> VolumeSourceProbe:
+    """Resolve a CZI scene as an acquisition, never as a voxel axis."""
+    try:
+        source = inspection or inspect_zeiss_czi_source(path, cancel_check=cancel_check)
+    except CziInspectionError as exc:
+        return VolumeSourceProbe(container_format="zeiss-czi", errors=(str(exc),))
+    candidates = tuple(
+        SeriesCandidate(item.index, item.identity, "".join(item.axes), item.shape)
+        for item in source.series
+    )
+    if not candidates:
+        return VolumeSourceProbe(
+            container_format="zeiss-czi",
+            errors=("ZEISS CZI source has no supported fluorescence volume scenes.",),
+            microscopy_source_metadata=source.source_metadata,
+        )
+    if series_index is None and len(candidates) > 1:
+        return VolumeSourceProbe(
+            container_format="zeiss-czi", series_candidates=candidates,
+            ambiguities=("ZEISS CZI contains several scenes; select one before import.",),
+            resolution_required=True, microscopy_source_metadata=source.source_metadata,
+        )
+    selected_index = candidates[0].index if series_index is None else series_index
+    selected = next((item for item in source.series if item.index == selected_index), None)
+    if selected is None:
+        return VolumeSourceProbe(
+            container_format="zeiss-czi", series_candidates=candidates,
+            errors=(f"ZEISS CZI scene {selected_index!r} is unavailable.",),
+            microscopy_source_metadata=source.source_metadata,
+        )
+    expected_subselection = (
+        {"S": selected.scene_index} if selected.scene_index is not None else {}
+    )
+    supplied = dict(source_subselection or {})
+    errors = []
+    if axis_resolution:
+        errors.append("ZEISS CZI dimensions cannot be remapped as biological volume axes.")
+    if supplied and supplied != expected_subselection:
+        errors.append("ZEISS CZI source scene selection does not match the selected scene.")
+    if expected_subselection and len(candidates) > 1 and not supplied:
+        errors.append("ZEISS CZI requires an explicit source scene selection.")
+    labels = selected.axes
+    shape = selected.shape
+    semantics = ("time", "space-z", "channel", "space-y", "space-x")
+    names = tuple(selected.channel_names)
+    metadata = tuple(selected.channel_metadata)
+    dtypes = tuple(selected.channel_scalar_dtypes)
+    bit_depths = tuple(selected.channel_scalar_bit_depths)
+    channel_indices = list(range(len(selected.channel_indices)))
+    if channel_order is not None and len(channel_indices) > 1:
+        requested = tuple(str(value) for value in channel_order)
+        if len(set(names)) != len(names) or len(set(requested)) != len(requested) or set(requested) != set(names):
+            errors.append("ZEISS CZI channel order does not match source channels.")
+        else:
+            channel_indices = [names.index(name) for name in requested]
+            names = requested
+            metadata = tuple(metadata[index] for index in channel_indices)
+            dtypes = tuple(dtypes[index] for index in channel_indices)
+            bit_depths = tuple(bit_depths[index] for index in channel_indices)
+    widest_channel = max(range(len(dtypes)), key=lambda index: np.dtype(dtypes[index]).itemsize)
+    selectors = tuple({
+        "series_index": selected.index,
+        "series_identity": selected.identity,
+        "source_subselection": expected_subselection,
+        "source_selection": selected.source_selection(),
+        "channel": index if len(selected.channel_indices) > 1 else None,
+        "channel_source_index": selected.channel_indices[index],
+        "axes": list(labels),
+        "scalar_dtype": selected.channel_scalar_dtypes[index],
+        "significant_bit_depth": selected.channel_scalar_bit_depths[index],
+        "time_count": selected.time_count,
+    } for index in channel_indices)
+    return VolumeSourceProbe(
+        container_format="zeiss-czi",
+        series_identity=selected.identity, series_index=selected.index,
+        series_candidates=candidates,
+        axis_semantics=tuple(
+            AxisSemantic(index, size, semantics[index], labels[index])
+            for index, size in enumerate(shape)
+        ),
+        channel_count=len(selected.channel_indices), channel_selectors=selectors,
+        channel_names=names, dimensions=_spatial_dimensions(shape, semantics),
+        spacing=selected.spacing, space_units=selected.space_units,
+        origin=None, direction=None,
+        time_count=selected.time_count, time_interval=selected.time_interval,
+        time_units=selected.time_units,
+        scalar_dtype=dtypes[widest_channel], scalar_bit_depth=bit_depths[widest_channel],
+        channel_scalar_dtypes=dtypes, channel_scalar_bit_depths=bit_depths,
+        errors=tuple(errors), missing_fields=selected.missing_fields,
+        raw_fields=copy.deepcopy(selected.raw_fields),
+        physical_geometry_diagnostics=selected.physical_geometry_diagnostics,
+        resolution_provenance=({
+            "decision": "series-selection", "source": str(resolution_source),
+            "series_index": selected.index, "series_identity": selected.identity,
+            "source_subselection": expected_subselection,
+        },),
+        microscopy_source_metadata=copy.deepcopy(source.source_metadata),
+        microscopy_acquisition_metadata=copy.deepcopy(selected.acquisition_metadata),
+        microscopy_channel_metadata=copy.deepcopy(metadata),
     )
 
 
@@ -2822,6 +3096,26 @@ def probe_volume_source(
             return _probe_leica(
                 source,
                 series_index=series_index,
+                axis_resolution=axis_resolution,
+                channel_order=channel_order,
+                resolution_source=resolution_source,
+                cancel_check=cancel_check,
+            )
+        if reader_mode == "nikon":
+            return _probe_nikon(
+                source,
+                series_index=series_index,
+                source_subselection=source_subselection,
+                axis_resolution=axis_resolution,
+                channel_order=channel_order,
+                resolution_source=resolution_source,
+                cancel_check=cancel_check,
+            )
+        if reader_mode == "zeiss-czi":
+            return _probe_czi(
+                source,
+                series_index=series_index,
+                source_subselection=source_subselection,
                 axis_resolution=axis_resolution,
                 channel_order=channel_order,
                 resolution_source=resolution_source,

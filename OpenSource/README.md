@@ -110,14 +110,17 @@ without duplicating or rewriting their implementation.
 - `madi3d_app/volume/probe.py`
 - `madi3d_app/volume/provenance.py`
 - `madi3d_app/volume/source_formats.py`
+- `madi3d_app/volume/zeiss_czi.py`
 - `madi3d_app/volume/zeiss_lsm.py`
 
 This scope makes the project-owned file/container interpretation, source and
 channel metadata, calibration evidence, physical/working-grid handling, and
 voxel decoding logic auditable. The GUI-independent FFmpeg backend used by H5J
 decoding is included; its Qt first-use setup UI remains private application
-composition. The scope does not include private GUI import composition, scene
-publication, or other application orchestration that is not listed above.
+composition. The ZEISS CZI adapter interprets read-only grayscale fluorescence
+microscopy scanned volumes. The scope does not include private GUI import
+composition, scene publication, or other application orchestration that is not
+listed above.
 
 ### Volume rendering
 

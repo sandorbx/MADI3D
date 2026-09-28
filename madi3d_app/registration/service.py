@@ -98,7 +98,7 @@ class RegistrationLocalGrid:
 
 
 def _matrix_to_json(value):
-    return _matrix4(value).round(12).tolist()
+    return _matrix4(value).tolist()
 
 
 def _canonical_units_or_none(raw_units):
@@ -2601,6 +2601,14 @@ class RegistrationWorker(QtCore.QThread):
     def __init__(self, tasks, settings, cmtk_backend=None, parent=None):
         super().__init__(parent)
         self.tasks = list(tasks or [])
+        # Small direct provenance captures stay parallel to results after the
+        # large task arrays are released.  They are runtime state only.
+        self.completed_captures = []
+        self.attempt_inputs = [
+            {role: copy.deepcopy((task.get(role) or {}).get("descriptor") or {})
+             for role in ("fixed", "moving")}
+            for task in self.tasks
+        ]
         self.settings = RegistrationSettings.from_dict(settings)
         self.cmtk_backend = cmtk_backend
         self._cancel = False
@@ -2670,6 +2678,7 @@ class RegistrationWorker(QtCore.QThread):
                 chain = self._register_pair(task, index, total)
                 chain.logs = copy.deepcopy(self.logs[task_log_start:])
                 results.append(chain)
+                self.completed_captures.append(task.get("scientific_capture"))
                 # Batch snapshots are large NumPy arrays. Release each completed
                 # moving task immediately instead of retaining the whole batch
                 # until QThread teardown. The shared fixed snapshot remains alive
@@ -2974,6 +2983,12 @@ class RegistrationWorker(QtCore.QThread):
         for assumption in working_space.get("assumptions") or ():
             self._diag("Registration working-space assumption", level="WARNING", details=assumption)
         sitk = _sitk_module()
+        from madi3d_version import MADI3D_VERSION
+        working_space["software_versions"] = {
+            "MADI3D": MADI3D_VERSION,
+            "SimpleITK": str(getattr(sitk, "Version_VersionString", lambda: "unknown")()),
+            "NumPy": str(np.__version__),
+        }
 
         # Keep the fixed and moving working images compact. Their physical origins
         # remain in MADI world coordinates, so ITK can register them without one
@@ -4110,6 +4125,9 @@ class ReformatWorker(QtCore.QThread):
 
     def run(self):
         temp_root = None
+        pending_outputs = []
+        published_files = []
+        completed = False
         try:
             interpolation = str(self.settings.get("interpolation", "linear"))
             dtype_mode = str(self.settings.get("dtype", "preserve"))
@@ -4130,6 +4148,20 @@ class ReformatWorker(QtCore.QThread):
                 self._check_cancel()
                 task_kind = str(task.get("kind") or "volume").lower()
                 engine = str(task.get("engine") or "itk").lower()
+                application_evidence = {
+                    "parameters": {"engine": engine, "interpolation": interpolation,
+                                   "dtype_mode": dtype_mode},
+                    "output_grid": copy.deepcopy(task.get("reference_geometry") or {}),
+                    "source_geometry": copy.deepcopy(task.get("source_geometry") or {}),
+                    "source_actor_matrix": copy.deepcopy(task.get("source_actor_matrix")),
+                    "output_actor_matrix": copy.deepcopy(task["reference_actor_matrix"]),
+                    "registration_stage": str(task.get("registration_stage") or ""),
+                    "transform_application": "baked_into_output_local_coordinates",
+                    "source_dependency_revision": copy.deepcopy(
+                        (task.get("source_descriptor") or {}).get("dependency_revision")),
+                }
+                if not task.get("registration_operation_id"):
+                    application_evidence["result_transform"] = copy.deepcopy(task.get("transform"))
                 if task_kind == "mesh":
                     if engine == "cmtk":
                         raise RuntimeError(
@@ -4144,8 +4176,10 @@ class ReformatWorker(QtCore.QThread):
                         source_world, task["transform"]["cumulative_moving_to_fixed"]
                     )
                     reference_local = _apply_points_affine(reference_world, reference_actor_inverse)
-                    self.outputReady.emit({
+                    pending_outputs.append({
                         "kind": "mesh",
+                        "registration_operation_id": task.get("registration_operation_id"),
+                        "application_evidence": application_evidence,
                         "points_local": reference_local.astype(np.float64, copy=False),
                         "display_name": task["output_name"],
                         "source_descriptor": copy.deepcopy(task.get("source_descriptor") or {}),
@@ -4162,6 +4196,7 @@ class ReformatWorker(QtCore.QThread):
                     continue
 
                 data = np.asanyarray(task["data"])
+                application_evidence["input_dtype"] = str(data.dtype)
                 frames = data if data.ndim == 4 else data[np.newaxis, ...]
                 if frames.ndim != 4:
                     raise RuntimeError(f"Reformat expects Z,Y,X or T,Z,Y,X data, got {data.shape}.")
@@ -4211,6 +4246,7 @@ class ReformatWorker(QtCore.QThread):
                 if output is None:
                     raise RuntimeError(f"Reformat produced no frames for {task['display_name']}.")
                 written_path = ""
+                provenance_warning = None
                 disk_output_path = str(task.get("disk_output_path") or "").strip()
                 if disk_output_path:
                     if not callable(self.volume_output_writer):
@@ -4226,6 +4262,10 @@ class ReformatWorker(QtCore.QThread):
                         registration_provenance = copy.deepcopy(
                             task.get("registration_provenance") or {}
                         )
+                        registration_provenance.update(application_evidence)
+                        registration_provenance["registration_operation_id"] = task.get("registration_operation_id")
+                        registration_provenance["supporting_operations"] = copy.deepcopy(task.get("supporting_operations") or [])
+                        registration_provenance["output_dtype"] = str(output.dtype)
                         registration_provenance.update(
                             {
                                 "operation": "registration_reformat",
@@ -4243,6 +4283,12 @@ class ReformatWorker(QtCore.QThread):
                                 ),
                                 "source_entry_id": str(
                                     task.get("source_entry_id") or ""
+                                ),
+                                "source_input_record_id": str(
+                                    task.get("source_input_record_id") or ""
+                                ),
+                                "reference_input_record_id": str(
+                                    task.get("reference_input_record_id") or ""
                                 ),
                                 "source_acquisition_id": str(
                                     task.get("source_acquisition_id") or ""
@@ -4271,6 +4317,9 @@ class ReformatWorker(QtCore.QThread):
                                 "reference_operation_ids": list(
                                     task.get("reference_operation_ids") or ()
                                 ),
+                                "output_grid_operation_ids": list(
+                                    task.get("output_grid_operation_ids") or ()
+                                ),
                                 "supporting_operations": copy.deepcopy(
                                     task.get("supporting_operations") or ()
                                 ),
@@ -4283,7 +4332,7 @@ class ReformatWorker(QtCore.QThread):
                                     else ""
                                 ),
                                 "result_transform": copy.deepcopy(
-                                    task.get("transform")
+                                    task.get("transform") if not task.get("registration_operation_id") else None
                                 ),
                                 "engine": engine,
                                 "interpolation": interpolation,
@@ -4305,6 +4354,9 @@ class ReformatWorker(QtCore.QThread):
                                 ),
                             }
                         )
+                        registration_provenance["scientific_inputs"] = task.get(
+                            "portable_scientific_inputs"
+                        )
                         writer_kwargs["registration_provenance"] = (
                             registration_provenance
                         )
@@ -4315,7 +4367,7 @@ class ReformatWorker(QtCore.QThread):
                                     self._cancel or self.isInterruptionRequested()
                                 ),
                             })
-                        self.volume_output_writer(
+                        writer_result = self.volume_output_writer(
                             str(temporary_path),
                             output,
                             str(task.get("disk_output_format") or "nrrd"),
@@ -4328,19 +4380,38 @@ class ReformatWorker(QtCore.QThread):
                             str(task.get("coordinate_space_id") or ""),
                             **writer_kwargs,
                         )
+                        provenance_warning = (
+                            str(writer_result[2])
+                            if writer_result and writer_result[2]
+                            else None
+                        )
                         if not temporary_path.is_file():
                             raise RuntimeError(
                                 f"Registration volume writer returned without creating: {temporary_path}"
                             )
                         final_path.parent.mkdir(parents=True, exist_ok=True)
-                        os.replace(temporary_path, final_path)
+                        self._check_cancel()
+                        if final_path.exists():
+                            raise FileExistsError(f"Reformat output already exists: {final_path}")
+                        from madi3d_app.io_utils import publish_file_pair
+                        from madi3d_app.project.scientific_records import object_metadata_sidecar_path
+                        companion = Path(object_metadata_sidecar_path(temporary_path))
+                        publish_file_pair(temporary_path, final_path, companion if companion.is_file() else None,
+                                          object_metadata_sidecar_path(final_path), cancel_check=lambda: self._cancel or self.isInterruptionRequested())
+                        published_files.append(final_path)
+                        final_companion = Path(object_metadata_sidecar_path(final_path))
+                        if final_companion.is_file():
+                            published_files.append(final_companion)
                     except BaseException:
                         temporary_path.unlink(missing_ok=True)
+                        Path(str(temporary_path)+".madi3d-provenance.json").unlink(missing_ok=True)
                         raise
                     written_path = str(final_path)
 
                 payload = {
                     "kind": "volume",
+                    "registration_operation_id": task.get("registration_operation_id"),
+                    "application_evidence": {**application_evidence, "output_dtype": str(output.dtype)},
                     "display_name": task["output_name"],
                     "source_descriptor": copy.deepcopy(task.get("source_descriptor") or {}),
                     "source_metadata": copy.deepcopy(task.get("source_metadata") or {}),
@@ -4357,6 +4428,20 @@ class ReformatWorker(QtCore.QThread):
                     "source_name": str(task.get("display_name") or "Volume"),
                     "reference_name": str(task.get("reference_name") or "Reference"),
                     "source_entry_id": str(task.get("source_entry_id") or ""),
+                    "source_input_record_id": str(
+                        task.get("source_input_record_id") or ""
+                    ),
+                    "reference_input_record_id": str(
+                        task.get("reference_input_record_id") or ""
+                    ),
+                    "scientific_operation_inputs": task.get(
+                        "scientific_operation_inputs"
+                    ),
+                    **(
+                        {"provenance_warning": provenance_warning}
+                        if written_path and provenance_warning
+                        else {}
+                    ),
                     "source_acquisition_id": str(
                         task.get("source_acquisition_id") or ""
                     ),
@@ -4384,6 +4469,9 @@ class ReformatWorker(QtCore.QThread):
                     "reference_operation_ids": list(
                         task.get("reference_operation_ids") or ()
                     ),
+                    "output_grid_operation_ids": list(
+                        task.get("output_grid_operation_ids") or ()
+                    ),
                     "supporting_operations": copy.deepcopy(
                         task.get("supporting_operations") or ()
                     ),
@@ -4403,8 +4491,12 @@ class ReformatWorker(QtCore.QThread):
                 }
                 if bool(task.get("emit_data", True)):
                     payload["data"] = output
-                self.outputReady.emit(payload)
+                pending_outputs.append(payload)
                 created += 1
+            self._check_cancel()
+            completed = True
+            for payload in pending_outputs:
+                self.outputReady.emit(payload)
             self.progress.emit(100, "Reformat complete")
             self.succeeded.emit(created)
         except InterruptedError:
@@ -4412,6 +4504,9 @@ class ReformatWorker(QtCore.QThread):
         except Exception:
             self.failed.emit(traceback.format_exc())
         finally:
+            if not completed:
+                for path in reversed(published_files):
+                    path.unlink(missing_ok=True)
             if temp_root is not None:
                 shutil.rmtree(temp_root, ignore_errors=True)
             self.tasks = []

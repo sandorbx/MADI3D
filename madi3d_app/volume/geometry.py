@@ -336,6 +336,8 @@ class PhysicalGridObservation:
         )
 
     def __deepcopy__(self, memo):
+        # Construction freezes raw evidence and provenance recursively; all
+        # remaining fields are scalars or tuples of immutable values.
         memo[id(self)] = self
         return self
 

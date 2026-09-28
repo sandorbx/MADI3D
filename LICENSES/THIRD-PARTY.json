@@ -23,6 +23,16 @@
       "license": "MIT",
       "source": "https://pypi.org/project/charset-normalizer/"
     },
+    "click": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/click/"
+    },
+    "cloudpickle": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/cloudpickle/"
+    },
     "colorama": {
       "status": "bundled when collected",
       "license": "BSD-3-Clause",
@@ -38,10 +48,20 @@
       "license": "BSD-3-Clause",
       "source": "https://pypi.org/project/cycler/"
     },
+    "dask": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/dask/"
+    },
     "fonttools": {
       "status": "bundled when collected",
       "license": "MIT",
       "source": "https://pypi.org/project/fonttools/"
+    },
+    "fsspec": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/fsspec/"
     },
     "h5py": {
       "status": "bundled when collected",
@@ -58,6 +78,11 @@
       "license": "BSD-3-Clause",
       "source": "https://pypi.org/project/imagecodecs/"
     },
+    "importlib-metadata": {
+      "status": "bundled when collected",
+      "license": "Apache-2.0",
+      "source": "https://pypi.org/project/importlib-metadata/"
+    },
     "imageio": {
       "status": "bundled when collected",
       "license": "BSD-2-Clause",
@@ -73,6 +98,11 @@
       "license": "BSD-3-Clause",
       "source": "https://pypi.org/project/kiwisolver/"
     },
+    "locket": {
+      "status": "bundled when collected",
+      "license": "BSD-2-Clause",
+      "source": "https://pypi.org/project/locket/"
+    },
     "liffile": {
       "status": "bundled when collected",
       "license": "BSD-3-Clause",
@@ -82,6 +112,11 @@
       "status": "bundled when collected",
       "license": "LicenseRef-Matplotlib (PSF-based)",
       "source": "https://pypi.org/project/matplotlib/"
+    },
+    "nd2": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/nd2/"
     },
     "neuronbridge-python": {
       "status": "bundled when collected",
@@ -100,6 +135,11 @@
       "license": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0",
       "source": "https://pypi.org/project/numpy/"
     },
+    "ome-types": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/ome-types/"
+    },
     "oiffile": {
       "status": "bundled when collected",
       "license": "BSD-3-Clause",
@@ -110,10 +150,53 @@
       "license": "Apache-2.0",
       "source": "https://github.com/opencv/opencv-python/tree/b83046cda41133f1bf2e73e99dba16a1248f103a"
     },
+    "pylibczirw": {
+      "status": "bundled when collected",
+      "license": "LGPL-3.0",
+      "source": "https://github.com/ZEISS/pylibCZIrw/tree/3fd66f681d82f5781e404fa56d783e5b8b74684f",
+      "notice": "LICENSES/pylibCZIrw-NOTICE.md",
+      "retained_notices": {
+        "version": "6.1.0",
+        "files": [
+          {
+            "filename": "libCZI-LGPL-3.0.txt",
+            "text_sha256": "2aa393d8f43847a7d34d6fee44944b46a092bc24888e947448f55353b74883d1"
+          },
+          {
+            "filename": "libCZI-THIRD-PARTY-LICENSES.txt",
+            "text_sha256": "378c0588a2c66f3d9ed5e3b2511d974e1c7e79f47f221cb3437a0a794e599590"
+          },
+          {
+            "filename": "pybind11-LICENSE.txt",
+            "text_sha256": "5494773a5dcf654c0c3c844fbb11cfc4f898ea0ea44cf467f29e5c99097da6e7"
+          }
+        ]
+      }
+    },
+    "cmake": {
+      "status": "build-only",
+      "license": "Apache-2.0",
+      "source": "https://pypi.org/project/cmake/"
+    },
+    "validators": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/validators/"
+    },
+    "xmltodict": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/xmltodict/"
+    },
     "packaging": {
       "status": "bundled when collected",
       "license": "Apache-2.0 OR BSD-2-Clause",
       "source": "https://pypi.org/project/packaging/"
+    },
+    "partd": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/partd/"
     },
     "pefile": {
       "status": "build-only",
@@ -139,6 +222,11 @@
       "status": "bundled when collected",
       "license": "MIT",
       "source": "https://pypi.org/project/pydantic-core/"
+    },
+    "pydantic-extra-types": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/pydantic-extra-types/"
     },
     "pygame": {
       "status": "bundled when collected",
@@ -209,7 +297,7 @@
       "source": "https://pypi.org/project/pywin32-ctypes/"
     },
     "pyyaml": {
-      "status": "not shipped; optional NumPy/SciPy build-report formatter",
+      "status": "bundled when collected",
       "license": "MIT",
       "source": "https://pypi.org/project/pyyaml/"
     },
@@ -217,6 +305,11 @@
       "status": "bundled when collected",
       "license": "Apache-2.0",
       "source": "https://pypi.org/project/requests/"
+    },
+    "resource-backed-dask-array": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/resource-backed-dask-array/"
     },
     "scipy": {
       "status": "bundled when collected",
@@ -276,6 +369,11 @@
       "license": "BSD-3-Clause",
       "source": "https://pypi.org/project/tifffile/"
     },
+    "toolz": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/toolz/"
+    },
     "tqdm": {
       "status": "bundled when collected",
       "license": "MPL-2.0 AND MIT",
@@ -300,6 +398,16 @@
       "status": "bundled when collected",
       "license": "BSD-3-Clause",
       "source": "https://pypi.org/project/vtk/"
+    },
+    "xsdata": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/xsdata/"
+    },
+    "zipp": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/zipp/"
     }
   }
 }

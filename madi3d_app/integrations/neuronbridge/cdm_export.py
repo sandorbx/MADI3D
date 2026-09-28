@@ -27,16 +27,33 @@ def _file_sha(path, cancel):
     return digest.hexdigest()
 
 
+def automatic_cdm_label(source_name):
+    """Keep meaningful dots; strip only supported input filename extensions."""
+    name = str(source_name).strip() or "Color-Depth MIP"
+    for extension in (".nii.gz", ".ome.tiff", ".ome.tif", ".oif", ".oib", ".lif", ".h5j",
+                      ".nrrd", ".nhdr", ".nii", ".tiff", ".tif", ".vti", ".vtk", ".vtp",
+                      ".obj", ".swc", ".ply", ".stl"):
+        if name.casefold().endswith(extension):
+            name = name[:-len(extension)]
+            break
+    return name if name.endswith("_CDM") else name + "_CDM"
+
+
 def cdm_image_name(label=None):
     """Return a portable descriptive filename, independent of scientific IDs."""
     if not label:
         return "cdm.png"
     stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', '-', str(label)).strip(" .")
-    stem = stem.encode("utf-8")[:96].decode("utf-8", errors="ignore").rstrip(" .") or "Color-Depth MIP"
-    return stem + "-cdm.png"
+    if re.fullmatch(r"CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9]", stem.split(".")[0], re.IGNORECASE):
+        stem = "_" + stem
+    suffix = "_CDM" if stem.endswith("_CDM") else ""
+    if suffix:
+        stem = stem[:-4]
+    stem = (stem.encode("utf-8")[:96 - len(suffix)].decode("utf-8", errors="ignore").rstrip(" .") or "Color-Depth MIP") + suffix
+    return stem + ".png"
 
 
-def export_cdm(result: CDMResult, destination, *, cancel=None, label=None) -> CDMArtifact:
+def export_cdm(result: CDMResult, destination, *, cancel=None, label=None, retained_png=None) -> CDMArtifact:
     """Create a new PNG/manifest bundle; never replace an artifact.
 
     The sibling staging directory is private and is never a completed artifact.
@@ -63,14 +80,20 @@ def export_cdm(result: CDMResult, destination, *, cancel=None, label=None) -> CD
         image_name = cdm_image_name(label)
         png = staging / image_name
         with png.open("xb") as stream:
-            Image.fromarray(rgb).save(stream, format="PNG", compress_level=6)
+            if retained_png is None:
+                Image.fromarray(rgb).save(stream, format="PNG", compress_level=6)
+            else:
+                if hashlib.sha256(retained_png).hexdigest() != result.artifact.png_file_sha256:
+                    raise ValueError("Retained query PNG disagrees with its artifact checksum.")
+                stream.write(retained_png)
             stream.flush()
             os.fsync(stream.fileno())
         checkpoint(cancel)
-        exported = replace(result.artifact, png_file_sha256=_file_sha(png, cancel),
-                           png_encoder=f"Pillow/{pillow_version}; PNG RGB8; compress_level=6")
+        exported = (result.artifact if retained_png is not None else
+                    replace(result.artifact, png_file_sha256=_file_sha(png, cancel),
+                            png_encoder=f"Pillow/{pillow_version}; PNG RGB8; compress_level=6"))
         with Image.open(png) as image:
-            if image.mode != "RGB" or not np.array_equal(np.asarray(image), rgb):
+            if image.format != "PNG" or image.mode != "RGB" or not np.array_equal(np.asarray(image), rgb):
                 raise ValueError("Encoded PNG does not preserve the generated RGB pixels.")
         manifest = {"artifact": exported.to_dict(), "image": image_name,
                     "context_sha256": exported.context_sha256,

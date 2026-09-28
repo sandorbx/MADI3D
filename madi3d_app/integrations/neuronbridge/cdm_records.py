@@ -238,6 +238,13 @@ class CDMArtifact:
     content_offset_yx: tuple[int, int] | None = None
     anatomical_area: str | None = None
     alignment_space: str | None = None
+    # Additional consumed input revisions. Selection, pixels and the common
+    # grid/pose already belong to this artifact; freshness derives from them.
+    source_scientific_revision: str | None = None
+    mask_scientific_revision: str | None = None
+    mask_geometry_revision: str | None = None
+    # Only legacy records with a genuinely different mask grid need a snapshot.
+    mask_geometry: CDMGeometry | None = None
 
     def __post_init__(self):
         for name, kind in (("selection", CDMSelection), ("geometry", CDMGeometry),
@@ -302,6 +309,20 @@ class CDMArtifact:
         if binary and self.parameters.display_range is not None:
             raise ValueError("Binary occupancy cannot have display endpoints.")
         masked = self.parameters.mode != "signal"
+        for value in (self.source_scientific_revision, self.mask_scientific_revision):
+            if value is not None:
+                _sha(value)
+        if binary and self.source_scientific_revision is not None:
+            raise ValueError("Binary input revisions belong to the mask.")
+        if not masked and any(value is not None for value in
+                (self.mask_scientific_revision, self.mask_geometry_revision, self.mask_geometry)):
+            raise ValueError("Signal-only artifacts cannot have mask geometry or revisions.")
+        if self.mask_geometry_revision is not None:
+            _text(self.mask_geometry_revision, "mask geometry revision")
+        if self.mask_geometry is not None:
+            if (not isinstance(self.mask_geometry, CDMGeometry) or
+                    self.mask_geometry.revision != self.mask_geometry_revision):
+                raise ValueError("Mask geometry disagrees with its retained revision.")
         if any((value is not None) != masked for value in
                (self.mask_selection, self.mask_revision, self.mask_dtype, self.mask_pixel_sha256)):
             raise ValueError("Mask identity, revision, dtype and checksum are required together.")
@@ -336,6 +357,11 @@ class CDMArtifact:
         data["mask_selection"] = None if self.mask_selection is None else self.mask_selection.to_dict()
         data["mapping"] = asdict(self.mapping)
         data["parameters"] = asdict(self.parameters)
+        for name in ("source_scientific_revision", "mask_scientific_revision", "mask_geometry_revision", "mask_geometry"):
+            if data[name] is None:
+                data.pop(name)
+        if self.mask_geometry is not None:
+            data["mask_geometry"] = self.mask_geometry.to_dict()
         for name, default in (("assumptions", ()), ("placement", None)):
             if data["mapping"][name] == default:
                 data["mapping"].pop(name)
@@ -358,6 +384,8 @@ class CDMArtifact:
         data["geometry"] = CDMGeometry.from_dict(data["geometry"])
         data["mapping"] = CDMMapping(**data["mapping"])
         data["parameters"] = CDMParameters(**data["parameters"])
+        if data.get("mask_geometry") is not None:
+            data["mask_geometry"] = CDMGeometry.from_dict(data["mask_geometry"])
         if data["mask_selection"] is not None:
             data["mask_selection"] = CDMSelection.from_dict(data["mask_selection"])
         return cls(**data)

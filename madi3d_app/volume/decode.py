@@ -20,6 +20,8 @@ from .leica_lif import (
     inspect_leica_lif_source,
     LeicaChannelPixels,
 )
+from .nikon_nd2 import NikonChannelPixels, decode_nikon_nd2_series_channels
+from .zeiss_czi import CziChannelPixels, decode_zeiss_czi_series_channels
 from .olympus import (
     OlympusChannelPixels,
     decode_olympus_series_channels,
@@ -27,7 +29,7 @@ from .olympus import (
 )
 from .provenance import decoded_payload_descriptor
 from .probe import tiff_series_identity
-from .source_formats import volume_reader_mode
+from .source_formats import nifti_runtime_time_unit, volume_reader_mode
 
 
 _nrrd = None
@@ -243,6 +245,14 @@ def crop_h5j_codec_padding(array, expected_dimensions):
     )
 
 
+def _h5j_ffmpeg_input_options(raw):
+    """Preserve every frame in legacy H5J channels stored as MP4."""
+    header = memoryview(np.ascontiguousarray(raw)).cast("B")[:8].tobytes()
+    if len(header) == 8 and header[4:8] == b"ftyp":
+        return ("-ignore_editlist", "1")
+    return ()
+
+
 def run_h5j_ffmpeg(executable, args, *, cancel_check=None):
     from madi3d_app.integrations.ffmpeg.backend import (
         FFmpegProcessCancelled,
@@ -270,6 +280,7 @@ class VolumeDecodeContract:
     source_axis_semantics: tuple[str, ...]
     selector: Any = None
     resolution_provenance: tuple[dict[str, Any], ...] = ()
+    source_bundle_identity: str = ""
 
     def __post_init__(self):
         container_format = str(self.container_format or "").strip().lower()
@@ -351,6 +362,9 @@ class VolumeDecodeContract:
             "resolution_provenance",
             tuple(dict(value) for value in (self.resolution_provenance or ())),
         )
+        object.__setattr__(
+            self, "source_bundle_identity", str(self.source_bundle_identity or "").strip()
+        )
 
     @property
     def channel_axis(self) -> int | None:
@@ -393,6 +407,9 @@ class VolumeDecodeContract:
 
     @classmethod
     def from_probe(cls, probe, *, selector=None) -> "VolumeDecodeContract":
+        metadata = getattr(probe, "microscopy_source_metadata", None)
+        additional = getattr(metadata, "additional_fields", {}) if metadata else {}
+        bundle = additional.get("source_bundle", {}) if isinstance(additional, dict) else {}
         return cls(
             container_format=probe.container_format,
             series_identity=probe.series_identity,
@@ -402,12 +419,18 @@ class VolumeDecodeContract:
             source_axis_semantics=probe.source_axis_semantics,
             selector=selector,
             resolution_provenance=probe.resolution_provenance,
+            source_bundle_identity=(
+                bundle.get("manifest_identity", "") if isinstance(bundle, dict) else ""
+            ),
         )
 
     @classmethod
     def from_backing_source(
         cls, backing_source, *, selector=None
     ) -> "VolumeDecodeContract":
+        metadata = getattr(backing_source, "microscopy_source_metadata", None)
+        additional = getattr(metadata, "additional_fields", {}) if metadata else {}
+        bundle = additional.get("source_bundle", {}) if isinstance(additional, dict) else {}
         return cls(
             container_format=backing_source.format,
             series_identity=backing_source.series_identity,
@@ -418,6 +441,9 @@ class VolumeDecodeContract:
             selector=selector,
             resolution_provenance=(
                 backing_source.physical_grid_observation.resolution_provenance
+            ),
+            source_bundle_identity=(
+                bundle.get("manifest_identity", "") if isinstance(bundle, dict) else ""
             ),
         )
 
@@ -809,7 +835,7 @@ class VolumePayloadDecoder:
         return self._payload(
             tzyx,
             time_spacing,
-            str(time_units or "frame"),
+            nifti_runtime_time_unit(time_units),
             source_axis_order=axes,
         )
 
@@ -832,11 +858,12 @@ class VolumePayloadDecoder:
                 for offset in range(0, len(data), 1024 * 1024):
                     check_cancelled(self.cancel_check)
                     stream.write(data[offset:offset + 1024 * 1024])
+            input_options = _h5j_ffmpeg_input_options(raw)
             pattern = os.path.join(temporary, "frame_%06d.tif")
             process = run_h5j_ffmpeg(
                 self.ffmpeg_executable,
                 [
-                    "-y", "-v", "error", "-i", encoded,
+                    "-y", "-v", "error", *input_options, "-i", encoded,
                     "-compression_algo", "raw", pattern,
                 ],
                 cancel_check=self.cancel_check,
@@ -1067,6 +1094,22 @@ class VolumePayloadDecoder:
         if contract.container_format != inspection.container_format:
             raise ValueError(
                 "Olympus source container does not match the persisted decode contract."
+            )
+        current_metadata = inspection.source_metadata
+        current_bundle = getattr(current_metadata, "additional_fields", {}).get(
+            "source_bundle", {}
+        )
+        current_identity = (
+            current_bundle.get("manifest_identity", "")
+            if isinstance(current_bundle, dict) else ""
+        )
+        if (
+            contract.source_bundle_identity
+            and contract.source_bundle_identity != current_identity
+        ):
+            raise ValueError(
+                "Olympus source family changed since this request was prepared; "
+                "retry loading or relink the source."
             )
         if selector != contract.selector:
             raise ValueError(
@@ -1476,6 +1519,316 @@ class VolumePayloadDecoder:
                     results[result_index] = exc
         return results
 
+    @staticmethod
+    def _validate_nikon_decode_request(selector, contract):
+        if not isinstance(contract, VolumeDecodeContract):
+            raise TypeError("Nikon ND2 decoding requires a typed decode contract.")
+        if contract.container_format != "nikon-nd2":
+            raise ValueError("Nikon ND2 decode contract declares a different container.")
+        if selector != contract.selector or not isinstance(selector, dict):
+            raise ValueError("Nikon ND2 selector does not match its decode contract.")
+        if contract.series_index is None or not contract.series_identity:
+            raise ValueError("Nikon ND2 position identity is missing from its contract.")
+        if (
+            selector.get("series_index") != contract.series_index
+            or selector.get("series_identity") != contract.series_identity
+        ):
+            raise ValueError("Nikon ND2 position identity does not match its contract.")
+        source_subselection = selector.get("source_subselection")
+        if not isinstance(source_subselection, dict) or set(source_subselection) - {"P"}:
+            raise ValueError("Nikon ND2 position selection is missing or invalid.")
+        position = source_subselection.get("P")
+        if position is not None and (
+            isinstance(position, bool)
+            or not isinstance(position, int)
+            or position != contract.series_index
+        ):
+            raise ValueError("Nikon ND2 P selection does not match its position.")
+        if tuple(selector.get("axes") or ()) != contract.source_axis_order:
+            raise ValueError("Nikon ND2 selector axes do not match its source contract.")
+        semantics = tuple(
+            {"X": "space-x", "Y": "space-y", "Z": "space-z",
+             "T": "time", "C": "channel", "S": "component"}.get(axis, "unknown")
+            for axis in contract.source_axis_order
+        )
+        if semantics != contract.source_axis_semantics or "P" in contract.source_axis_order:
+            raise ValueError("Nikon ND2 axis semantics do not match its source contract.")
+        if any(
+            semantic in {"component", "unknown"} and size > 1
+            for semantic, size in zip(semantics, contract.source_axis_sizes)
+        ):
+            raise ValueError("Nikon ND2 contains an unsupported component or custom axis.")
+        channel = selector.get("channel")
+        channel_count = (
+            contract.source_axis_sizes[contract.channel_axis]
+            if contract.channel_axis is not None else 1
+        )
+        if channel is None and channel_count == 1:
+            return None
+        if (
+            isinstance(channel, bool)
+            or not isinstance(channel, int)
+            or not 0 <= channel < channel_count
+        ):
+            raise ValueError("Nikon ND2 channel selector is outside the source channels.")
+        return channel
+
+    def _decode_nikon_many(self, path, selectors, decode_contracts=None):
+        selectors = list(selectors)
+        contracts = list(decode_contracts or ())
+        if len(contracts) != len(selectors):
+            raise ValueError("Nikon ND2 requires one typed contract per channel.")
+        results = [None] * len(selectors)
+        groups = {}
+        for result_index, (selector, contract) in enumerate(zip(selectors, contracts)):
+            try:
+                channel = self._validate_nikon_decode_request(selector, contract)
+                groups.setdefault(contract.series_index, []).append(
+                    (result_index, channel, selector, contract)
+                )
+            except Exception as exc:
+                results[result_index] = exc
+
+        for position_index, requests in groups.items():
+            if self.cancel_check():
+                raise InterruptedError("Nikon ND2 decoding was cancelled.")
+            first_contract = requests[0][3]
+            if any(
+                contract.source_axis_order != first_contract.source_axis_order
+                or contract.source_axis_sizes != first_contract.source_axis_sizes
+                or contract.series_identity != first_contract.series_identity
+                or selector.get("source_subselection")
+                != requests[0][2].get("source_subselection")
+                for _, _, selector, contract in requests
+            ):
+                error = ValueError("Nikon ND2 channels disagree on their source position contract.")
+                for result_index, *_ in requests:
+                    results[result_index] = error
+                continue
+            check_resources(
+                memory_bytes=math.prod(first_contract.source_axis_sizes) * 24
+            )
+            try:
+                decoded_channels = decode_nikon_nd2_series_channels(
+                    path,
+                    position_index,
+                    [channel for _, channel, _, _ in requests],
+                    expected_series_identity=first_contract.series_identity,
+                    expected_axes=first_contract.source_axis_order,
+                    expected_shape=first_contract.source_axis_sizes,
+                    expected_subselection=requests[0][2]["source_subselection"],
+                    cancel_check=self.cancel_check,
+                )
+                if len(decoded_channels) != len(requests):
+                    raise RuntimeError("Nikon ND2 returned the wrong channel count.")
+                pending = []
+                for (_, channel, selector, contract), decoded in zip(
+                    requests, decoded_channels
+                ):
+                    if not isinstance(decoded, NikonChannelPixels):
+                        raise TypeError("Nikon ND2 returned an invalid channel payload.")
+                    if (
+                        decoded.source_axes != contract.source_axis_order
+                        or decoded.source_shape != contract.source_axis_sizes
+                        or decoded.channel_index != channel
+                    ):
+                        raise ValueError("Nikon ND2 source axes or channel changed during decode.")
+                    if (
+                        decoded.scalar_dtype != selector.get("scalar_dtype")
+                        or decoded.scalar_bit_depth != selector.get("significant_bit_depth")
+                    ):
+                        raise ValueError("Nikon ND2 scalar type or bit depth changed since import.")
+                    normalized = normalize_volume_to_tzyx(
+                        decoded.array,
+                        contract.normalization_axes,
+                        channel=0 if contract.channel_axis is not None else None,
+                    )
+                    expected_dimensions = tuple(
+                        contract.source_axis_sizes[
+                            contract.source_axis_semantics.index(semantic)
+                        ] if semantic in contract.source_axis_semantics else 1
+                        for semantic in ("space-x", "space-y", "space-z")
+                    )
+                    if (
+                        tuple(normalized.shape[1:][::-1]) != expected_dimensions
+                        or normalized.shape[0] != selector.get("time_count")
+                        or normalized.shape[0] != decoded.time_count
+                    ):
+                        raise ValueError("Nikon ND2 decoded dimensions or time count changed.")
+                    payload = self._payload(
+                        normalized,
+                        decoded.time_interval,
+                        decoded.time_units,
+                        source_axis_order=contract.source_axis_order,
+                        source_axis_semantics=contract.source_axis_semantics,
+                    )
+                    descriptor = dict(payload.source_descriptor)
+                    descriptor["source_scalar_dtype"] = decoded.scalar_dtype
+                    descriptor["source_scalar_bit_depth"] = decoded.scalar_bit_depth
+                    pending.append(DecodedVolumePayload(
+                        frame_zyx=payload.frame_zyx,
+                        scalar_range=payload.scalar_range,
+                        time_info=payload.time_info,
+                        source_descriptor=descriptor,
+                    ))
+                if self.cancel_check():
+                    raise InterruptedError("Nikon ND2 decoding was cancelled.")
+                for request, payload in zip(requests, pending):
+                    results[request[0]] = payload
+            except InterruptedError:
+                raise
+            except Exception as exc:
+                for result_index, *_ in requests:
+                    results[result_index] = exc
+        return results
+
+    @staticmethod
+    def _validate_czi_decode_request(selector, contract):
+        if not isinstance(contract, VolumeDecodeContract):
+            raise TypeError("ZEISS CZI decoding requires a typed decode contract.")
+        if contract.container_format != "zeiss-czi":
+            raise ValueError("ZEISS CZI decode contract declares a different container.")
+        if selector != contract.selector or not isinstance(selector, dict):
+            raise ValueError("ZEISS CZI selector does not match its decode contract.")
+        if contract.series_index is None or not contract.series_identity:
+            raise ValueError("ZEISS CZI scene identity is missing from its contract.")
+        if (
+            selector.get("series_index") != contract.series_index
+            or selector.get("series_identity") != contract.series_identity
+            or tuple(selector.get("axes") or ()) != contract.source_axis_order
+            or contract.source_axis_order != ("T", "Z", "C", "Y", "X")
+            or contract.source_axis_semantics != (
+                "time", "space-z", "channel", "space-y", "space-x"
+            )
+        ):
+            raise ValueError("ZEISS CZI scene or axes do not match their source contract.")
+        selection = selector.get("source_selection")
+        if not isinstance(selection, dict) or set(selection) != {
+            "scene_index", "roi", "t_start", "z_start", "channel_indices", "fixed_indices"
+        }:
+            raise ValueError("ZEISS CZI source-coordinate selection is incomplete.")
+        scene = selection["scene_index"]
+        if scene is not None and (isinstance(scene, bool) or not isinstance(scene, int)):
+            raise ValueError("ZEISS CZI scene tag is invalid.")
+        subselection = selector.get("source_subselection")
+        if subselection != ({"S": scene} if scene is not None else {}):
+            raise ValueError("ZEISS CZI scene tag disagrees with its source selection.")
+        roi = selection["roi"]
+        if (
+            not isinstance(roi, (list, tuple)) or len(roi) != 4
+            or any(isinstance(value, bool) or not isinstance(value, int) for value in roi)
+            or tuple(roi[2:]) != (
+                contract.source_axis_sizes[4], contract.source_axis_sizes[3]
+            )
+        ):
+            raise ValueError("ZEISS CZI full-resolution ROI is invalid.")
+        for axis, position in (("T", 0), ("Z", 1)):
+            value = selection[f"{axis.lower()}_start"]
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(f"ZEISS CZI {axis} source start is invalid.")
+        source_channels = selection["channel_indices"]
+        if (
+            not isinstance(source_channels, (list, tuple))
+            or len(source_channels) != contract.source_axis_sizes[2]
+            or any(isinstance(value, bool) or not isinstance(value, int) for value in source_channels)
+            or len(set(source_channels)) != len(source_channels)
+            or not isinstance(selection["fixed_indices"], dict)
+        ):
+            raise ValueError("ZEISS CZI source channel or fixed indices are invalid.")
+        channel = selector.get("channel")
+        if channel is None and len(source_channels) == 1:
+            channel = 0
+        if isinstance(channel, bool) or not isinstance(channel, int) or not 0 <= channel < len(source_channels):
+            raise ValueError("ZEISS CZI channel selector is outside the source channels.")
+        if selector.get("channel_source_index") != source_channels[channel]:
+            raise ValueError("ZEISS CZI source channel index changed.")
+        return channel
+
+    def _decode_czi_many(self, path, selectors, decode_contracts=None):
+        selectors = list(selectors)
+        contracts = list(decode_contracts or ())
+        if len(contracts) != len(selectors):
+            raise ValueError("ZEISS CZI requires one typed contract per channel.")
+        results = [None] * len(selectors)
+        groups = {}
+        for result_index, (selector, contract) in enumerate(zip(selectors, contracts)):
+            try:
+                channel = self._validate_czi_decode_request(selector, contract)
+                groups.setdefault(contract.series_index, []).append(
+                    (result_index, channel, selector, contract)
+                )
+            except Exception as exc:
+                results[result_index] = exc
+
+        for series_index, requests in groups.items():
+            if self.cancel_check():
+                raise InterruptedError("ZEISS CZI decoding was cancelled.")
+            first_selector, first_contract = requests[0][2:]
+            if any(
+                contract.source_axis_sizes != first_contract.source_axis_sizes
+                or contract.series_identity != first_contract.series_identity
+                or selector.get("source_selection") != first_selector["source_selection"]
+                for _, _, selector, contract in requests
+            ):
+                error = ValueError("ZEISS CZI channels disagree on their source scene contract.")
+                for result_index, *_ in requests:
+                    results[result_index] = error
+                continue
+            # Bound the final arrays plus native plane buffers and decoded payload copies.
+            check_resources(memory_bytes=math.prod(first_contract.source_axis_sizes) * 24)
+            try:
+                decoded_channels = decode_zeiss_czi_series_channels(
+                    path, series_index,
+                    [None if selector["channel"] is None else channel
+                     for _, channel, selector, _ in requests],
+                    expected_series_identity=first_contract.series_identity,
+                    expected_axes=first_contract.source_axis_order,
+                    expected_shape=first_contract.source_axis_sizes,
+                    expected_selection=first_selector["source_selection"],
+                    cancel_check=self.cancel_check,
+                )
+                if len(decoded_channels) != len(requests):
+                    raise RuntimeError("ZEISS CZI returned the wrong channel count.")
+                pending = []
+                for (_, channel, selector, contract), decoded in zip(requests, decoded_channels):
+                    if not isinstance(decoded, CziChannelPixels):
+                        raise TypeError("ZEISS CZI returned an invalid channel payload.")
+                    if (
+                        decoded.source_axes != contract.source_axis_order
+                        or decoded.source_shape != contract.source_axis_sizes
+                        or decoded.channel_index != selector["channel"]
+                        or decoded.scalar_dtype != selector.get("scalar_dtype")
+                        or decoded.scalar_bit_depth != selector.get("significant_bit_depth")
+                        or decoded.array.shape != (
+                            contract.source_axis_sizes[0], contract.source_axis_sizes[1],
+                            contract.source_axis_sizes[3], contract.source_axis_sizes[4],
+                        )
+                        or decoded.time_count != selector.get("time_count")
+                    ):
+                        raise ValueError("ZEISS CZI source scalar contract changed during decode.")
+                    payload = self._payload(
+                        decoded.array, decoded.time_interval, decoded.time_units,
+                        source_axis_order=contract.source_axis_order,
+                        source_axis_semantics=contract.source_axis_semantics,
+                    )
+                    descriptor = dict(payload.source_descriptor)
+                    descriptor["source_scalar_dtype"] = decoded.scalar_dtype
+                    descriptor["source_scalar_bit_depth"] = decoded.scalar_bit_depth
+                    pending.append(DecodedVolumePayload(
+                        frame_zyx=payload.frame_zyx, scalar_range=payload.scalar_range,
+                        time_info=payload.time_info, source_descriptor=descriptor,
+                    ))
+                if self.cancel_check():
+                    raise InterruptedError("ZEISS CZI decoding was cancelled.")
+                for request, payload in zip(requests, pending):
+                    results[request[0]] = payload
+            except InterruptedError:
+                raise
+            except Exception as exc:
+                for result_index, *_ in requests:
+                    results[result_index] = exc
+        return results
+
     def decode_many(
         self,
         path,
@@ -1513,6 +1866,10 @@ class VolumePayloadDecoder:
             return self._decode_leica_many(
                 path, selectors, decode_contracts
             )
+        if mode == "nikon":
+            return self._decode_nikon_many(path, selectors, decode_contracts)
+        if mode == "zeiss-czi":
+            return self._decode_czi_many(path, selectors, decode_contracts)
         raise RuntimeError(f"Unsupported volume type: {path}")
 
     def decode(self, path, selector=None, *, decode_contract=None):

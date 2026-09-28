@@ -29,6 +29,9 @@ from vtkmodules.util import numpy_support
 
 from madi3d_storage import atomic_write_json, config_file, read_json_object
 from madi3d_version import MADI3D_VERSION
+from madi3d_app.resources import resource_path
+from madi3d_app.ui.widgets.collapsible import CollapsibleWidget, NaturalHeightTabWidget
+from madi3d_app.ui.widgets.guide import GuideButton
 from madi3d_app.scene.object_metadata import inherit_object_origin
 from madi3d_app.scene.tree_roles import (
     ROLE_BACKING_SOURCE_ID,
@@ -65,6 +68,15 @@ from madi3d_app.volume.rendering import (
 
 vtk_to_numpy = numpy_support.vtk_to_numpy
 numpy_to_vtk = numpy_support.numpy_to_vtk
+
+EDIT_MODE_LABELS = {"select": "Paint", "unselect": "Erase", "diffuse": "Grow"}
+ACTIVE_BUTTON_STYLE = (
+    "QPushButton:checked { background-color: #2e7d32; color: white; "
+    "font-weight: 600; border: 1px solid #4caf50; }"
+    "QPushButton:checked:hover { background-color: #388e3c; }"
+    "QPushButton:checked:disabled { background-color: #425b43; "
+    "color: #b8c8b9; border-color: #587159; }"
+)
 
 DEFAULT_SETTINGS = {
     "seed_radius": 15,
@@ -756,7 +768,6 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
     enabledToggled = QtCore.Signal(bool)
     modeChanged = QtCore.Signal(str)
     brushInteractionChanged = QtCore.Signal(bool)
-    newSelectionRequested = QtCore.Signal()
     cancelOperationRequested = QtCore.Signal()
     clearRequested = QtCore.Signal()
     seedRadiusChanged = QtCore.Signal(int)
@@ -774,6 +785,7 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
     smartSettingsChanged = QtCore.Signal(dict)
     extractOriginalRequested = QtCore.Signal()
     speckThresholdChanged = QtCore.Signal(int)
+    continueToCdmRequested = QtCore.Signal()
 
     def __init__(self, parent=None, settings=None):
         super().__init__(parent)
@@ -788,40 +800,36 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
         self._syncing = False
         self._speck_sync = False
         self._background_busy = False
-        self._last_brush_mode = "select"
 
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(6, 6, 6, 6)
         root.setSpacing(6)
 
-        self.quick_help = QtWidgets.QLabel(
-            "Select a loaded volume, enable Segmentation, then choose a brush. "
-            "Select adds signal at or above Signal Threshold under the seed brush. "
-            "Diffuse grows from threshold-passing seeds through connected eligible signal within Growth Radius. "
-            "Unselect removes selected voxels and ignores Signal Threshold. "
-            "Live Threshold recalculates the latest edit, when it is Select or Diffuse, as you adjust the threshold. "
-            "Recover faint signal lets Diffuse follow somewhat dimmer connected signal while keeping seeds stricter. "
-            "With a brush active: left-drag paints, right-drag rotates, middle-drag pans, and Ctrl+wheel changes radius. "
-            "Click the active brush again for normal navigation; the session stays enabled.",
-            self,
-        )
-        self.quick_help.setWordWrap(True)
-        help_policy = self.quick_help.sizePolicy()
-        help_policy.setHorizontalPolicy(QtWidgets.QSizePolicy.Policy.Expanding)
-        self.quick_help.setSizePolicy(help_policy)
-        self.quick_help.setMinimumWidth(0)
-        root.addWidget(self.quick_help)
-
-        self.toggle = QtWidgets.QPushButton("Volume Segmentation Off", self)
-        self.toggle.setCheckable(True)
-        self.toggle.setToolTip("Edit a voxel selection directly over the 3-D fluorescence volume.")
-        self.toggle.toggled.connect(self._on_toggle)
-        root.addWidget(self.toggle)
+        self.info_button = GuideButton("Volume segmentation guide",
+            "<h2>Edit</h2><p>Select a loaded volume and enable mask editing. Navigate is the starting mode: "
+            "normal viewer navigation remains available while the mask and history stay in place. "
+            "Paint adds signal at or above Signal threshold under the seed brush. Erase removes the seed area "
+            "regardless of Signal threshold. Grow follows connected threshold-passing signal inside Growth radius. "
+            "With a tool active, left-drag edits, right-drag rotates, middle-drag pans, and Ctrl+wheel changes radius. "
+            "Click an active tool again to return to Navigate. Live threshold can recalculate the latest Paint or Grow "
+            "stroke while the slider moves. Smart helpers offer optional control of seeds, faint signal "
+            "and boundaries. Extract painted and Delete painted create new volumes from the mask without "
+            "changing the source.</p>"
+            "<h3>Refine</h3><p>Inspect the mask from several views. Remove small components applies to the whole mask "
+            "and can be undone; lowering its value during the same adjustment can restore removed components. "
+            "Mask display changes only the preview appearance.</p>"
+            "<h3>Output</h3><p>Choose an output type, then create a new volume. The source volume remains available. "
+            "Continue to Color-Depth MIP opens query-image preparation without submitting a search.</p>", self)
 
         self.target_box = QtWidgets.QGroupBox("Target volume", self)
         target_layout = QtWidgets.QVBoxLayout(self.target_box)
         target_layout.setContentsMargins(8, 4, 8, 6)
         target_layout.setSpacing(2)
+        target_header = QtWidgets.QHBoxLayout()
+        self.follow_hint = QtWidgets.QLabel("Follows selection", self.target_box)
+        target_header.addWidget(self.follow_hint, 1)
+        target_header.addWidget(self.info_button)
+        target_layout.addLayout(target_header)
         self.target_label = QtWidgets.QLabel("None", self.target_box)
         target_font = self.target_label.font()
         target_font.setBold(True)
@@ -836,9 +844,36 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
             "Each volume keeps its own segmentation mask and history while you switch between them."
         )
         target_layout.addWidget(self.target_label)
+        self.target_hint = QtWidgets.QLabel("Select a loaded volume to enable mask editing.", self.target_box)
+        self.target_hint.setWordWrap(True)
+        target_layout.addWidget(self.target_hint)
         root.addWidget(self.target_box)
 
-        self.brush_box = QtWidgets.QGroupBox("Brushes", self)
+        self.toggle = QtWidgets.QPushButton("Enable mask editing", self)
+        self.toggle.setCheckable(True)
+        self.toggle.setStyleSheet(ACTIVE_BUTTON_STYLE)
+        self.toggle.setToolTip(
+            "Start editing the selected loaded volume in Navigate mode. The mask and undo history remain "
+            "available when you return to normal viewer navigation."
+        )
+        self.toggle.toggled.connect(self._on_toggle)
+        root.addWidget(self.toggle)
+
+        self.workflow_tabs = NaturalHeightTabWidget(self)
+        self.workflow_tabs.setAccessibleName("Volume segmentation workflow")
+        root.addWidget(self.workflow_tabs)
+        pages = []
+        for title in ("Edit", "Refine", "Output"):
+            page = QtWidgets.QWidget(self.workflow_tabs)
+            page_layout = QtWidgets.QVBoxLayout(page)
+            page_layout.setContentsMargins(4, 6, 4, 4)
+            page_layout.setSpacing(6)
+            page_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+            self.workflow_tabs.addTab(page, title)
+            pages.append(page_layout)
+        edit_layout, refine_layout, output_layout = pages
+
+        self.brush_box = QtWidgets.QGroupBox("Interaction", self.workflow_tabs)
         brush_layout = QtWidgets.QVBoxLayout(self.brush_box)
         brush_layout.setContentsMargins(8, 6, 8, 8)
         brush_layout.setSpacing(5)
@@ -848,18 +883,27 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
         self.mode_group = QtWidgets.QButtonGroup(self)
         self.mode_group.setExclusive(False)
         self.mode_buttons = {}
-        for text, key, tip in (
-            ("Select", "select", "Add threshold-passing signal under the inner brush. Click again to return to normal mouse/navigation while segmentation stays enabled."),
-            ("Unselect", "unselect", "Remove selected voxels under the inner brush, independent of threshold. Click again to return to normal mouse/navigation while segmentation stays enabled."),
-            ("Diffuse", "diffuse", "Grow the current selection through connected signal inside the outer brush. Click again to return to normal mouse/navigation while segmentation stays enabled."),
+        self.navigate_button = QtWidgets.QPushButton("Navigate", self.brush_box)
+        self.navigate_button.setCheckable(True)
+        self.navigate_button.setStyleSheet(ACTIVE_BUTTON_STYLE)
+        self.navigate_button.setToolTip(
+            "Use normal viewer navigation while keeping the current segmentation mask and undo history."
+        )
+        self.navigate_button.clicked.connect(self._navigate_clicked)
+        self.mode_group.addButton(self.navigate_button)
+        mode_layout.addWidget(self.navigate_button, 1)
+        for key, tip in (
+            ("select", "Add signal at or above Signal threshold under the seed brush. "
+             "Click again to Navigate without losing the mask."),
+            ("unselect", "Remove selected voxels under the seed brush regardless of Signal threshold. "
+             "Click again to Navigate."),
+            ("diffuse", "Grow connected signal at or above Signal threshold inside Growth radius. "
+             "Click again to Navigate."),
         ):
-            button = QtWidgets.QPushButton(text, self)
+            button = QtWidgets.QPushButton(EDIT_MODE_LABELS[key], self.brush_box)
             button.setCheckable(True)
+            button.setStyleSheet(ACTIVE_BUTTON_STYLE)
             button.setToolTip(tip)
-            button.setStyleSheet(
-                "QPushButton:checked { background-color: #2e7d32; color: white; "
-                "font-weight: 600; border: 1px solid #4caf50; }"
-            )
             self.mode_group.addButton(button)
             self.mode_buttons[key] = button
             button.clicked.connect(
@@ -867,27 +911,31 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
             )
             mode_layout.addWidget(button, 1)
         brush_layout.addLayout(mode_layout)
+        self.navigate_hint = QtWidgets.QLabel(
+            "Normal viewer navigation is active. Choose Paint, Erase or Grow to edit.", self.brush_box
+        )
+        self.navigate_hint.setWordWrap(True)
+        brush_layout.addWidget(self.navigate_hint)
 
         self.seed_slider, self.seed_spin = self._integer_control(2, 260, self.settings["seed_radius"])
-        self.seed_slider.setToolTip("Area used to mark signal as the starting selection.")
+        self.seed_slider.setToolTip(
+            "Screen-space brush size for Paint and Erase; Grow uses it to find starting signal."
+        )
         self.seed_spin.setToolTip(self.seed_slider.toolTip())
         self.seed_slider.valueChanged.connect(self._seed_slider_changed)
         self.seed_spin.valueChanged.connect(self._seed_spin_changed)
-        brush_layout.addWidget(
-            self._labeled_row("Seed radius", self.seed_slider, self.seed_spin, "px")
-        )
+        self.seed_row = self._labeled_row("Seed radius", self.seed_slider, self.seed_spin, "px")
+        brush_layout.addWidget(self.seed_row)
 
         self.growth_slider, self.growth_spin = self._integer_control(5, 1600, self.settings["growth_radius"])
-        self.growth_slider.setToolTip("Maximum screen-space region in which Diffuse may grow connected signal.")
+        self.growth_slider.setToolTip("Maximum screen-space region in which Grow may follow connected signal.")
         self.growth_spin.setToolTip(self.growth_slider.toolTip())
         self.growth_slider.valueChanged.connect(self._growth_slider_changed)
         self.growth_spin.valueChanged.connect(self._growth_spin_changed)
-        brush_layout.addWidget(
-            self._labeled_row("Growth radius", self.growth_slider, self.growth_spin, "px")
-        )
-        self.threshold_box = QtWidgets.QGroupBox("Signal Threshold", self.brush_box)
+        self.growth_row = self._labeled_row("Growth radius", self.growth_slider, self.growth_spin, "px")
+        brush_layout.addWidget(self.growth_row)
+        self.threshold_box = QtWidgets.QGroupBox("Signal threshold", self.brush_box)
         threshold_frame = self.threshold_box
-        threshold_frame.setStyleSheet("QGroupBox { font-weight: 600; }")
         threshold_layout = QtWidgets.QVBoxLayout(threshold_frame)
         threshold_layout.setContentsMargins(6, 6, 6, 6)
         threshold_layout.setSpacing(4)
@@ -908,9 +956,9 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
         self.threshold_spin.setKeyboardTracking(False)
         self.threshold_spin.setMinimumWidth(100)
         threshold_tip = (
-            "Minimum seed signal for Select and Diffuse. Unselect ignores this value. "
-            "Changing it recalculates the latest edit when that edit is Select or Diffuse. "
-            "Dragging applies the change on release; Live Threshold also recalculates while dragging. "
+            "Minimum seed signal for Paint and Grow. Erase ignores this value. "
+            "Changing it recalculates the latest edit when that edit is Paint or Grow. "
+            "Dragging applies the change on release; Live threshold also recalculates while dragging. "
             "Undo to revisit an earlier edit, adjust the threshold, then Redo later edits."
         )
         self.threshold_slider.setToolTip(threshold_tip)
@@ -935,50 +983,25 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
         self.live_threshold_preview = QtWidgets.QCheckBox("Live threshold", self)
         self.live_threshold_preview.setChecked(self.settings["live_threshold_preview"])
         self.live_threshold_preview.setToolTip(
-            "Recalculate the latest Select or Diffuse stroke exactly while the threshold slider moves."
+            "Recalculate the latest Paint or Grow stroke while the threshold slider moves."
         )
         self.live_threshold_preview.toggled.connect(self._live_threshold_toggled)
         threshold_layout.addWidget(self.live_threshold_preview)
         brush_layout.addWidget(threshold_frame)
 
-        self.operation_row = QtWidgets.QWidget(self.brush_box)
-        selection_row = QtWidgets.QHBoxLayout(self.operation_row)
-        selection_row.setContentsMargins(0, 0, 0, 0)
-        self.cancel_operation = QtWidgets.QPushButton("Cancel Operation", self.operation_row)
-        self.cancel_operation.setEnabled(False)
-        self.cancel_operation.setToolTip(
-            "Stop the current calculation and keep the last completed mask. No output volume is created."
-        )
-        self.cancel_operation.clicked.connect(self.cancelOperationRequested)
-        selection_row.addWidget(self.cancel_operation)
-        self.clear = QtWidgets.QPushButton("Clear Mask", self.operation_row)
-        self.clear.setToolTip("Clear the current frame's segmentation mask. This can be undone.")
-        self.clear.clicked.connect(self.clearRequested)
-        selection_row.addWidget(self.clear)
-        brush_layout.addWidget(self.operation_row)
-        self.new_selection = QtWidgets.QPushButton("New Selection", self.brush_box)
-        self.new_selection.setToolTip("Clear the current mask as one undoable edit and switch to Select.")
-        self.new_selection.clicked.connect(self.newSelectionRequested)
-        brush_layout.addWidget(self.new_selection)
-        root.addWidget(self.brush_box)
+        edit_layout.addWidget(self.brush_box)
 
-        smart_box = QtWidgets.QGroupBox("Smart helpers", self)
+        smart_box = CollapsibleWidget("Smart helpers", self.workflow_tabs)
         self.smart_box = smart_box
-        smart_box.setToolTip(
-            "Optional assistants layered onto the normal brushes. They can be enabled independently and "
-            "combined: Local threshold adapts signal detection, Visible seeds limits where a new stroke "
-            "starts in depth, Recover faint signal relaxes connected Diffuse growth, and Boundary guard "
-            "resists crossing strong edges. Unselect deliberately ignores Smart helpers so removal remains "
-            "literal and predictable. Recover faint signal and Boundary guard are enabled by default."
+        smart_box.toggleButton.setToolTip(
+            "Optional Paint and Grow controls for seed depth, local threshold, faint signal and boundaries."
         )
-        smart_layout = QtWidgets.QVBoxLayout(smart_box)
-        smart_layout.setContentsMargins(8, 6, 8, 6)
-        smart_layout.setSpacing(3)
+        smart_layout = smart_box.contentLayout
 
         self.smart_local_threshold = QtWidgets.QCheckBox("Local threshold", self)
         self.smart_local_threshold.setChecked(self.settings["smart_local_threshold"])
         self.smart_local_threshold.setToolTip(
-            "Select and Diffuse. Estimate a signal/background cutoff from the 3-D region covered by "
+            "Paint and Grow. Estimate a signal/background cutoff from the 3-D region covered by "
             "this stroke instead of assuming that one global threshold is appropriate everywhere. "
             "This is useful when fluorescence intensity changes with depth or across the specimen. "
             "The estimated value is shown in Signal threshold after the stroke, so you can refine it "
@@ -988,7 +1011,7 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
         self.smart_faint_recovery = QtWidgets.QCheckBox("Recover faint signal", self)
         self.smart_faint_recovery.setChecked(self.settings["smart_faint_recovery"])
         self.smart_faint_recovery.setToolTip(
-            "Diffuse only. Keep the displayed Signal threshold (or Local threshold result) strict for "
+            "Grow only. Keep the displayed Signal threshold (or Local threshold result) strict for "
             "finding reliable seed signal, but let connectivity continue through somewhat dimmer voxels "
             "inside the Growth radius. This can recover weak neurites that remain connected to a bright "
             "seed. It does not make dim voxels into independent seeds, which limits uncontrolled flooding."
@@ -998,7 +1021,7 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
         self.smart_boundary_guard = QtWidgets.QCheckBox("Boundary guard", self)
         self.smart_boundary_guard.setChecked(self.settings["smart_boundary_guard"])
         self.smart_boundary_guard.setToolTip(
-            "Diffuse only. Measure the local 3-D intensity gradient and prevent growth through the "
+            "Grow only. Measure the local 3-D intensity gradient and prevent growth through the "
             "strongest boundaries inside the painted Growth region. This can reduce leakage from one "
             "touching structure into another. The user-painted seed is always preserved, so a strong "
             "edge at the starting point cannot erase the seed. Boundary Guard can be combined with "
@@ -1010,12 +1033,12 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
         self.smart_visible_seeds = QtWidgets.QCheckBox("Visible seeds only", self)
         self.smart_visible_seeds.setChecked(self.settings["smart_visible_seeds"])
         self.smart_visible_seeds.setToolTip(
-            "Select and Diffuse. When several threshold-passing structures lie behind one another under "
+            "Paint and Grow. When several threshold-passing structures lie behind one another under "
             "the brush, use only the front-most signal layer as new seed material from the current camera "
             "view. This reduces accidental seeding of bright structures hidden behind the one you are "
-            "painting. For Diffuse, only the starting seed is visibility-filtered: after a visible seed is "
+            "painting. For Grow, only the starting seed is visibility-filtered: after a visible seed is "
             "chosen, connected growth may still continue behind other structures inside the Growth radius. "
-            "Existing selected voxels can also remain valid Diffuse starting points. In Select mode this "
+            "Existing selected voxels can also remain valid Grow starting points. In Paint mode this "
             "deliberately favors the front-facing signal layer; turn it off when you intentionally want to "
             "select every threshold-passing structure through the painted screen area. Built-in stereo is "
             "treated as one viewing direction; the left and right eyes are not considered separate seed views."
@@ -1030,7 +1053,46 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
             self.smart_local_threshold,
         ):
             checkbox.toggled.connect(self._smart_settings_changed)
-        root.addWidget(smart_box)
+        edit_layout.addWidget(smart_box)
+
+        self.painted_actions_row = QtWidgets.QWidget(self.workflow_tabs)
+        painted_actions_layout = QtWidgets.QHBoxLayout(self.painted_actions_row)
+        painted_actions_layout.setContentsMargins(0, 0, 0, 0)
+        painted_actions_layout.setSpacing(4)
+        self.extract_painted = QtWidgets.QPushButton("Extract painted", self.painted_actions_row)
+        self.extract_painted.setIcon(self._action_icon("scissors"))
+        self.extract_painted.setToolTip(
+            "Create a new volume containing the painted signal, with unpainted voxels set to zero. "
+            "The source volume stays unchanged."
+        )
+        self.extract_painted.clicked.connect(self.extractRequested)
+        painted_actions_layout.addWidget(self.extract_painted, 1)
+        self.delete_painted = QtWidgets.QPushButton("Delete painted", self.painted_actions_row)
+        self.delete_painted.setIcon(self._action_icon("trash"))
+        self.delete_painted.setToolTip(
+            "Create a new volume with painted voxels set to zero. The source volume stays unchanged."
+        )
+        self.delete_painted.clicked.connect(self.deleteSelectedRequested)
+        painted_actions_layout.addWidget(self.delete_painted, 1)
+        edit_layout.addWidget(self.painted_actions_row)
+
+        self.operation_row = QtWidgets.QWidget(self.workflow_tabs)
+        history_row = QtWidgets.QHBoxLayout(self.operation_row)
+        history_row.setContentsMargins(0, 0, 0, 0)
+        self.undo = QtWidgets.QPushButton("Undo", self.operation_row)
+        self.redo = QtWidgets.QPushButton("Redo", self.operation_row)
+        self.clear = QtWidgets.QPushButton("Clear mask", self.operation_row)
+        self.undo.setToolTip("Undo the latest mask edit or whole-mask cleanup for this frame.")
+        self.redo.setToolTip("Restore the most recently undone mask edit for this frame.")
+        self.clear.setToolTip("Clear the current frame's mask. Undo restores it.")
+        self.undo.clicked.connect(self.undoRequested)
+        self.redo.clicked.connect(self.redoRequested)
+        self.clear.clicked.connect(self.clearRequested)
+        history_row.addWidget(self.undo)
+        history_row.addWidget(self.redo)
+        history_row.addStretch(1)
+        history_row.addWidget(self.clear)
+        edit_layout.addWidget(self.operation_row)
 
         self.opacity_slider = QtWidgets.QSlider(Qt.Orientation.Horizontal, self)
         self.opacity_slider.setRange(0, 100)
@@ -1042,55 +1104,66 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
         self.opacity_spin.setValue(self.settings["mask_opacity"])
         self.opacity_slider.valueChanged.connect(self._opacity_slider_changed)
         self.opacity_spin.valueChanged.connect(self._opacity_spin_changed)
-        root.addWidget(self._labeled_row("Mask opacity", self.opacity_slider, self.opacity_spin, ""))
+        self.mask_display_box = CollapsibleWidget("Mask display", self.workflow_tabs)
+        self.mask_display_box.toggleButton.setToolTip(
+            "Adjust only the on-screen mask appearance; source values and saved mask voxels stay unchanged."
+        )
+        self.mask_display_box.contentLayout.addWidget(
+            self._labeled_row("Mask opacity", self.opacity_slider, self.opacity_spin, "")
+        )
 
         color_row = QtWidgets.QHBoxLayout()
         color_row.addWidget(QtWidgets.QLabel("Mask color"), 0)
         self.color_button = QtWidgets.QPushButton("Choose…", self)
+        self.color_button.setToolTip("Choose the on-screen mask color without changing source values or mask voxels.")
         self.color_button.clicked.connect(self._choose_color)
         color_row.addWidget(self.color_button, 1)
-        root.addLayout(color_row)
+        self.mask_display_box.contentLayout.addLayout(color_row)
         self._update_color_button()
+        refine_layout.addWidget(self.mask_display_box)
 
-        history_row = QtWidgets.QHBoxLayout()
-        self.undo = QtWidgets.QPushButton("Undo", self)
-        self.redo = QtWidgets.QPushButton("Redo", self)
-        self.undo.clicked.connect(self.undoRequested)
-        self.redo.clicked.connect(self.redoRequested)
-        history_row.addWidget(self.undo)
-        history_row.addWidget(self.redo)
-        root.addLayout(history_row)
-
-        output_box = QtWidgets.QGroupBox("Output", self)
-        output_layout = QtWidgets.QGridLayout(output_box)
-        self.extract = QtWidgets.QPushButton("Extract Selected Voxels", self)
-        self.extract.setToolTip("Create a full-size MADI3D intensity volume on the original source grid, with unselected voxels set to zero.")
-        self.extract.clicked.connect(self.extractRequested)
-        output_layout.addWidget(self.extract, 0, 0)
-        self.delete_selected = QtWidgets.QPushButton("Delete Selected", self)
-        self.delete_selected.setToolTip("Create a normal MADI3D intensity volume with the currently selected voxels removed.")
-        self.delete_selected.clicked.connect(self.deleteSelectedRequested)
-        output_layout.addWidget(self.delete_selected, 0, 1)
-        self.extract_original = QtWidgets.QPushButton("Extract Original Signal", self)
-        self.extract_original.setToolTip(
-            "Copy original source intensities under the segmentation support plus the 3-D mask margin into a full-size volume on the original source grid."
-        )
-        self.extract_original.clicked.connect(self.extractOriginalRequested)
-        output_layout.addWidget(self.extract_original, 1, 0)
-        self.extract_margin = QtWidgets.QSpinBox(self)
+        output_layout.addWidget(QtWidgets.QLabel("Output type", self.workflow_tabs))
+        self.output_type = QtWidgets.QComboBox(self.workflow_tabs)
+        self.output_type.addItem("Selected signal", "selected")
+        self.output_type.addItem("Original signal around selection", "original")
+        self.output_type.addItem("Source without selection", "without_selection")
+        self.output_type.addItem("Binary mask", "mask")
+        self.output_type.currentIndexChanged.connect(self._update_output_choice)
+        output_layout.addWidget(self.output_type)
+        self.output_description = QtWidgets.QLabel(self.workflow_tabs)
+        self.output_description.setWordWrap(True)
+        output_layout.addWidget(self.output_description)
+        self.output_margin_row = QtWidgets.QWidget(self.workflow_tabs)
+        margin_layout = QtWidgets.QHBoxLayout(self.output_margin_row)
+        margin_layout.setContentsMargins(0, 0, 0, 0)
+        margin_layout.addWidget(QtWidgets.QLabel("Margin", self.output_margin_row))
+        self.extract_margin = QtWidgets.QSpinBox(self.output_margin_row)
         self.extract_margin.setRange(0, 20)
         self.extract_margin.setValue(0)
-        self.extract_margin.setPrefix("Margin ")
         self.extract_margin.setSuffix(" vox")
-        self.extract_margin.setToolTip("3-D voxel margin used by Extract Original Signal.")
-        output_layout.addWidget(self.extract_margin, 1, 1)
-        self.create_mask = QtWidgets.QPushButton("Create Mask Volume", self)
-        self.create_mask.setToolTip("Create a normal MADI3D binary volume from the current frame's live segmentation mask.")
-        self.create_mask.clicked.connect(self.createMaskRequested)
-        output_layout.addWidget(self.create_mask, 2, 0, 1, 2)
-        root.addWidget(output_box)
+        self.extract_margin.setToolTip(
+            "Include original source intensities within this many voxels around the selection."
+        )
+        margin_layout.addWidget(self.extract_margin)
+        margin_layout.addStretch(1)
+        output_layout.addWidget(self.output_margin_row)
+        self.create_output = QtWidgets.QPushButton("Create output", self.workflow_tabs)
+        self.create_output.setToolTip(
+            "Create a new volume using the selected output type; the source remains unchanged."
+        )
+        self.create_output.clicked.connect(self._create_output_clicked)
+        output_layout.addWidget(self.create_output)
+        self.continue_to_cdm = QtWidgets.QPushButton("Continue to Color-Depth MIP…", self.workflow_tabs)
+        self.continue_to_cdm.setToolTip(
+            "Open NeuronBridge Color-Depth MIP preparation. Generating a Color-Depth MIP prepares a "
+            "query image; it does not submit a search."
+        )
+        self.continue_to_cdm.clicked.connect(self.continueToCdmRequested)
+        output_layout.addWidget(self.continue_to_cdm)
+        self._update_output_choice()
 
-        cleanup = QtWidgets.QGroupBox("Remove specks", self)
+        cleanup = QtWidgets.QGroupBox("Remove small components", self.workflow_tabs)
+        self.cleanup_box = cleanup
         cleanup.setToolTip(
             "Remove connected components smaller than this voxel count from the whole current selection. "
             "Changes apply automatically. Repeated adjustments use the same pre-cleanup selection, so lowering the value can restore components removed by a higher setting until another segmentation edit is made."
@@ -1109,45 +1182,31 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
         self.speck_spin.setToolTip(cleanup.toolTip())
         cleanup_layout.addWidget(self.speck_slider, 1)
         cleanup_layout.addWidget(self.speck_spin, 0)
-        threshold_layout.addWidget(cleanup)
+        refine_layout.insertWidget(0, cleanup)
 
-        # Keep one progress-row height permanently so background work never
-        # moves the panel contents under the pointer. Hide only the progress bar
-        # while idle so collapsed-panel accessibility does not report an active
-        # operation; the fixed-height slot remains in the layout.
-        self.progress_slot = QtWidgets.QWidget(self)
-        progress_slot_layout = QtWidgets.QVBoxLayout(self.progress_slot)
-        progress_slot_layout.setContentsMargins(0, 0, 0, 0)
-        progress_slot_layout.setSpacing(0)
-        self.work_progress = QtWidgets.QProgressBar(self.progress_slot)
-        self.work_progress.setRange(0, 100)
-        self.work_progress.setValue(0)
-        self.work_progress.setFormat("")
-        self.work_progress.setTextVisible(False)
-        self.work_progress.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.work_progress.setMinimumWidth(0)
-        progress_slot_layout.addWidget(self.work_progress)
-        self.progress_slot.setFixedHeight(
-            max(1, self.work_progress.sizeHint().height())
-        )
-        self.progress_slot.setMinimumWidth(0)
-        self.work_progress.hide()
-        brush_layout.addWidget(self.progress_slot)
+        from madi3d_app.ui.widgets.activity_footer import ActivityFooter
+        self.activity_footer = ActivityFooter(self)
+        self.work_progress = self.activity_footer.progress
+        self.progress_slot = self.activity_footer.progress_row
+        self.status = self.activity_footer.summary
+        self.cancel_operation = self.activity_footer.cancel_button
+        root.addWidget(self.activity_footer)
 
-        self.status = QtWidgets.QLabel("Select a loaded volume, then enable segmentation.", self)
-        self.status.setWordWrap(True)
-        self.status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        root.addWidget(self.status)
 
         # Text-heavy controls may shrink below their natural text width. Keep
         # numeric fields and sliders out of this list so their values remain
         # readable while the containing panel follows a narrow dock width.
         compressible_text_controls = (
-            self.quick_help,
+            self.info_button,
             self.toggle,
+            self.follow_hint,
             self.target_label,
+            self.target_hint,
+            self.navigate_button,
             *self.mode_buttons.values(),
-            self.new_selection,
+            self.extract_painted,
+            self.delete_painted,
+            self.navigate_hint,
             self.clear,
             self.live_threshold_preview,
             self.smart_local_threshold,
@@ -1157,10 +1216,10 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
             self.color_button,
             self.undo,
             self.redo,
-            self.extract,
-            self.delete_selected,
-            self.extract_original,
-            self.create_mask,
+            self.output_description,
+            self.output_type,
+            self.create_output,
+            self.continue_to_cdm,
             self.status,
         )
         for widget in compressible_text_controls:
@@ -1175,6 +1234,25 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
         self.speck_spin.valueChanged.connect(self._speck_spin_changed)
         self.set_controls_active(False)
         self.set_history_available(False, False)
+        self._set_only_mode_checked(None)
+
+    def _action_icon(self, name):
+        source = QtGui.QIcon(resource_path("icons", "outline", name + ".svg"))
+        color = self.palette().color(QtGui.QPalette.ColorRole.ButtonText)
+        icon = QtGui.QIcon()
+        for size in (16, 24, 32, 48):
+            pixmap = source.pixmap(size, size)
+            if pixmap.isNull():
+                continue
+            tinted = QtGui.QPixmap(pixmap.size())
+            tinted.fill(Qt.GlobalColor.transparent)
+            painter = QtGui.QPainter(tinted)
+            painter.drawPixmap(0, 0, pixmap)
+            painter.setCompositionMode(QtGui.QPainter.CompositionMode.CompositionMode_SourceIn)
+            painter.fillRect(tinted.rect(), color)
+            painter.end()
+            icon.addPixmap(tinted)
+        return icon
 
     def _speck_slider_changed(self, value):
         if self._speck_sync:
@@ -1203,35 +1281,23 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
     def set_background_busy(self, busy, label="Working", preserve_threshold=False, preserve_specks=False):
         busy = bool(busy)
         self._background_busy = busy
-        if busy:
-            focus_widget = QtWidgets.QApplication.focusWidget()
-            if (
-                focus_widget is not None
-                and (focus_widget is self or self.isAncestorOf(focus_widget))
-            ):
-                focus_widget.clearFocus()
+        focus = QtWidgets.QApplication.focusWidget()
+        if busy and focus is self.toggle:
+            # Disabling the launch toggle must not tab-focus a distant brush and scroll it into view.
+            focus.clearFocus()
         self.toggle.setEnabled(not busy)
         if busy:
             self.set_controls_active(False, preserve_threshold=preserve_threshold, preserve_specks=preserve_specks)
-            self.work_progress.setTextVisible(True)
-            self.work_progress.setValue(0)
-            self.work_progress.setFormat(f"{label} — %p%")
-            self.work_progress.show()
+            self.activity_footer.begin("segmentation", label, cancel=self.cancelOperationRequested.emit)
         else:
-            self.work_progress.setValue(0)
-            self.work_progress.setFormat("")
-            self.work_progress.setTextVisible(False)
-            self.work_progress.hide()
+            self.activity_footer.finish("segmentation", "Interrupted")
             self.toggle.setEnabled(True)
             self.set_controls_active(self.toggle.isChecked())
         # Mode toggles keep their normal mouse-ownership semantics during work.
         self.cancel_operation.setEnabled(self._background_busy)
 
     def set_progress(self, value, label=""):
-        self.work_progress.setValue(max(0, min(100, int(value))))
-        if label:
-            self.work_progress.setFormat(f"{label} — %p%")
-
+        self.activity_footer.update("segmentation", done=max(0, min(100, int(value))), total=100, text=label)
 
     def _integer_control(self, lo, hi, value):
         slider = QtWidgets.QSlider(Qt.Orientation.Horizontal, self)
@@ -1266,8 +1332,7 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
 
     def _on_toggle(self, checked):
         checked = bool(checked)
-        self._on_toggle_visual(checked)
-        self._sync_mode_checks(checked)
+        self._set_only_mode_checked(None)
         self.enabledToggled.emit(checked)
 
     def set_enabled_checked(self, enabled):
@@ -1275,19 +1340,7 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
         blocker = QtCore.QSignalBlocker(self.toggle)
         self.toggle.setChecked(enabled)
         del blocker
-        self._on_toggle_visual(enabled)
-        self._sync_mode_checks(enabled)
-
-    def _on_toggle_visual(self, checked):
-        self.toggle.setText("Volume Segmentation On" if checked else "Volume Segmentation Off")
-        if checked:
-            self.toggle.setStyleSheet(
-                "QPushButton { background-color: #2e7d32; color: white; font-weight: 600; }"
-                "QPushButton:hover { background-color: #388e3c; }"
-            )
-        else:
-            self.toggle.setStyleSheet("")
-        self.controlsChanged.emit()
+        self._set_only_mode_checked(None)
 
     def set_controls_active(self, active, *, preserve_threshold=False, preserve_specks=False):
         active = bool(active)
@@ -1301,13 +1354,14 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
         if preserve_specks:
             preserved.update((self.speck_slider, self.speck_spin))
         for widget in (
-            self.new_selection, self.clear, self.seed_slider, self.seed_spin,
+            self.clear, self.seed_slider, self.seed_spin,
+            self.extract_painted, self.delete_painted,
             self.growth_slider, self.growth_spin,
             self.threshold_slider, self.threshold_spin,
             self.smart_local_threshold, self.smart_faint_recovery, self.smart_boundary_guard,
             self.smart_visible_seeds, self.live_threshold_preview, self.opacity_slider, self.opacity_spin, self.color_button,
-            self.undo, self.redo, self.extract, self.delete_selected, self.create_mask,
-            self.extract_original, self.extract_margin,
+            self.undo, self.redo, self.output_type, self.create_output,
+            self.extract_margin, self.continue_to_cdm,
             self.speck_slider, self.speck_spin,
         ):
             if not active and widget in preserved:
@@ -1319,10 +1373,11 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
 
     def set_target_name(self, name):
         self.target_label.setText(str(name or "None"))
+        self.target_hint.setVisible(not self._has_target())
         self._update_mode_button_enabled()
 
     def set_status(self, text):
-        self.status.setText(str(text or ""))
+        self.activity_footer.message(text)
 
     def set_radii(self, seed, growth):
         controls = (self.seed_slider, self.seed_spin, self.growth_slider, self.growth_spin)
@@ -1337,8 +1392,7 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
         mode = str(mode or "").lower()
         if mode not in self.mode_buttons:
             return
-        self._last_brush_mode = mode
-        if self.toggle.isChecked():
+        if self.toggle.isChecked() and any(button.isChecked() for button in self.mode_buttons.values()):
             self._set_only_mode_checked(mode)
 
 
@@ -1348,6 +1402,8 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
 
     def _update_mode_button_enabled(self):
         enabled = self._has_target()
+        self.toggle.setEnabled(enabled and not self._background_busy)
+        self.navigate_button.setEnabled(enabled)
         for button in self.mode_buttons.values():
             button.setEnabled(enabled)
         self.controlsChanged.emit()
@@ -1355,35 +1411,75 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
     def _set_only_mode_checked(self, mode):
         blockers = [
             QtCore.QSignalBlocker(button)
-            for button in self.mode_buttons.values()
+            for button in (self.navigate_button, *self.mode_buttons.values())
         ]
         try:
+            self.navigate_button.setChecked(self.toggle.isChecked() and mode is None)
             for key, button in self.mode_buttons.items():
                 button.setChecked(key == mode)
         finally:
             del blockers
+        self._update_edit_context(mode)
         self.controlsChanged.emit()
 
-    def _sync_mode_checks(self, enabled):
-        if enabled:
-            self._set_only_mode_checked(self._last_brush_mode)
-        else:
-            self._set_only_mode_checked(None)
+    def _navigate_clicked(self, _checked):
+        if not self.toggle.isChecked():
+            self.toggle.setChecked(True)
+        self._set_only_mode_checked(None)
+        self.brushInteractionChanged.emit(False)
 
     def _brush_mode_clicked(self, mode, checked):
         mode = str(mode).lower()
         if checked:
-            self._last_brush_mode = mode
             self._set_only_mode_checked(mode)
             self.modeChanged.emit(mode)
             if not self.toggle.isChecked():
                 self.toggle.setChecked(True)
-            else:
+                self._set_only_mode_checked(mode)
+            if self.toggle.isChecked():
                 self.brushInteractionChanged.emit(True)
         elif not any(
             button.isChecked() for button in self.mode_buttons.values()
         ):
+            self._set_only_mode_checked(None)
             self.brushInteractionChanged.emit(False)
+
+    def _update_edit_context(self, mode):
+        editing = self.toggle.isChecked() and mode in self.mode_buttons
+        self.navigate_hint.setVisible(self.toggle.isChecked() and not editing)
+        self.seed_row.setVisible(editing)
+        self.growth_row.setVisible(editing and mode == "diffuse")
+        self.threshold_box.setVisible(editing and mode in {"select", "diffuse"})
+        self.smart_box.setVisible(editing and mode in {"select", "diffuse"})
+        self.smart_local_threshold.setVisible(mode in {"select", "diffuse"})
+        self.smart_visible_seeds.setVisible(mode in {"select", "diffuse"})
+        self.smart_faint_recovery.setVisible(mode == "diffuse")
+        self.smart_boundary_guard.setVisible(mode == "diffuse")
+
+    def _update_output_choice(self, *_):
+        choice = self.output_type.currentData()
+        descriptions = {
+            "selected": "Create a full-size intensity volume on the source grid, with unselected voxels set to zero.",
+            "original": (
+                "Copy original source intensities within the selection and optional 3-D margin "
+                "into a new full-size volume."
+            ),
+            "without_selection": "Create a NEW volume with selected voxels removed. The source volume is not modified.",
+            "mask": "Create a new binary volume from the current frame's segmentation mask.",
+        }
+        self.output_description.setText(descriptions.get(choice, "Choose an output type."))
+        self.output_margin_row.setVisible(choice == "original")
+
+    def _create_output_clicked(self):
+        choice = self.output_type.currentData()
+        if choice == "selected":
+            self.extractRequested.emit()
+        elif choice == "original":
+            self.extractOriginalRequested.emit()
+        elif choice == "without_selection":
+            self.deleteSelectedRequested.emit()
+        elif choice == "mask":
+            self.createMaskRequested.emit()
 
     def configure_threshold(self, minimum, maximum, value):
         lo = float(minimum)
@@ -1453,12 +1549,16 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
     def _threshold_slider_released(self):
         if self._syncing:
             return
-        physical = self._slider_to_threshold(self.threshold_slider.value())
-        blocker = QtCore.QSignalBlocker(self.threshold_spin)
+        # With tracking off, Qt emits sliderReleased before committing value().
+        # Commit the dragged position before the controller can refresh the UI.
+        position = self.threshold_slider.sliderPosition()
+        physical = self._slider_to_threshold(position)
+        blockers = [QtCore.QSignalBlocker(self.threshold_slider), QtCore.QSignalBlocker(self.threshold_spin)]
         try:
+            self.threshold_slider.setValue(position)
             self.threshold_spin.setValue(physical)
         finally:
-            del blocker
+            del blockers
         self.thresholdChanged.emit(float(physical))
 
     def _threshold_spin_changed(self, value):
@@ -1931,7 +2031,6 @@ class VolumeSegmentationController(QtCore.QObject):
         p.enabledToggled.connect(self.set_enabled)
         p.modeChanged.connect(self.set_mode)
         p.brushInteractionChanged.connect(self.set_brush_interaction_active)
-        p.newSelectionRequested.connect(self.new_selection)
         p.cancelOperationRequested.connect(self.cancel_operation)
         p.clearRequested.connect(self.clear)
         p.seedRadiusChanged.connect(self.set_seed_radius)
@@ -2263,10 +2362,17 @@ class VolumeSegmentationController(QtCore.QObject):
             self._set_brush_status()
         else:
             self.set_status(
-                "Segmentation enabled; normal mouse/navigation is active. "
-                "Choose a brush to edit the mask."
+                "Mask editing enabled in Navigate mode. Choose Paint, Erase or Grow to edit."
             )
         return True
+
+    def has_active_work(self):
+        return self._target_locked()
+
+    def reset(self):
+        """Retire project-bound operations; cancelled jobs retain their borrowed inputs."""
+        self._deactivate_session(keep_target=False)
+        self.states_by_vc.clear()
 
     def _deactivate_session(self, keep_target=True):
         self._invalidate_operation()
@@ -2395,9 +2501,18 @@ class VolumeSegmentationController(QtCore.QObject):
     # ------------------------------------------------------------------
     def _set_brush_status(self):
         self.set_status({
-            "select": "Select brush active. Left-drag edits; right-drag rotates; middle-drag pans; Ctrl+wheel changes radius.",
-            "unselect": "Unselect brush active. Left-drag removes selected voxels; right-drag rotates; middle-drag pans; Ctrl+wheel changes radius.",
-            "diffuse": "Diffuse brush active. Left-drag grows connected signal; right-drag rotates; middle-drag pans; Ctrl+wheel changes radius.",
+            "select": (
+                "Paint active. Left-drag adds signal; right-drag rotates; middle-drag pans; "
+                "Ctrl+wheel changes radius."
+            ),
+            "unselect": (
+                "Erase active. Left-drag removes selected voxels; right-drag rotates; "
+                "middle-drag pans; Ctrl+wheel changes radius."
+            ),
+            "diffuse": (
+                "Grow active. Left-drag grows connected signal; right-drag rotates; "
+                "middle-drag pans; Ctrl+wheel changes radius."
+            ),
         }.get(self.mode, "Segmentation brush active."))
 
     def _disable_competing_mouse_tools(self):
@@ -2475,7 +2590,7 @@ class VolumeSegmentationController(QtCore.QObject):
                 pass
             self.set_status(
                 "Segmentation remains enabled; normal mouse/navigation restored. "
-                "Choose Select, Unselect or Diffuse to resume editing."
+                "Choose Paint, Erase or Grow to resume editing."
             )
 
         self.panel._set_only_mode_checked(self.mode if enabled else None)
@@ -2491,15 +2606,14 @@ class VolumeSegmentationController(QtCore.QObject):
             except Exception:
                 pass
         controller = getattr(self.main, "_transform_widget_controller", None)
-        widget = getattr(controller, "widget", None) if controller is not None else None
-        if widget is not None and hasattr(widget, "GetProcessEvents"):
+        if controller is not None:
             try:
-                self._saved_transform_process = int(widget.GetProcessEvents())
-                widget.SetProcessEvents(False)
+                self._saved_transform_process = bool(controller.process_events_enabled())
+                controller.set_process_events(False)
             except Exception:
                 pass
 
-        # Prevent the transform toggle from creating/re-enabling a vtkBoxWidget2
+        # Prevent the transform toggle from re-enabling the gizmo
         # while segmentation owns the mouse. Its checked/requested state is not
         # changed, so the normal transform state machine can resume afterward.
         transform_panel = getattr(self.main, "transform_panel", None)
@@ -2523,13 +2637,9 @@ class VolumeSegmentationController(QtCore.QObject):
             except Exception:
                 pass
         controller = getattr(self.main, "_transform_widget_controller", None)
-        if controller is not None:
+        if controller is not None and self._saved_transform_process is not None:
             try:
-                sync = getattr(controller, "_sync_enabled", None)
-                if callable(sync):
-                    sync()
-                elif getattr(controller, "widget", None) is not None:
-                    controller.widget.SetProcessEvents(bool(self._saved_transform_process))
+                controller.set_process_events(bool(self._saved_transform_process))
             except Exception:
                 pass
 
@@ -2569,9 +2679,9 @@ class VolumeSegmentationController(QtCore.QObject):
             self.set_brush_interaction_active(True)
         else:
             self.set_status({
-                "select": "Select: threshold-passing signal under the inner ring is added to the mask.",
-                "unselect": "Unselect: selected voxels under the inner ring are removed regardless of intensity.",
-                "diffuse": "Diffuse: connected threshold-passing signal grows from the seed inside the outer ring.",
+                "select": "Paint: threshold-passing signal under the seed brush is added to the mask.",
+                "unselect": "Erase: selected voxels under the seed brush are removed regardless of intensity.",
+                "diffuse": "Grow: connected threshold-passing signal grows from the seed inside the growth brush.",
             }[mode])
 
     def set_smart_settings(self, payload):
@@ -2657,8 +2767,12 @@ class VolumeSegmentationController(QtCore.QObject):
             self.set_status(f"Signal threshold {new_value:.6g}. No applied stroke to recalculate.")
             return
         entry = frame.undo_stack[-1]
+        entry_label = EDIT_MODE_LABELS.get(entry.mode, entry.mode.title())
         if entry.mode not in {"select", "diffuse"}:
-            self.set_status(f"Signal threshold {new_value:.6g}. The latest stroke ({entry.mode.title()}) is not threshold-sensitive.")
+            self.set_status(
+                f"Signal threshold {new_value:.6g}. The latest stroke ({entry_label}) "
+                "is not threshold-sensitive."
+            )
             return
         state = self.state
         frame_index = self.current_frame_index()
@@ -2685,7 +2799,9 @@ class VolumeSegmentationController(QtCore.QObject):
                 frame.undo_stack[-1] = updated
                 self._adopt_computation_cache(computation)
                 self._sync_current_frame_preview(render=True)
-                self.set_status(f"Signal threshold {new_value:.6g}: latest {entry.mode.title()} stroke recalculated exactly.")
+                self.set_status(
+                    f"Signal threshold {new_value:.6g}: latest {entry_label} stroke recalculated exactly."
+                )
             self._start_brush_feedback()
             self._run_background("Threshold", work, publish, operation_snapshot=snapshot,
                                  preserve_threshold=True, rollback=rollback)
@@ -2832,7 +2948,13 @@ class VolumeSegmentationController(QtCore.QObject):
                     modeled.acquisition.geometry_revision or ""
                 ),
                 grid_state=str(modeled.channel.grid_state or ""),
-                operation_ids=tuple(modeled.acquisition.operation_ids),
+                operation_ids=tuple(
+                    operation_id
+                    for operation_id in (
+                        modeled.channel.producing_operation_id,
+                    )
+                    if operation_id
+                ),
             )
         except SegmentationPreflightError:
             raise
@@ -3289,6 +3411,7 @@ class VolumeSegmentationController(QtCore.QObject):
             return
         self._reset_speck_adjustment()
         entry = frame.undo_stack[-1]
+        entry_label = EDIT_MODE_LABELS.get(entry.mode, entry.mode.title())
         def work(report):
             report(20, "Undo: restoring mask")
             return entry.unpack("old")
@@ -3297,7 +3420,9 @@ class VolumeSegmentationController(QtCore.QObject):
             frame.undo_stack.pop()
             frame.redo_stack.append(entry)
             self._sync_current_frame_preview(render=True)
-            self.set_status(f"Undo {entry.mode.title()} stroke. Threshold unchanged at {self.signal_threshold:.6g}.")
+            self.set_status(
+                f"Undo {entry_label} stroke. Threshold unchanged at {self.signal_threshold:.6g}."
+            )
         self._run_background("Undo", work, publish)
 
     def redo(self):
@@ -3308,6 +3433,7 @@ class VolumeSegmentationController(QtCore.QObject):
             return
         self._reset_speck_adjustment()
         entry = frame.redo_stack[-1]
+        entry_label = EDIT_MODE_LABELS.get(entry.mode, entry.mode.title())
         computation = self._capture_computation(frame)
         def work(report):
             computation.report = report
@@ -3328,7 +3454,9 @@ class VolumeSegmentationController(QtCore.QObject):
             frame.undo_stack.append(updated)
             self._adopt_computation_cache(computation)
             self._sync_current_frame_preview(render=True)
-            self.set_status(f"Redo {entry.mode.title()} stroke. Threshold unchanged at {self.signal_threshold:.6g}.")
+            self.set_status(
+                f"Redo {entry_label} stroke. Threshold unchanged at {self.signal_threshold:.6g}."
+            )
         self._run_background("Redo", work, publish)
 
     def clear(self):
@@ -3351,10 +3479,6 @@ class VolumeSegmentationController(QtCore.QObject):
                 self._sync_current_frame_preview(render=True)
             self.set_status("Segmentation cleared.")
         self._run_background("Clear Mask", work, publish)
-
-    def new_selection(self):
-        self.clear()
-        self.set_mode("select")
 
     def _update_history_ui(self):
         fs = self._frame_state() if self.state is not None else None
@@ -3397,7 +3521,7 @@ class VolumeSegmentationController(QtCore.QObject):
                     return
                 entry, patch, changed, detail = result
                 if mode == "unselect" and not changed:
-                    self.set_status("Unselect: no selected voxels changed.")
+                    self.set_status("Erase: no selected voxels changed.")
                     return
                 self._commit_history_entry(frame, entry, patch=patch)
                 self._adopt_computation_cache(computation)
@@ -3409,7 +3533,7 @@ class VolumeSegmentationController(QtCore.QObject):
                 self._sync_current_frame_preview(render=True)
                 self.set_status(detail)
             self._start_brush_feedback()
-            self._run_background(mode.title(), work, publish, operation_snapshot=context)
+            self._run_background(EDIT_MODE_LABELS[mode], work, publish, operation_snapshot=context)
         except SegmentationPreflightError as exc:
             self._stop_for_authoritative_error(exc)
         except Exception as exc:
@@ -3837,10 +3961,6 @@ class VolumeSegmentationController(QtCore.QObject):
         scalar_bit_depth = (
             int(output_array.dtype.itemsize * 8) if output_array is not None else None
         )
-        parent_backing = model.backing_sources.get(parent_channel.backing_source_id)
-        source_checksum = validated_parent.source_checksum
-        if source_checksum is None and parent_backing is not None:
-            source_checksum = parent_backing.source_checksum
         generated_checksum = _vtk_scalar_checksum(normalized_image)
         generation_parameters = {
             "signal_threshold": float(self.signal_threshold),
@@ -3849,8 +3969,16 @@ class VolumeSegmentationController(QtCore.QObject):
             "growth_radius_voxels": int(self.settings["growth_radius"]),
             "mask_extent": list(parent_extent),
             "runtime_mask_extent": list(runtime_parent_extent),
+            "representation": "binary_mask" if mask_volume else "original_signal",
+            "mask_labels": {"background": 0, "selected": 1},
         }
         generation_parameters.update(copy.deepcopy(dict(operation_parameters or {})))
+        manual_support = generation_parameters.pop("manual_support", None)
+        if manual_support is not None:
+            generation_parameters["manual_support_ref"] = {
+                "checksum_sha256": manual_support["checksum_sha256"],
+                "location": "producing_operation.manual_support",
+            }
         generation_parameters["validated_parent_reference"] = (
             validated_parent.operation_reference_payload()
         )
@@ -3899,7 +4027,6 @@ class VolumeSegmentationController(QtCore.QObject):
             acquisition_id=acquisition_id,
             channel_id=channel_id,
             generated_data_id=generated_data_id,
-            source_checksum=source_checksum,
             generated_checksum=generated_checksum,
             scalar_dtype=scalar_dtype,
             scalar_bit_depth=scalar_bit_depth,
@@ -3908,13 +4035,16 @@ class VolumeSegmentationController(QtCore.QObject):
             ),
             software_version=MADI3D_VERSION,
             import_version=MADI3D_VERSION,
+            manual_support=manual_support,
         )
         child = candidate.acquisitions[acquisition_id]
         child_channel = candidate.channels[channel_id]
         working_grid = child.working_grid()
+        generated = candidate.generated_operation_index()["by_channel"][channel_id]
+        consumed = generated["input_record"]
         if (
-            child.generated_lineage.parent_geometry_revision
-            != validated_parent.geometry_revision
+            consumed is None
+            or consumed["geometry_revision_id"] != validated_parent.geometry_revision
             or not np.allclose(
                 np.asarray(child.shared_pose, dtype=float),
                 np.asarray(validated_parent.pose, dtype=float),
@@ -4064,11 +4194,45 @@ class VolumeSegmentationController(QtCore.QObject):
             self.main.volume_map[vol_id] = vc
             tree_blocker = QtCore.QSignalBlocker(self.main.tree)
             try:
+                producing_operation = candidate.operation_records[
+                    child_channel.producing_operation_id
+                ]
+                consumed_records = tuple(
+                    candidate.scientific_records[record_id]
+                    for record_id in producing_operation.get(
+                        "input_record_ids", ()
+                    )
+                )
+                consumed_backing_ids = {
+                    record["backing_source_id"]
+                    for record in consumed_records
+                    if record.get("record_kind") == "volume_revision"
+                }
+                consumed_geometry_ids = {
+                    revision_id
+                    for record in consumed_records
+                    if record.get("record_kind") == "volume_revision"
+                    for revision_id in (
+                        record.get("geometry_revision_id"),
+                        record.get("acquisition_geometry_revision_id"),
+                    )
+                    if revision_id
+                }
                 append_result = relationship_controller.append_typed_acquisition(
                     child,
                     (child_channel,),
                     (candidate.backing_sources[child_channel.backing_source_id],),
                     channel_items={child_channel.channel_id: item},
+                    operation_records=(producing_operation,),
+                    scientific_records=consumed_records,
+                    historical_backing_sources=tuple(
+                        candidate.backing_sources[backing_id]
+                        for backing_id in consumed_backing_ids
+                    ),
+                    historical_geometry_records=tuple(
+                        candidate.geometry_records[revision_id]
+                        for revision_id in consumed_geometry_ids
+                    ),
                 )
                 vc.source_id = acquisition_id
                 vc.metadata.update(dict(item.data(0, ROLE_VOLUME_META) or {}))
@@ -4171,6 +4335,8 @@ class VolumeSegmentationController(QtCore.QObject):
         try:
             if worker is None or worker.cancel_event.is_set() or not self._operation_is_current(operation):
                 self._rollback_operation(operation)
+                self.panel.activity_footer.finish("segmentation",
+                    "Cancelled" if worker is not None and worker.cancel_event.is_set() else "Interrupted")
                 return
             # Selection signals are queued. Check the actual selection before publishing
             # even when its target-sync callback has not run yet.
@@ -4183,10 +4349,13 @@ class VolumeSegmentationController(QtCore.QObject):
             self._accept_background_result(operation["snapshot"], operation["label"])
             operation["publish"](result)
             success = True
+            self.panel.activity_footer.finish("segmentation", "Completed")
         except SegmentationPreflightError as exc:
+            self.panel.activity_footer.finish("segmentation", "Interrupted", str(exc))
             self._rollback_operation(operation)
             self.set_status(f"{operation['label']} result discarded: {exc}")
         except Exception as exc:
+            self.panel.activity_footer.finish("segmentation", "Failed", str(exc))
             self._rollback_operation(operation)
             self.set_status(f"{operation['label']} failed: {exc}")
             traceback.print_exc()
@@ -4204,6 +4373,7 @@ class VolumeSegmentationController(QtCore.QObject):
             self._rollback_operation(operation)
             if worker is not None and not worker.cancel_event.is_set() and self._operation_is_current(operation):
                 self.set_status(f"{operation['label']} failed: {message}")
+                self.panel.activity_footer.finish("segmentation", "Failed", details)
                 print(f"[VolumeSegmentation] {details}")
             self._reset_speck_adjustment()
             self._finish_brush_feedback(False)
@@ -4375,7 +4545,7 @@ class VolumeSegmentationController(QtCore.QObject):
             return
         frame = self._frame_state()
         if frame is None or frame.mask is None:
-            self.set_status("Remove specks: the current frame has no selected voxels.")
+            self.set_status("Remove small components: the current frame has no selected voxels.")
             return
         if not self._speck_baseline_matches(frame):
             self._start_speck_adjustment(frame)
@@ -4424,7 +4594,10 @@ class VolumeSegmentationController(QtCore.QObject):
             frame, result["entry"], self._speck_history_entry, self.settings.get("history_limit", 40))
         self._sync_current_frame_preview(render=True)
         removed = max(0, int(result["before"]) - int(result["after"]))
-        self.set_status(f"Remove specks: minimum {int(result['minimum'])} voxels; {removed:,} voxels removed from the whole selection.")
+        self.set_status(
+            f"Remove small components: minimum {int(result['minimum'])} voxels; "
+            f"{removed:,} voxels removed from the whole selection."
+        )
 
     def _output_mask(self):
         if not self.active or self._target_locked():
@@ -4461,6 +4634,17 @@ class VolumeSegmentationController(QtCore.QObject):
             mask = np.array(_image_array_view(mask_image), copy=True, dtype=np.uint8)
             if not np.any(mask):
                 return None
+            # A threshold recipe cannot reconstruct interactive segmentation.
+            import base64
+            import zlib
+            parameters["manual_support"] = {
+                "encoding": "zlib_base64_uint8_c_order", "axis_order": "ZYX",
+                "shape": list(mask.shape), "extent": list(extent),
+                "checksum_sha256": hashlib.sha256(mask.tobytes()).hexdigest(),
+                "data": base64.b64encode(zlib.compress(mask.tobytes())).decode("ascii"),
+                "contribution": "committed_interactive_mask",
+                "reconstruction": "use_saved_support_not_thresholds",
+            }
             output = vtk.vtkImageData()
             if mask_volume:
                 output.DeepCopy(mask_image)
@@ -4548,7 +4732,8 @@ class VolumeSegmentationController(QtCore.QObject):
         self._reset_speck_adjustment()
         self.set_brush_interaction_active(False)
         self.panel.set_progress(0, "Cancelling")
-        self.set_status("Operation cancelled. The last completed mask is retained; navigation is active.")
+        self.panel.activity_footer.update("segmentation", state="Cancelling", total=0)
+        self.set_status("Cancelling operation. The last completed mask is retained; navigation is active.")
 
     @QtCore.Slot(int)
     def _job_cancelled(self, job_id):
@@ -4559,6 +4744,7 @@ class VolumeSegmentationController(QtCore.QObject):
             self._operation_job = None
             self._reset_speck_adjustment()
             self._finish_brush_feedback(False)
+            self.panel.activity_footer.finish("segmentation", "Cancelled")
         self._finish_background_ui()
 
     def _finish_background_ui(self):
@@ -5237,7 +5423,8 @@ class SegmentationComputation:
 
 
     def stroke(self, mode, seed_geometry, growth_geometry, snap, planes, threshold, settings, projection):
-        self.report(5, f"{mode.title()}: rasterizing brush")
+        label = EDIT_MODE_LABELS[mode]
+        self.report(5, f"{label}: rasterizing brush")
         seed_stencil, seed_extent = self._rasterize_stroke_geometry(seed_geometry, snap["extent"])
         growth_stencil, growth_extent = (None, None)
         if mode == "diffuse":
@@ -5245,7 +5432,7 @@ class SegmentationComputation:
         extent = extent_intersection(extent_union(seed_extent, growth_extent), snap["extent"])
         if seed_stencil is None or extent is None:
             return None
-        self.report(30, f"{mode.title()}: preparing domains")
+        self.report(30, f"{label}: preparing domains")
         seed = _stencil_to_bool(seed_stencil, extent)
         growth = _stencil_to_bool(growth_stencil, extent) if mode == "diffuse" else None
         # Clip the materialized domains directly, avoiding a second stencil round trip.
@@ -5256,7 +5443,7 @@ class SegmentationComputation:
                 growth &= inside
                 growth_stencil = None
         old = _mask_patch(self.frame_state, extent)
-        self.report(45, f"{mode.title()}: calculating mask")
+        self.report(45, f"{label}: calculating mask")
         local = mode != "unselect" and settings.get("smart_local_threshold", False)
         local_value = self._estimate_local_threshold(extent, seed) if local else None
         used_local = local_value is not None
@@ -5286,26 +5473,26 @@ class SegmentationComputation:
                 smart_faint_recovery=faint, smart_boundary_guard=boundary, **flags)
         else:
             raise ValueError(f"Unknown brush mode: {mode}")
-        self.report(85, f"{mode.title()}: preparing history")
+        self.report(85, f"{label}: preparing history")
         changed = not np.array_equal(old, new)
         entry = HistoryEntry.make(extent, old, new, mode=mode,
             threshold=None if mode == "unselect" else threshold,
             seed_domain=seed, growth_domain=growth, smart_local_threshold=used_local,
             smart_faint_recovery=faint, smart_boundary_guard=boundary, **flags)
         if mode == "unselect":
-            detail = "Unselect updated the mask. Signal Threshold does not affect removal."
+            detail = "Erase updated the mask. Signal threshold does not affect removal."
         else:
-            detail = (f"{mode.title()} {'updated the mask' if changed else 'added no voxels'} "
+            detail = (f"{label} {'updated the mask' if changed else 'added no voxels'} "
                       f"at threshold {threshold:.6g}.")
             if not changed:
-                detail += " Adjust Signal Threshold to recalculate this edit."
+                detail += " Adjust Signal threshold to recalculate this edit."
             helpers = [label for label, used in (("local threshold", used_local),
                        ("faint recovery", faint), ("boundary guard", boundary), ("visible seeds", visible)) if used]
             if helpers:
                 detail += f" Smart: {', '.join(helpers)}."
             if settings.get("smart_visible_seeds", False) and projection is None:
                 detail += " Visible seeds were unavailable for this view; normal seeding was used."
-        self.report(95, f"{mode.title()}: ready")
+        self.report(95, f"{label}: ready")
         return entry, new, changed, detail
 
 

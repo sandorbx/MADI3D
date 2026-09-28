@@ -28,6 +28,7 @@ _FAMILY_PRECEDENCE = (
     "ome_stage_label",
     "olympus",
     "leica-lif",
+    "nikon-nd2",
     "zeiss_lsm",
     "micromanager",
     "imagej",
@@ -2429,7 +2430,11 @@ def _cache_key(snapshot):
         selector_key,
         _target_units(snapshot),
         str(snapshot.get("source_checksum") or ""),
-        str(snapshot.get("geometry_checksum") or ""),
+        str(
+            snapshot.get("channel_local_geometry_revision")
+            or snapshot.get("geometry_revision")
+            or ""
+        ),
         local_key,
         provenance_key,
         metadata_key,
