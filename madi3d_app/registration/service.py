@@ -4178,6 +4178,7 @@ class ReformatWorker(QtCore.QThread):
                     reference_local = _apply_points_affine(reference_world, reference_actor_inverse)
                     pending_outputs.append({
                         "kind": "mesh",
+                        "reformat_task_index": task_index,
                         "registration_operation_id": task.get("registration_operation_id"),
                         "application_evidence": application_evidence,
                         "points_local": reference_local.astype(np.float64, copy=False),
@@ -4256,7 +4257,13 @@ class ReformatWorker(QtCore.QThread):
                     self.progress.emit(-1, f"Writing reformatted volume {task['display_name']} to disk")
                     final_path = Path(disk_output_path)
                     temporary_path = partial_output_path(final_path)
-                    temporary_path.unlink(missing_ok=True)
+                    from madi3d_app.project.scientific_records import object_metadata_sidecar_path
+                    staged_companion = Path(object_metadata_sidecar_path(temporary_path))
+                    if (
+                        temporary_path.exists() or temporary_path.is_symlink()
+                        or staged_companion.exists() or staged_companion.is_symlink()
+                    ):
+                        raise FileExistsError(f"Reformat staging file already exists: {temporary_path}")
                     try:
                         writer_kwargs = {}
                         registration_provenance = copy.deepcopy(
@@ -4394,10 +4401,10 @@ class ReformatWorker(QtCore.QThread):
                         if final_path.exists():
                             raise FileExistsError(f"Reformat output already exists: {final_path}")
                         from madi3d_app.io_utils import publish_file_pair
-                        from madi3d_app.project.scientific_records import object_metadata_sidecar_path
                         companion = Path(object_metadata_sidecar_path(temporary_path))
                         publish_file_pair(temporary_path, final_path, companion if companion.is_file() else None,
-                                          object_metadata_sidecar_path(final_path), cancel_check=lambda: self._cancel or self.isInterruptionRequested())
+                                          object_metadata_sidecar_path(final_path), cancel_check=lambda: self._cancel or self.isInterruptionRequested(),
+                                          fail_if_exists=True)
                         published_files.append(final_path)
                         final_companion = Path(object_metadata_sidecar_path(final_path))
                         if final_companion.is_file():
@@ -4410,6 +4417,7 @@ class ReformatWorker(QtCore.QThread):
 
                 payload = {
                     "kind": "volume",
+                    "reformat_task_index": task_index,
                     "registration_operation_id": task.get("registration_operation_id"),
                     "application_evidence": {**application_evidence, "output_dtype": str(output.dtype)},
                     "display_name": task["output_name"],

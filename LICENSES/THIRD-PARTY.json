@@ -160,15 +160,15 @@
         "files": [
           {
             "filename": "libCZI-LGPL-3.0.txt",
-            "text_sha256": "2aa393d8f43847a7d34d6fee44944b46a092bc24888e947448f55353b74883d1"
+            "text_sha256": "c91818d45f9eb94d41d0f1c1eacb07be4198c0081751142bc793cee727869995"
           },
           {
             "filename": "libCZI-THIRD-PARTY-LICENSES.txt",
-            "text_sha256": "378c0588a2c66f3d9ed5e3b2511d974e1c7e79f47f221cb3437a0a794e599590"
+            "text_sha256": "f7da30a158136f606f2dca97c6c6b06839adddc62ce29e0f726258edfc22bc9a"
           },
           {
             "filename": "pybind11-LICENSE.txt",
-            "text_sha256": "5494773a5dcf654c0c3c844fbb11cfc4f898ea0ea44cf467f29e5c99097da6e7"
+            "text_sha256": "83965b843b98f670d3a85bd041ed4b372c8ec50d7b4a5995a83ac697ba675dcb"
           }
         ]
       }

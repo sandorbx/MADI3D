@@ -1,0 +1,126 @@
+diff --git a/scripts/build_czi.py b/scripts/build_czi.py
+index f46fbc91..3d576f89 100644
+--- a/scripts/build_czi.py
++++ b/scripts/build_czi.py
+@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
+ if str(ROOT) not in sys.path:
+     sys.path.insert(0, str(ROOT))
+ from scripts.build_macos_opencv import extract_source, inspect_macho
++from scripts.native_dependencies import LINUX_AUDITWHEEL_PLATFORM, linux_python_runtime_library_dir
+ from scripts.qt_lgpl import download_source
+ from scripts.third_party_licenses import NATIVE_NAME
+ 
+@@ -34,7 +35,6 @@ EIGEN_REVISION = "3147391d946bb4b6c68edd901f2add6ac1f31f8c"
+ PATCH_RELATIVE = "scripts/patches/czi/pylibczirw-6.1.0-subblock-inspection.patch"
+ PATCH_SHA256 = "abf1c19048bb8492ca89942edd68e6a93e76b9f4e649fc087475ea7e8da2c724"
+ MACOS_DEPLOYMENT_TARGET = "13.0"
+-LINUX_AUDITWHEEL_PLATFORM = "manylinux_2_35_x86_64"
+ MAX_INSPECTION_METADATA_BYTES = 65536
+ 
+ 
+@@ -352,6 +352,8 @@ def build(work: Path) -> Path:
+     source_patch = _apply_upstream_patch(source_tree)
+     build_source_patch = _prepare_build_source(source_tree, zstd_source, zstd_record, eigen_source, eigen_record)
+     env = build_environment(system, machine, dict(os.environ))
++    if system == "linux":
++        env["LD_LIBRARY_PATH"] = linux_python_runtime_library_dir()
+     env["MADI3D_EIGEN3_SOURCE_DIR"] = str(eigen_source.resolve())
+     vcpkg_probe = None
+     if system == "linux":
+diff --git a/scripts/build_macos_opencv.py b/scripts/build_macos_opencv.py
+index d5aae047..34ec44e0 100644
+--- a/scripts/build_macos_opencv.py
++++ b/scripts/build_macos_opencv.py
+@@ -20,6 +20,7 @@ import zipfile
+ ROOT = Path(__file__).resolve().parents[1]
+ if str(ROOT) not in sys.path:
+     sys.path.insert(0, str(ROOT))
++from scripts.native_dependencies import LINUX_AUDITWHEEL_PLATFORM, linux_python_runtime_library_dir
+ from scripts.qt_lgpl import download_source
+ from scripts.third_party_licenses import NATIVE_NAME, validate_names, validate_native_license
+ 
+@@ -137,7 +138,13 @@ def build(work: Path) -> Path:
+         env["CXX"] = subprocess.check_output(["xcrun", "--find", "clang++"], text=True).strip()
+         env["SDKROOT"] = subprocess.check_output(["xcrun", "--show-sdk-path"], text=True).strip()
+     else:
+-        env.update(CC="gcc", CXX="g++", LD_LIBRARY_PATH=str(prefix / "lib"))
++        env.update(
++            CC="gcc",
++            CXX="g++",
++            LD_LIBRARY_PATH=os.pathsep.join(
++                (str(prefix / "lib"), linux_python_runtime_library_dir())
++            ),
++        )
+     subprocess.run([str(ffmpeg / "configure"), f"--prefix={prefix}", *FFMPEG_FLAGS], cwd=ffmpeg, env=env, check=True)
+     subprocess.run(["make", f"-j{min(os.cpu_count() or 2, 4)}"], cwd=ffmpeg, env=env, check=True)
+     subprocess.run(["make", "install"], cwd=ffmpeg, env=env, check=True)
+@@ -166,7 +173,7 @@ def build(work: Path) -> Path:
+     if sys.platform == "darwin":
+         subprocess.run(["delocate-wheel", "--require-archs", platform.machine(), "-w", str(repaired), str(wheel)], env=env, check=True)
+     else:
+-        subprocess.run(["auditwheel", "repair", "--plat", "manylinux_2_35_x86_64", "-w", str(repaired), str(wheel)], env=env, check=True)
++        subprocess.run(["auditwheel", "repair", "--plat", LINUX_AUDITWHEEL_PLATFORM, "-w", str(repaired), str(wheel)], env=env, check=True)
+     wheel, = repaired.glob("opencv_python_headless-*.whl")
+     inspection = work / "wheel-inspection"
+     inspection.mkdir()
+diff --git a/scripts/build_pygame.py b/scripts/build_pygame.py
+index feabea09..1fbd4a84 100644
+--- a/scripts/build_pygame.py
++++ b/scripts/build_pygame.py
+@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
+ if str(ROOT) not in sys.path:
+     sys.path.insert(0, str(ROOT))
+ from scripts.build_macos_opencv import extract_source, inspect_macho
++from scripts.native_dependencies import LINUX_AUDITWHEEL_PLATFORM, linux_python_runtime_library_dir
+ from scripts.qt_lgpl import download_source
+ from scripts.third_party_licenses import NATIVE_NAME
+ 
+@@ -102,6 +103,9 @@ def build(work: Path) -> Path:
+     pygame, sdl = [extract_source(download_source(r, downloads), work / (r["component"] + "-source")) for r in sources]
+     prefix = work / "sdl"
+     env = build_environment(sys.platform, platform.machine(), dict(os.environ))
++    python_env = dict(env)
++    if sys.platform == "linux":
++        python_env["LD_LIBRARY_PATH"] = linux_python_runtime_library_dir()
+     flags = sdl_build_flags(sys.platform, platform.machine())
+     sdl_build = work / "sdl-build"
+     subprocess.run(["cmake", "-S", str(sdl), "-B", str(sdl_build), f"-DCMAKE_INSTALL_PREFIX={prefix}", *flags], env=env, check=True)
+@@ -111,7 +115,7 @@ def build(work: Path) -> Path:
+     (pygame / "Setup").write_text(setup)
+     # pygame's sdist contains generated C; no Cython or dependency autodetection.
+     raw = work / "raw-wheels"
+-    subprocess.run([sys.executable, "-m", "pip", "wheel", "--no-deps", "--no-build-isolation", "-w", str(raw), str(pygame)], env=env, check=True)
++    subprocess.run([sys.executable, "-m", "pip", "wheel", "--no-deps", "--no-build-isolation", "-w", str(raw), str(pygame)], env=python_env, check=True)
+     wheel, = raw.glob("pygame-*.whl")
+     repaired = work / "wheels"
+     # Library lookup is needed only while copying SDL into the wheel. Do not
+@@ -120,8 +124,16 @@ def build(work: Path) -> Path:
+         subprocess.run(["delocate-wheel", "--require-archs", platform.machine(), "-w", str(repaired), str(wheel)],
+                        env={**env, "DYLD_LIBRARY_PATH": str(prefix / "lib")}, check=True)
+     else:
+-        subprocess.run(["auditwheel", "repair", "--plat", "manylinux_2_35_x86_64", "-w", str(repaired), str(wheel)],
+-                       env={**env, "LD_LIBRARY_PATH": str(prefix / "lib")}, check=True)
++        subprocess.run(
++            ["auditwheel", "repair", "--plat", LINUX_AUDITWHEEL_PLATFORM, "-w", str(repaired), str(wheel)],
++            env={
++                **python_env,
++                "LD_LIBRARY_PATH": os.pathsep.join(
++                    (str(prefix / "lib"), python_env["LD_LIBRARY_PATH"])
++                ),
++            },
++            check=True,
++        )
+     wheel, = repaired.glob("pygame-*.whl")
+     inspection = work / "inspection"
+     with zipfile.ZipFile(wheel) as archive:
+@@ -133,8 +145,8 @@ def build(work: Path) -> Path:
+             raise ValueError(f"Unexpected native dependency in SDL-only pygame: {relative}")
+         if sys.platform == "darwin":
+             inspect_macho(path, inspection)
+-    subprocess.run([sys.executable, "-m", "pip", "install", "--no-deps", "--force-reinstall", str(wheel)], check=True)
+-    subprocess.run([sys.executable, str(Path(__file__)), "--check"], env={**env, "SDL_VIDEODRIVER": "dummy"}, check=True)
++    subprocess.run([sys.executable, "-m", "pip", "install", "--no-deps", "--force-reinstall", str(wheel)], env=python_env, check=True)
++    subprocess.run([sys.executable, str(Path(__file__)), "--check"], env={**python_env, "SDL_VIDEODRIVER": "dummy"}, check=True)
+     receipt = {
+         "system": platform.system(), "machine": platform.machine(), "filename": wheel.name,
+         "sha256": hashlib.sha256(wheel.read_bytes()).hexdigest(),

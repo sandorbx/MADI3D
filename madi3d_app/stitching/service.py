@@ -2,14 +2,13 @@
 from __future__ import annotations
 
 STITCHING_ALGORITHM_VERSION = (
-    "stitching-registration-fusion-v8-discovery-resolution-retry"
+    "stitching-registration-fusion-v9-requested-registration-model"
 )
 
 DEFAULT_STITCHING_MINIMUM_NCC = 0.05
 DEFAULT_STITCHING_MAX_ANGLE_DEG = 3.0
 DEFAULT_STITCHING_MAX_SCALE_PERCENT = 5.0
 DEFAULT_STITCHING_MAX_SHEAR = 0.03
-MINIMUM_ADVANCED_MODEL_NCC_GAIN = 0.02
 TRANSLATION_STITCHING_ACCEPTANCE_CONTRACT = {
     "contract_version": "translation-stitching-v1",
     "supported_fixture_accuracy_registration_voxels": 0.5,
@@ -1616,7 +1615,6 @@ def _register_pair(tile_a, tile_b, pair, settings, mode, *, cancelled=None):
     model_selection = {
         "requested_model": mode,
         "selected_model": selected_model,
-        "minimum_advanced_ncc_gain": MINIMUM_ADVANCED_MODEL_NCC_GAIN,
         "candidates": {
             "translation": {
                 "score": float(final_score),
@@ -1707,20 +1705,17 @@ def _register_pair(tile_a, tile_b, pair, settings, mode, *, cancelled=None):
             for axis, value in zip("XYZ", rigid_candidate_params[3:6]):
                 if abs(abs(float(value)) - max_angle) <= bound_tolerance:
                     rigid_bound_hits.append(f"rotation_{axis.lower()}")
-        rigid_selected = rigid_gain >= MINIMUM_ADVANCED_MODEL_NCC_GAIN
         model_selection["candidates"]["rigid"] = {
             "score": float(rigid_candidate_score),
             "gain_over_translation": rigid_gain,
-            "required_gain": MINIMUM_ADVANCED_MODEL_NCC_GAIN,
-            "selected": bool(rigid_selected),
+            "selected": True,
             "bound_hits": rigid_bound_hits,
         }
-        if rigid_selected:
-            selected_model = "rigid"
-            rigid_params = rigid_candidate_params
-            correction = rigid_candidate_corr
-            final_score = float(rigid_candidate_score)
-            final_common = rigid_candidate_common
+        selected_model = "rigid"
+        rigid_params = rigid_candidate_params
+        correction = rigid_candidate_corr
+        final_score = float(rigid_candidate_score)
+        final_common = rigid_candidate_common
 
     if mode == "affine":
         affine_seed = np.r_[rigid_candidate_params, np.zeros(6, dtype=float)]
@@ -1811,24 +1806,19 @@ def _register_pair(tile_a, tile_b, pair, settings, mode, *, cancelled=None):
             for plane, value in zip(("xy", "xz", "yz"), affine_candidate_params[9:12]):
                 if abs(abs(float(value)) - max_shear) <= shear_tolerance:
                     affine_bound_hits.append(f"shear_{plane}")
-        affine_selected = affine_gain >= MINIMUM_ADVANCED_MODEL_NCC_GAIN
         model_selection["candidates"]["affine"] = {
             "score": float(affine_candidate_score),
             "gain_over_best_simpler_model": affine_gain,
             "best_simpler_score": best_simpler_score,
-            "required_gain": MINIMUM_ADVANCED_MODEL_NCC_GAIN,
-            "selected": bool(affine_selected),
+            "selected": True,
             "bound_hits": affine_bound_hits,
         }
-        if affine_selected:
-            selected_model = "affine"
-            rigid_params = affine_candidate_params[:6].copy()
-            affine_params = affine_candidate_params
-            correction = affine_candidate_corr
-            final_score = float(affine_candidate_score)
-            final_common = affine_candidate_common
-        else:
-            affine_params = np.r_[rigid_params, np.zeros(6, dtype=float)]
+        selected_model = "affine"
+        rigid_params = affine_candidate_params[:6].copy()
+        affine_params = affine_candidate_params
+        correction = affine_candidate_corr
+        final_score = float(affine_candidate_score)
+        final_common = affine_candidate_common
 
     for candidate_name, candidate_record in model_selection["candidates"].items():
         candidate_record["selected"] = candidate_name == selected_model
@@ -3294,15 +3284,7 @@ class StitchRegistrationOperation:
             tile_ids = [tile["tile_id"] for tile in self.tiles]
             self._progress_callback(80, "Optimizing the global tile layout")
             globally_rejected = []
-            model_rank = {"translation": 0, "rigid": 1, "affine": 2}
-            selected_edge_models = [
-                str(edge.get("selected_model") or edge.get("mode") or "translation")
-                for edge in edges
-            ]
-            global_mode = max(
-                selected_edge_models or ["translation"],
-                key=lambda value: model_rank.get(value, 0),
-            )
+            global_mode = self.mode
             if global_mode == "affine":
                 corrections, components = _solve_affine_pose_graph(tile_ids, edges)
             elif global_mode == "rigid":
@@ -3369,19 +3351,6 @@ class StitchRegistrationOperation:
                     not_searched_count=search_coverage["total_possible_pairs"]-len(pair_evaluations))
                 if search_coverage["not_searched_count"]:
                     execution_warnings.append(dict(code="discovery-search-incomplete", message=search_coverage["broaden_search"]))
-            if global_mode != self.mode:
-                execution_warnings.append(
-                    {
-                        "code": "registration-model-complexity-not-supported",
-                        "message": (
-                            f"{self.mode.title()} registration was requested, but "
-                            f"the accepted pair evidence supported only {global_mode}. "
-                            "The global solution used the simpler model."
-                        ),
-                        "requested_model": self.mode,
-                        "selected_model": global_mode,
-                    }
-                )
             selected_bound_hits = []
             for edge in edges:
                 selection = edge.get("model_selection") or {}
@@ -4705,7 +4674,10 @@ class StitchFusionOperation:
                 bundle_temporary = _hidden_temporary_output_path(
                     requested_path, "multichannel"
                 )
-                labels = [str(channel["label"]) for channel in self.channel_sets]
+                labels = [
+                    str(channel.get("output_name") or channel["label"])
+                    for channel in self.channel_sets
+                ]
                 self._progress_callback(97, f"Writing multichannel {output_format.upper()} source")
                 bundle_writer_kwargs = {}
                 if output_format.lower() == "h5j":
@@ -4762,6 +4734,7 @@ class StitchFusionOperation:
                 outputs.append({
                     "path": str(final_path),
                     "label": "multichannel",
+                    "display_name": final_path.name[:-len(extension)],
                     "channels": labels,
                     "multichannel": True,
                     "grid": {
@@ -4793,21 +4766,31 @@ class StitchFusionOperation:
                     if self._cancelled():
                         raise InterruptedError("Stitching fusion was cancelled.")
                     label = str(channel["label"])
-                    suffix = "" if channel_count == 1 else "_" + _safe_stem(label)
-                    requested_path = out_dir / f"{self.base_name}{suffix}{extension}"
+                    output_name = str(channel.get("output_name") or "").strip()
+                    if output_name:
+                        output_stem = _safe_stem(output_name)
+                    else:
+                        suffix = "" if channel_count == 1 else "_" + _safe_stem(label)
+                        output_stem = self.base_name + suffix
+                    requested_path = out_dir / f"{output_stem}{extension}"
                     staged_path = _hidden_temporary_output_path(
                         requested_path, "scalar"
                     )
                     scalar_temporaries.append(staged_path)
                     path = self._unique_output_path(requested_path)
+                    output_display_name = output_name
+                    if output_name and path != requested_path:
+                        output_display_name += path.name[
+                            len(output_stem):-len(extension)
+                        ]
                     local_options = dict(self.options)
                     inputs = [member.get("scientific_inputs") for member in self.channel_sets]
                     if all(inputs):
                         from madi3d_app.volume.provenance import volume_result_projection
                         local_options["portable_projection"] = volume_result_projection(inputs,
-                            [{"display_name": label}], [fusion_record],
+                            [{"display_name": output_display_name or label}], [fusion_record],
                             supporting_operations=self.supporting_operations)
-                    local_options["channel_label"] = label
+                    local_options["channel_label"] = output_display_name or label
                     local_options["stitching_mosaic_geometry"] = (
                         mosaic_provenance
                     )
@@ -4841,7 +4824,12 @@ class StitchFusionOperation:
                     )
                     if self._cancelled():
                         raise InterruptedError("Stitching fusion was cancelled.")
-                    path = self._unique_output_path(requested_path)
+                    final_path = self._unique_output_path(requested_path)
+                    if output_name and final_path != path:
+                        raise RuntimeError(
+                            "Stitching output filename changed during fusion. Retry the output."
+                        )
+                    path = final_path
                     from madi3d_app.volume.export import publish_staged_volume_pair
                     publish_staged_volume_pair(staged_path, path, cancel_check=self._cancelled)
                     final_companion = Path(str(path)+".madi3d-provenance.json")
@@ -4852,6 +4840,7 @@ class StitchFusionOperation:
                     outputs.append({
                         "path": str(path),
                         "label": label,
+                        **({"display_name": output_display_name} if output_name else {}),
                         "multichannel": False,
                         "grid": {
                             "dims": list(grid["dims"]),

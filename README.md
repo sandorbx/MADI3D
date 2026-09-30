@@ -21,7 +21,7 @@ Pre-built packages are available for:
 
 ➡️ **[Download the latest MADI3D release](https://github.com/sandorbx/MADI3D/releases)**
 
-See the [changelog](CHANGELOG.md) for release changes. The capabilities below describe **0.32.0 beta**; check the Releases page for currently published packages.
+See the [changelog](CHANGELOG.md) for release changes. The capabilities below describe the prepared **0.33.0 beta**; check the Releases page for currently published packages.
 
 ## Install MADI3D
 
@@ -35,6 +35,8 @@ The four platform-specific MADI3D assets on the GitHub Releases page are the act
 4. The public beta is not currently code-signed, so Windows SmartScreen may show a first-run warning. Continue only when the file came from the official MADI3D release and its checksum matches `SHA256SUMS.txt`.
 
 ### Ubuntu/Linux x64
+
+The prepared 0.33.0 release targets Ubuntu 20.04 or newer on x64 (glibc 2.31 or newer). It uses the system C++ runtime and X11/xcb/OpenGL desktop libraries; minimal or headless installations may need those libraries installed. Check the notes for the release you download.
 
 1. Download `MADI3D-Linux-x64.tar.gz`.
 2. Extract the archive once.
@@ -79,6 +81,7 @@ MADI3D brings a range of normally separate 3D imaging tasks into one workspace:
 - photographic rendering effects
 - scientific figure preparation
 - camera animation and video recording
+- storyboard editing with object-motion, visibility and clipping actions
 - project organization and annotation
 
 The aim is not merely to display 3D data, but to keep visualization, processing, comparison, and presentation within the same spatial context.
@@ -223,6 +226,8 @@ The stitching system supports:
 Rather than simply aligning tiles sequentially, MADI3D can determine a globally consistent configuration from the relationships between overlapping volumes.
 
 Solved tile geometry can also be applied consistently across related microscopy channels.
+
+Successful alignment updates the scene, and apply/restore controls let you review the placement before fusion. If alignment at the current positions fails, an automatic-placement retry keeps your selected registration model. Failed or cancelled attempts leave tile poses intact.
 
 The global translation workflow follows the same core principles described in:
 
@@ -400,6 +405,9 @@ MADI3D includes tools for producing animated views of 3D datasets.
 The Animation and Recording panel can be used to:
 
 - define camera movement
+- arrange and preview storyboard sections
+- add visibility, object-motion and clipping actions from the current selection
+- trim recorded takes and export tiled animations
 - animate scientific scenes
 - generate rotating views
 - inspect structures from changing viewpoints
@@ -407,6 +415,8 @@ The Animation and Recording panel can be used to:
 - create material for presentations and publications
 
 Animation can be combined with the same rendering, photographic, stereoscopic, and scene-organization tools used for normal interactive visualization.
+
+Playback changes presentation while preserving the scientific poses saved with the project.
 
 ---
 
@@ -473,7 +483,7 @@ Saved project state can preserve information such as:
 - camera and view information
 - processing state
 
-Project information is stored in a human-readable form and can also be inspected or processed outside MADI3D when required.
+The `.madi3d` project package retains scene state, scientific records and generated resources for reopening. Missing source files remain available for relinking. Supported historical projects can recover usable state with explicit warnings when old evidence is unavailable; invalid current state still fails validation.
 
 The intention is for the MADI3D project to represent the scientific workspace, not merely the collection of files currently visible on screen.
 
@@ -511,17 +521,21 @@ MADI3D supports common microscopy and morphology formats including:
 - **TIFF / TIF**
 - **Zeiss LSM**
 - **ZEISS CZI** (read-only grayscale fluorescence volumes)
+- **Nikon ND2** (read-only acquisitions with explicit position/channel selection)
 - **Olympus OIF / OIB**
 - **NRRD**
 - **NIfTI / NII**
 - **H5J**
 - **OBJ**
+- **PLY**
 - **SWC**
 - **ZIP** packages containing textured 3D scans
 
 Individual files, multiple files, and complete folders can be dragged directly into the render window or project tree.
 
 Multichannel and time-series microscopy data are also supported in relevant workflows.
+
+CZI supports scalar Gray8, Gray16 and Gray32Float data. Color/BGR pixels and unsafe or ambiguous layouts are rejected. ND2 preserves measured regular frame intervals; irregular loops are not represented by an invented single interval. Import keeps the original microscopy files unchanged.
 
 ---
 

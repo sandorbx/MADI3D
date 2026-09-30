@@ -1703,15 +1703,27 @@ class VolumePayloadDecoder:
         ):
             raise ValueError("ZEISS CZI scene or axes do not match their source contract.")
         selection = selector.get("source_selection")
-        if not isinstance(selection, dict) or set(selection) != {
+        ordinary_selection_keys = {
             "scene_index", "roi", "t_start", "z_start", "channel_indices", "fixed_indices"
+        }
+        illumination_selection_keys = ordinary_selection_keys | {"channel_coordinates"}
+        variant_selection_keys = illumination_selection_keys | {"view_index"}
+        if not isinstance(selection, dict) or frozenset(selection) not in {
+            frozenset(ordinary_selection_keys), frozenset(illumination_selection_keys),
+            frozenset(variant_selection_keys),
         }:
             raise ValueError("ZEISS CZI source-coordinate selection is incomplete.")
         scene = selection["scene_index"]
         if scene is not None and (isinstance(scene, bool) or not isinstance(scene, int)):
             raise ValueError("ZEISS CZI scene tag is invalid.")
         subselection = selector.get("source_subselection")
-        if subselection != ({"S": scene} if scene is not None else {}):
+        expected_subselection = {"S": scene} if scene is not None else {}
+        if "view_index" in selection:
+            view = selection["view_index"]
+            if isinstance(view, bool) or not isinstance(view, int) or view < 0:
+                raise ValueError("ZEISS CZI view selector is invalid.")
+            expected_subselection["V"] = view
+        if subselection != expected_subselection:
             raise ValueError("ZEISS CZI scene tag disagrees with its source selection.")
         roi = selection["roi"]
         if (
@@ -1731,10 +1743,25 @@ class VolumePayloadDecoder:
             not isinstance(source_channels, (list, tuple))
             or len(source_channels) != contract.source_axis_sizes[2]
             or any(isinstance(value, bool) or not isinstance(value, int) for value in source_channels)
-            or len(set(source_channels)) != len(source_channels)
             or not isinstance(selection["fixed_indices"], dict)
         ):
             raise ValueError("ZEISS CZI source channel or fixed indices are invalid.")
+        coordinates = selection.get("channel_coordinates")
+        if coordinates is None:
+            if len(set(source_channels)) != len(source_channels):
+                raise ValueError("ZEISS CZI source channel or fixed indices are invalid.")
+        elif (
+            not isinstance(coordinates, (list, tuple))
+            or len(coordinates) != len(source_channels)
+            or any(
+                not isinstance(item, dict)
+                or set(item) not in ({"C"}, {"C", "I"})
+                or any(isinstance(value, bool) or not isinstance(value, int) for value in item.values())
+                for item in coordinates
+            )
+            or [item["C"] for item in coordinates] != list(source_channels)
+        ):
+            raise ValueError("ZEISS CZI native channel coordinates are invalid.")
         channel = selector.get("channel")
         if channel is None and len(source_channels) == 1:
             channel = 0
@@ -1742,6 +1769,8 @@ class VolumePayloadDecoder:
             raise ValueError("ZEISS CZI channel selector is outside the source channels.")
         if selector.get("channel_source_index") != source_channels[channel]:
             raise ValueError("ZEISS CZI source channel index changed.")
+        if coordinates is not None and selector.get("channel_source_coordinates") != coordinates[channel]:
+            raise ValueError("ZEISS CZI native channel coordinates changed.")
         return channel
 
     def _decode_czi_many(self, path, selectors, decode_contracts=None):

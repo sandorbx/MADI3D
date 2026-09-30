@@ -15,7 +15,7 @@ import shutil
 import tempfile
 
 import numpy as np
-from PIL import Image
+from PIL import Image, __version__ as pillow_version
 
 from .cdm import CDMResult, array_checksum, checkpoint, generate_cdm
 from .cdm_export import export_cdm
@@ -185,11 +185,25 @@ class QueryLaunch:
 def complete_query(launch, destination, query_id, label, cancel=None):
     result = launch.generate(cancel)
     checkpoint(cancel)
-    artifact = export_cdm(result, destination, cancel=cancel, label=label)
-    # Export's rename is the commit point. Retain committed evidence even if a
-    # cancellation/supersession arrives immediately afterwards.
-    from .cdm_export import cdm_image_name
-    png = (Path(destination) / cdm_image_name(label)).read_bytes()
+    if destination is None:
+        # A searchable query needs the same verified RGB and PNG evidence as an
+        # exported bundle, but does not need an intermediate filesystem copy.
+        if (result.rgb.dtype != np.uint8 or
+                result.rgb.shape != (*search_profile(result.artifact.profile).search_canvas_yx, 3) or
+                hashlib.sha256(result.rgb.tobytes()).hexdigest() != result.artifact.rgb_pixel_sha256):
+            raise ValueError("Generated Color-Depth MIP pixels disagree with the artifact.")
+        stream = io.BytesIO()
+        Image.fromarray(result.rgb).save(stream, format="PNG", compress_level=6)
+        png = stream.getvalue()
+        checkpoint(cancel)
+        artifact = replace(result.artifact, png_file_sha256=hashlib.sha256(png).hexdigest(),
+                           png_encoder=f"Pillow/{pillow_version}; PNG RGB8; compress_level=6")
+    else:
+        artifact = export_cdm(result, destination, cancel=cancel, label=label)
+        # Export's rename is the commit point. Retain committed evidence even if a
+        # cancellation/supersession arrives immediately afterwards.
+        from .cdm_export import cdm_image_name
+        png = (Path(destination) / cdm_image_name(label)).read_bytes()
     record = {"version": 3, "query_id": query_id, "label": label,
               "artifact": artifact.to_dict(),
               "png_base64": base64.b64encode(png).decode("ascii"), "out_of_date": []}

@@ -819,7 +819,8 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
             "and can be undone; lowering its value during the same adjustment can restore removed components. "
             "Mask display changes only the preview appearance.</p>"
             "<h3>Output</h3><p>Choose an output type, then create a new volume. The source volume remains available. "
-            "Continue to Color-Depth MIP opens query-image preparation without submitting a search.</p>", self)
+            "Continue to NeuronBridge carries only the selected source signal into Color-Depth MIP preparation; "
+            "its preview and searchable MIP are generated automatically without submitting a search.</p>", self)
 
         self.target_box = QtWidgets.QGroupBox("Target volume", self)
         target_layout = QtWidgets.QVBoxLayout(self.target_box)
@@ -1067,6 +1068,21 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
         )
         self.extract_painted.clicked.connect(self.extractRequested)
         painted_actions_layout.addWidget(self.extract_painted, 1)
+        self.extract_settings = QtWidgets.QToolButton(self.painted_actions_row)
+        self.extract_settings.setIcon(self._action_icon("menu-2"))
+        self.extract_settings.setAccessibleName("Extraction settings")
+        self.extract_settings.setToolTip("Choose an extraction output and adjust its settings.")
+        self.extract_settings.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.extract_settings_menu = QtWidgets.QMenu(self.extract_settings)
+        for label, choice in (
+            ("Selected signal settings…", "selected"),
+            ("Original signal and margin…", "original"),
+            ("Binary mask settings…", "mask"),
+        ):
+            action = self.extract_settings_menu.addAction(label)
+            action.triggered.connect(lambda checked=False, key=choice: self._show_output_settings(key))
+        self.extract_settings.setMenu(self.extract_settings_menu)
+        painted_actions_layout.addWidget(self.extract_settings)
         self.delete_painted = QtWidgets.QPushButton("Delete painted", self.painted_actions_row)
         self.delete_painted.setIcon(self._action_icon("trash"))
         self.delete_painted.setToolTip(
@@ -1074,24 +1090,47 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
         )
         self.delete_painted.clicked.connect(self.deleteSelectedRequested)
         painted_actions_layout.addWidget(self.delete_painted, 1)
+        self.delete_settings = QtWidgets.QToolButton(self.painted_actions_row)
+        self.delete_settings.setIcon(self._action_icon("menu-2"))
+        self.delete_settings.setAccessibleName("Deletion output settings")
+        self.delete_settings.setToolTip("Review output settings for a copy with painted voxels removed.")
+        self.delete_settings.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.delete_settings_menu = QtWidgets.QMenu(self.delete_settings)
+        action = self.delete_settings_menu.addAction("Source without selection settings…")
+        action.triggered.connect(lambda: self._show_output_settings("without_selection"))
+        self.delete_settings.setMenu(self.delete_settings_menu)
+        painted_actions_layout.addWidget(self.delete_settings)
         edit_layout.addWidget(self.painted_actions_row)
 
         self.operation_row = QtWidgets.QWidget(self.workflow_tabs)
         history_row = QtWidgets.QHBoxLayout(self.operation_row)
         history_row.setContentsMargins(0, 0, 0, 0)
-        self.undo = QtWidgets.QPushButton("Undo", self.operation_row)
-        self.redo = QtWidgets.QPushButton("Redo", self.operation_row)
-        self.clear = QtWidgets.QPushButton("Clear mask", self.operation_row)
+        self.undo = QtWidgets.QToolButton(self.operation_row)
+        self.redo = QtWidgets.QToolButton(self.operation_row)
+        self.clear = QtWidgets.QToolButton(self.operation_row)
+        for button, label in (
+            (self.undo, "Undo"),
+            (self.redo, "Redo"),
+            (self.clear, "Clear mask"),
+        ):
+            button.setText(label)
+            button.setAccessibleName(label)
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+            button.setFixedSize(34, 34)
+        self.undo.setIcon(self._action_icon("arrow-back-up"))
+        self.redo.setIcon(self._action_icon("arrow-forward-up"))
+        self.clear.setIcon(self._action_icon("eraser"))
         self.undo.setToolTip("Undo the latest mask edit or whole-mask cleanup for this frame.")
         self.redo.setToolTip("Restore the most recently undone mask edit for this frame.")
         self.clear.setToolTip("Clear the current frame's mask. Undo restores it.")
         self.undo.clicked.connect(self.undoRequested)
         self.redo.clicked.connect(self.redoRequested)
         self.clear.clicked.connect(self.clearRequested)
+        history_row.addWidget(QtWidgets.QLabel("Mask", self.operation_row))
         history_row.addWidget(self.undo)
         history_row.addWidget(self.redo)
-        history_row.addStretch(1)
         history_row.addWidget(self.clear)
+        history_row.addStretch(1)
         edit_layout.addWidget(self.operation_row)
 
         self.opacity_slider = QtWidgets.QSlider(Qt.Orientation.Horizontal, self)
@@ -1153,10 +1192,11 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
         )
         self.create_output.clicked.connect(self._create_output_clicked)
         output_layout.addWidget(self.create_output)
-        self.continue_to_cdm = QtWidgets.QPushButton("Continue to Color-Depth MIP…", self.workflow_tabs)
+        self.continue_to_cdm = QtWidgets.QPushButton("Continue to NeuronBridge…", self.workflow_tabs)
         self.continue_to_cdm.setToolTip(
-            "Open NeuronBridge Color-Depth MIP preparation. Generating a Color-Depth MIP prepares a "
-            "query image; it does not submit a search."
+            "Create a volume containing the original signal only inside this frame's selection, "
+            "then open it in NeuronBridge. Its Color-Depth MIP is generated automatically in memory "
+            "and can be searched without exporting it."
         )
         self.continue_to_cdm.clicked.connect(self.continueToCdmRequested)
         output_layout.addWidget(self.continue_to_cdm)
@@ -1207,15 +1247,12 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
             self.extract_painted,
             self.delete_painted,
             self.navigate_hint,
-            self.clear,
             self.live_threshold_preview,
             self.smart_local_threshold,
             self.smart_faint_recovery,
             self.smart_boundary_guard,
             self.smart_visible_seeds,
             self.color_button,
-            self.undo,
-            self.redo,
             self.output_description,
             self.output_type,
             self.create_output,
@@ -1355,7 +1392,8 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
             preserved.update((self.speck_slider, self.speck_spin))
         for widget in (
             self.clear, self.seed_slider, self.seed_spin,
-            self.extract_painted, self.delete_painted,
+            self.extract_painted, self.extract_settings,
+            self.delete_painted, self.delete_settings,
             self.growth_slider, self.growth_spin,
             self.threshold_slider, self.threshold_spin,
             self.smart_local_threshold, self.smart_faint_recovery, self.smart_boundary_guard,
@@ -1480,6 +1518,12 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
             self.deleteSelectedRequested.emit()
         elif choice == "mask":
             self.createMaskRequested.emit()
+
+    def _show_output_settings(self, choice):
+        index = self.output_type.findData(choice)
+        if index >= 0:
+            self.output_type.setCurrentIndex(index)
+            self.workflow_tabs.setCurrentIndex(2)
 
     def configure_threshold(self, minimum, maximum, value):
         lo = float(minimum)
@@ -2045,6 +2089,7 @@ class VolumeSegmentationController(QtCore.QObject):
         p.extractRequested.connect(self.extract_selection)
         p.deleteSelectedRequested.connect(self.delete_selected)
         p.createMaskRequested.connect(self.create_mask_volume)
+        p.continueToCdmRequested.connect(self.continue_to_cdm)
         p.smartSettingsChanged.connect(self.set_smart_settings)
         p.extractOriginalRequested.connect(self.extract_original_signal)
         p.speckThresholdChanged.connect(self.remove_specks)
@@ -3832,6 +3877,26 @@ class VolumeSegmentationController(QtCore.QObject):
     def create_mask_volume(self):
         self._create_output("Create Mask Volume", "mask", "segmentation_mask", mask_volume=True)
 
+    def continue_to_cdm(self):
+        self._create_output(
+            "Prepare NeuronBridge selected signal",
+            "selection",
+            "segmentation_extract",
+            on_published=self._open_signal_in_cdm,
+        )
+
+    def _open_signal_in_cdm(self, channel_id):
+        try:
+            self.main.neuronbridge_query_controller.open(
+                prepare=True, source_channel_id=channel_id
+            )
+        except Exception as exc:
+            # Publication has succeeded; a navigation failure must not mark the
+            # generated scientific output as failed or roll it back.
+            self.set_status(
+                f"Selected signal created, but NeuronBridge could not open it: {exc}"
+            )
+
     def extract_selection(self):
         self._create_output("Extract Selected Voxels", "selection", "segmentation_extract")
 
@@ -4608,7 +4673,8 @@ class VolumeSegmentationController(QtCore.QObject):
             return None
         return frame
 
-    def _create_output(self, label, suffix, operation, *, mask_volume=False, margin=0):
+    def _create_output(self, label, suffix, operation, *, mask_volume=False, margin=0,
+                       on_published=None):
         frame = self._output_mask()
         if frame is None:
             return
@@ -4645,10 +4711,11 @@ class VolumeSegmentationController(QtCore.QObject):
                 "contribution": "committed_interactive_mask",
                 "reconstruction": "use_saved_support_not_thresholds",
             }
-            output = vtk.vtkImageData()
             if mask_volume:
+                output = vtk.vtkImageData()
                 output.DeepCopy(mask_image)
             else:
+                output = vtk.vtkImageData()
                 report(15, f"{label}: copying source grid")
                 output.DeepCopy(source)
                 arr = _image_array_view(output)
@@ -4674,9 +4741,11 @@ class VolumeSegmentationController(QtCore.QObject):
             if output is None:
                 self.set_status("The current frame has no selected voxels.")
                 return
-            self._add_derived_volume(output, name, mask_volume=mask_volume,
+            _container, item = self._add_derived_volume(output, name, mask_volume=mask_volume,
                 operation=operation, operation_parameters=parameters, operation_snapshot=snapshot)
             self.set_status(f"{label}: created {name}")
+            if on_published is not None:
+                on_published(str(item.data(0, ROLE_VOLUME_CHANNEL_ID)))
         self._run_background(label, work, publish, operation_snapshot=snapshot)
 
     @staticmethod

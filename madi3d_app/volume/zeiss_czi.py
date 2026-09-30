@@ -70,6 +70,8 @@ class CziSeriesInspection:
     channel_metadata: tuple[MicroscopyChannelMetadata, ...]
     channel_scalar_dtypes: tuple[str, ...]
     channel_scalar_bit_depths: tuple[int, ...]
+    channel_coordinates: tuple[tuple[tuple[str, int], ...], ...]
+    view_index: int | None
     spacing: tuple[float, float, float] | None
     space_units: tuple[str, str, str] | None
     time_count: int
@@ -83,7 +85,7 @@ class CziSeriesInspection:
 
     def source_selection(self) -> dict[str, Any]:
         """Small, persistent selector validated again before decoding."""
-        return {
+        selection = {
             "scene_index": self.scene_index,
             "roi": list(self.roi),
             "t_start": self.t_indices[0],
@@ -91,6 +93,11 @@ class CziSeriesInspection:
             "channel_indices": list(self.channel_indices),
             "fixed_indices": dict(self.fixed_indices),
         }
+        if self.view_index is not None:
+            selection["view_index"] = self.view_index
+        if self.view_index is not None or any("I" in dict(item) for item in self.channel_coordinates):
+            selection["channel_coordinates"] = [dict(item) for item in self.channel_coordinates]
+        return selection
 
 
 @dataclass(frozen=True)
@@ -330,6 +337,10 @@ def _channel_records(root: Mapping[str, Any], indices: tuple[int, ...]):
             continue
         if index not in by_index:
             by_index[index] = item
+    if len(indices) == 1 and indices[0] not in by_index and len(raw_items) == 1:
+        item = raw_items[0]
+        if isinstance(item, Mapping):
+            by_index[indices[0]] = item
     names = []
     metadata = []
     for index in indices:
@@ -355,10 +366,13 @@ def _channel_records(root: Mapping[str, Any], indices: tuple[int, ...]):
 
 
 def _series(
-    index: int, scene_index: int | None, blocks: Sequence[Mapping[str, Any]],
+    index: int, scene_index: int | None, view_index: int | None,
+    blocks: Sequence[Mapping[str, Any]],
     metadata_root: Mapping[str, Any],
 ) -> CziSeriesInspection:
     identity = f"zeiss-czi:scene-{index}" if scene_index is None else f"zeiss-czi:scene-{scene_index}"
+    if view_index is not None:
+        identity += f":view-{view_index}"
     min_x = min(block["rect"][0] for block in blocks)
     min_y = min(block["rect"][1] for block in blocks)
     max_x = max(block["rect"][0] + block["rect"][2] for block in blocks)
@@ -374,7 +388,12 @@ def _series(
         for axis, value in block["coords"].items():
             if axis != "S":
                 axis_values[axis].add(value)
-    extra = {axis: values for axis, values in axis_values.items() if axis not in {"C", "T", "Z"}}
+    illumination_indices = tuple(sorted(axis_values.get("I", ())))
+    illumination_channels = len(illumination_indices) > 1
+    extra = {
+        axis: values for axis, values in axis_values.items()
+        if axis not in ({"C", "T", "Z", "I"} if illumination_channels else {"C", "T", "Z"})
+    }
     if any(len(values) != 1 for values in extra.values()):
         raise CziInspectionError(
             CZI_UNSUPPORTED_LAYOUT,
@@ -383,26 +402,32 @@ def _series(
     fixed = tuple(sorted((axis, next(iter(values))) for axis, values in extra.items()))
     t_indices = tuple(sorted(axis_values.get("T", {0})))
     z_indices = tuple(sorted(axis_values.get("Z", {0})))
-    c_indices = tuple(sorted(axis_values.get("C", {0})))
     for axis, values in (("T", t_indices), ("Z", z_indices)):
         if values != tuple(range(values[0], values[0] + len(values))):
             raise CziInspectionError(
                 CZI_UNSUPPORTED_LAYOUT,
                 f"scene {identity} has missing {axis} source indices",
             )
-    planes: dict[tuple[int, int, int], list[tuple[int, int, int, int]]] = defaultdict(list)
-    types: dict[int, set[str]] = defaultdict(set)
+    channel_axes = ("C", "I") if illumination_channels else ("C",)
+    channel_coordinates = tuple(
+        sorted({
+            tuple((axis, block["coords"].get(axis, 0)) for axis in channel_axes)
+            for block in blocks
+        })
+    )
+    planes: dict[tuple[tuple[tuple[str, int], ...], int, int], list[tuple[int, int, int, int]]] = defaultdict(list)
+    types: dict[tuple[tuple[str, int], ...], set[str]] = defaultdict(set)
     for block in blocks:
         coordinates = block["coords"]
-        channel = coordinates.get("C", 0)
+        channel = tuple((axis, coordinates.get(axis, 0)) for axis in channel_axes)
         planes[(channel, coordinates.get("T", 0), coordinates.get("Z", 0))].append(block["rect"])
         types[channel].add(block["pixel_type"])
     dtypes = []
     bits = []
-    for channel in c_indices:
+    for channel in channel_coordinates:
         if len(types[channel]) != 1:
             raise CziInspectionError(
-                CZI_UNSUPPORTED_LAYOUT, f"scene {identity} channel C:{channel} mixes native pixel types"
+                CZI_UNSUPPORTED_LAYOUT, f"scene {identity} channel {dict(channel)} mixes native pixel types"
             )
         dtype, bit_depth = _PIXEL_TYPES[next(iter(types[channel]))]
         dtypes.append(dtype)
@@ -410,7 +435,32 @@ def _series(
         for time in t_indices:
             for z in z_indices:
                 _cover_exactly(roi, planes[(channel, time, z)])
-    names, channel_metadata = _channel_records(metadata_root, c_indices)
+    source_c_indices = tuple(dict(channel)["C"] for channel in channel_coordinates)
+    source_c_indices = tuple(sorted(set(source_c_indices)))
+    names, channel_metadata = _channel_records(metadata_root, source_c_indices)
+    if illumination_channels:
+        metadata_by_c = dict(zip(tuple(sorted(set(source_c_indices))), channel_metadata))
+        names = tuple(
+            f"{metadata_by_c[channel[0][1]].source_channel_name} illumination {dict(channel)['I']}"
+            for channel in channel_coordinates
+        )
+        channel_metadata = tuple(
+            MicroscopyChannelMetadata(
+                source_channel_identifier=f"C:{dict(channel)['C']};I:{dict(channel)['I']}",
+                source_channel_name=name,
+                source_color=metadata_by_c[dict(channel)["C"]].source_color,
+                excitation_wavelength=metadata_by_c[dict(channel)["C"]].excitation_wavelength,
+                excitation_wavelength_units=metadata_by_c[dict(channel)["C"]].excitation_wavelength_units,
+                emission_wavelength=metadata_by_c[dict(channel)["C"]].emission_wavelength,
+                emission_wavelength_units=metadata_by_c[dict(channel)["C"]].emission_wavelength_units,
+                normalized_metadata={
+                    **dict(metadata_by_c[dict(channel)["C"]].normalized_metadata),
+                    "source_channel_coordinates": dict(channel),
+                    "illumination_index": dict(channel)["I"],
+                },
+            )
+            for channel, name in zip(channel_coordinates, names)
+        )
     spacing = _spacing(metadata_root)
     acquisition = MicroscopyAcquisitionMetadata(
         microscope_vendor="ZEISS",
@@ -418,21 +468,35 @@ def _series(
         scene_identity=identity,
         normalized_metadata={
             "source_scene_index": scene_index,
+            **({"source_view_index": view_index} if view_index is not None else {}),
             "source_roi": list(roi),
             "source_t_start": t_indices[0],
             "source_z_start": z_indices[0],
             "time_point_count": len(t_indices),
         },
     )
+    if view_index is not None:
+        series_name = (
+            f"ZEISS scene {scene_index + 1}, view {view_index}"
+            if scene_index is not None else f"ZEISS acquisition, view {view_index}"
+        )
+    else:
+        series_name = (
+            f"ZEISS scene {scene_index + 1}"
+            if scene_index is not None else "ZEISS acquisition"
+        )
     return CziSeriesInspection(
         index=index, identity=identity,
-        name=f"ZEISS scene {index + 1}" if scene_index is not None else "ZEISS acquisition",
+        name=series_name,
         scene_index=scene_index, roi=roi, axes=_AXES,
-        shape=(len(t_indices), len(z_indices), len(c_indices), roi[3], roi[2]),
-        t_indices=t_indices, z_indices=z_indices, channel_indices=c_indices,
+        shape=(len(t_indices), len(z_indices), len(channel_coordinates), roi[3], roi[2]),
+        t_indices=t_indices, z_indices=z_indices,
+        channel_indices=tuple(dict(channel)["C"] for channel in channel_coordinates),
         fixed_indices=fixed, scalar_dtype=dtypes[0], scalar_bit_depth=bits[0],
         channel_names=names, channel_metadata=channel_metadata,
         channel_scalar_dtypes=tuple(dtypes), channel_scalar_bit_depths=tuple(bits),
+        channel_coordinates=channel_coordinates,
+        view_index=view_index,
         spacing=spacing, space_units=("micron",) * 3 if spacing else None,
         time_count=len(t_indices), time_interval=1.0, time_units="frame",
         acquisition_metadata=acquisition,
@@ -442,7 +506,13 @@ def _series(
         raw_fields={
             "source_scene_index": scene_index, "source_roi": list(roi),
             "source_t_start": t_indices[0], "source_z_start": z_indices[0],
-            "source_channel_indices": list(c_indices), "source_fixed_indices": dict(fixed),
+            "source_channel_indices": list(dict.fromkeys(
+                dict(channel)["C"] for channel in channel_coordinates
+            )),
+            "source_fixed_indices": dict(fixed),
+            **({"source_view_index": view_index} if view_index is not None else {}),
+            **({"source_channel_coordinates": [dict(channel) for channel in channel_coordinates]}
+               if illumination_channels else {}),
         },
     )
 
@@ -469,14 +539,20 @@ def _inspect_open_reader(source: Path, reader: Any, cancel_check) -> CziSourceIn
         raise CziInspectionError(
             CZI_UNSUPPORTED_LAYOUT, "source mixes scene-tagged and untagged subblocks"
         )
-    grouped: dict[int | None, list[dict[str, Any]]] = defaultdict(list)
+    grouped: dict[tuple[int | None, int | None], list[dict[str, Any]]] = defaultdict(list)
     for block in blocks:
         scene = block["coords"].get("S") if True in has_s else None
-        grouped[scene].append(block)
+        grouped[(scene, block["coords"].get("V"))].append(block)
     root = _metadata_root(reader)
+    views_by_scene: dict[int | None, set[int | None]] = defaultdict(set)
+    for scene, view in grouped:
+        views_by_scene[scene].add(view)
+    varying_scenes = {scene for scene, views in views_by_scene.items() if len(views) > 1}
     series = tuple(
-        _series(index, scene, grouped[scene], root)
-        for index, scene in enumerate(sorted(grouped, key=lambda value: -1 if value is None else value))
+        _series(index, scene, view if scene in varying_scenes else None, grouped[(scene, view)], root)
+        for index, (scene, view) in enumerate(sorted(
+            grouped, key=lambda value: (-1 if value[0] is None else value[0], -1 if value[1] is None else value[1])
+        ))
     )
     source_metadata = MicroscopySourceMetadata(
         reader_backend="pylibCZIrw", reader_version=CZI_VERSION,
@@ -570,11 +646,13 @@ def decode_zeiss_czi_series_channels(
             ]
             _check_cancel(cancel_check)
             for output, channel in zip(outputs, normalized):
-                source_channel = selected.channel_indices[channel]
                 for t, source_t in enumerate(selected.t_indices):
                     for z, source_z in enumerate(selected.z_indices):
                         _check_cancel(cancel_check)
-                        plane = {"C": source_channel, "T": source_t, "Z": source_z}
+                        plane = {
+                            **dict(selected.channel_coordinates[channel]),
+                            "T": source_t, "Z": source_z,
+                        }
                         plane.update(dict(selected.fixed_indices))
                         image = np.asarray(reader.read(
                             roi=selected.roi, plane=plane, scene=selected.scene_index,

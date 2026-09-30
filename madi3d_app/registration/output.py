@@ -15,10 +15,11 @@ import os
 import re
 import shutil
 import tempfile
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 
 RESULT_LAYOUTS = {"separate", "common"}
@@ -77,6 +78,53 @@ def safe_output_stem(value: Any, fallback: str = "registration") -> str:
     text = re.sub(r"[<>:\"/\\|?*\x00-\x1f]+", "_", text)
     text = re.sub(r"\s+", "_", text).strip(" ._")
     return text or str(fallback or "registration")
+
+
+_REFORMAT_FORBIDDEN_NAME_CHARS = frozenset('<>:"/\\|?*')
+_WINDOWS_RESERVED_DEVICE_NAME = re.compile(
+    r"^(?:CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\.|$)", re.IGNORECASE
+)
+
+
+def normalize_reformat_name(name: str) -> str:
+    """Make one portable Reformat filename component without compacting it.
+
+    Valid spaces, case, underscores, and Unicode are retained. Invalid Windows
+    filename/control characters become underscores; trailing spaces and dots
+    are removed. The caller supplies a meaningful Volume/Mesh fallback for a
+    blank source Name before adding any configured suffix.
+    """
+    text = "" if name is None else str(name)
+    text = "".join(
+        "_" if character in _REFORMAT_FORBIDDEN_NAME_CHARS
+        or unicodedata.category(character) in {"Cc", "Cs"}
+        else character
+        for character in text
+    ).rstrip(" .")
+    if not text:
+        return "Reformatted"
+    if _WINDOWS_RESERVED_DEVICE_NAME.match(text):
+        text = "_" + text
+    return text
+
+
+def reformat_name_key(name: str) -> str:
+    """Return the portable NFC/case-insensitive Reformat reservation key."""
+    return unicodedata.normalize("NFC", normalize_reformat_name(name)).casefold()
+
+
+def allocate_reformat_name(name: str, occupied_names: Iterable[str]) -> str:
+    """Allocate a normalized Reformat name, adding ``_2``, ``_3``, etc."""
+    candidate = normalize_reformat_name(name)
+    occupied = {reformat_name_key(value) for value in occupied_names}
+    if reformat_name_key(candidate) not in occupied:
+        return candidate
+    index = 2
+    while True:
+        allocated = f"{candidate}_{index}"
+        if reformat_name_key(allocated) not in occupied:
+            return allocated
+        index += 1
 
 
 def _windows_text_units(value: Any) -> int:
@@ -171,6 +219,27 @@ def _assert_windows_safe_path(path: Path, *, extra_suffix: str = "") -> None:
         > WINDOWS_SAFE_PATH_BUDGET
     ):
         raise _short_result_root_error(resolved.parent)
+
+
+def _assert_reformat_path(path: Path, name: str) -> None:
+    """Validate a complete Reformat path without shortening its basename."""
+    try:
+        _assert_windows_safe_path(path)
+        for component in path.parts[1:] if path.anchor else path.parts:
+            utf16_units = _windows_text_units(component)
+            utf8_bytes = len(component.encode("utf-8"))
+            if (
+                utf16_units > WINDOWS_FILESYSTEM_COMPONENT_BUDGET
+                or utf8_bytes > WINDOWS_FILESYSTEM_COMPONENT_BUDGET
+            ):
+                raise RegistrationOutputError(
+                    "the filename component exceeds the portable 255-unit/byte limit"
+                )
+    except (RegistrationOutputError, UnicodeEncodeError) as exc:
+        raise RegistrationOutputError(
+            f"Cannot publish Reformat output {name!r}: {exc}. Choose a shorter "
+            f"source Name or output root. Path: {path}"
+        ) from exc
 
 
 def normalize_result_output_policy(
@@ -501,6 +570,57 @@ class RegistrationOutputBundle:
         _assert_windows_safe_path(path, extra_suffix=_TEMPORARY_SUFFIX_RESERVE)
         return path
 
+    def reformat_artifact_path(self, name: str, kind: str, format: str) -> Path:
+        """Return a Reformat artifact path without hashing or truncating ``name``.
+
+        ``name`` must already be the final normalized display name allocated
+        for this invocation. Final, same-format partial, and provenance
+        companion paths are checked before a worker starts.
+        """
+        name = str(name)
+        if not name or name != normalize_reformat_name(name):
+            raise RegistrationOutputError(
+                f"Reformat output name {name!r} is not normalized. Normalize the "
+                "source Name before starting Reformat."
+            )
+        kind = str(kind or "").lower()
+        if kind == "volume":
+            extension = volume_extension(format)
+        elif kind == "mesh":
+            extension = mesh_extension(format)
+        else:
+            raise RegistrationOutputError(
+                f"Unsupported Reformat artifact kind: {kind!r}; expected 'volume' or 'mesh'."
+            )
+
+        parent = (
+            self.run_dir / "reformatted"
+            if self.policy["layout"] == "separate"
+            else self.run_dir
+        )
+        path = parent / f"{name}{extension}"
+        from madi3d_app.project.scientific_records import object_metadata_sidecar_path
+
+        try:
+            temporary_path = partial_output_path(path)
+        except RegistrationOutputError as exc:
+            raise RegistrationOutputError(
+                f"Cannot publish Reformat output {name!r}: {exc}. Choose a shorter "
+                f"source Name or output root. Path: {path}"
+            ) from exc
+        paths = (
+            path,
+            temporary_path,
+            Path(object_metadata_sidecar_path(path)),
+            Path(object_metadata_sidecar_path(temporary_path)),
+            Path(object_metadata_sidecar_path(path) + ".publishing"),
+        )
+        for candidate in paths:
+            _assert_reformat_path(candidate, name)
+        if self.policy["layout"] == "separate":
+            parent.mkdir(parents=True, exist_ok=True)
+        return path
+
     def relative(self, path: os.PathLike | str) -> str:
         candidate = Path(path).resolve()
         root = self.run_dir.resolve()
@@ -584,12 +704,15 @@ __all__ = [
     "RegistrationOutputError",
     "VOLUME_FORMAT_EXTENSIONS",
     "WINDOWS_SAFE_PATH_BUDGET",
+    "allocate_reformat_name",
     "bounded_output_component",
     "ensure_output_root_writable",
     "mesh_extension",
+    "normalize_reformat_name",
     "normalize_result_output_policy",
     "partial_output_path",
     "registration_qc_summary",
+    "reformat_name_key",
     "safe_output_stem",
     "volume_extension",
 ]

@@ -1,5 +1,28 @@
 # MADI3D changelog
 
+## 0.33.0 — release preparation, 2026-09-30
+
+### Added
+
+- Read-only ZEISS CZI and Nikon ND2 import with explicit acquisition/channel selection, supported time-series handling and rejection of ambiguous layouts.
+- PLY mesh import/export and project resources.
+- Animation storyboard editing, object-motion and clipping capture, recorded-take trimming, preview and tiled export.
+
+### Improved
+
+- Stitching applies successful alignment to the scene, exposes apply/restore controls and retains the selected registration model during its automatic-placement retry. Cancellation and failed alignment leave tile poses intact.
+- Stitched output names preserve anchor/channel labels; registration reformats preserve scene groups, geometry and generated-volume provenance with atomic output handling.
+- Project save/reload, missing-source relinking and bounded recovery of supported historical packages preserve usable state without inventing missing evidence.
+- Physical-grid calibration retains acquisition-wide correction history and marks affected completed results out of date.
+- Automatic NeuronBridge MIPs and queries remain available for preview/search after project reload; result selections and scene associations preserve identity.
+- Transform-tool tabs, scene-tree context menus, timeline interaction and selection-based animation actions. Removed the source-replacement control from the transform tools.
+
+### Release process and scope
+
+- Linux packaging targets Ubuntu 20.04 x64 / glibc 2.31 and uses the audited `madi3d-native-deps-r3` wheels. Full frozen-application acceptance remains a publication gate.
+- Release preparation runs local checks and leaves published download links unchanged. The explicit scientific-skip publication path retains all four package, frozen-smoke and source-delivery gates while recording its validation exception.
+- CZI color/BGR data and unsafe or ambiguous layouts remain unsupported. Local Color-Depth scores do not establish equivalence to hosted scoring or biological accuracy; hosted custom-query submission remains unavailable.
+
 ## 0.32.0 — release preparation, 2026-09-13
 
 ### Added

@@ -1,5 +1,10 @@
 {
   "schema_version": 2,
+  "native_release": {
+    "tag": "madi3d-native-deps-r3",
+    "reuse_tag": "madi3d-native-deps-r2-7ce3c04d8513967b",
+    "reuse_manifest_sha256": "b92f0ee2aa8ba3aa8764e04273bbf186019bec0ef4677433fde626cee402c0c6"
+  },
   "archives": [
     {
       "component": "opencv-python-headless",
@@ -222,6 +227,7 @@
     "madi3d_version.py",
     "docs/third-party-source-delivery.md",
     "scripts/build_pygame.py",
+    "LICENSES/native-pre-focal-recipe-diff.patch",
     "scripts/build_czi.py",
     "scripts/patches/czi/pylibczirw-6.1.0-subblock-inspection.patch",
     "constraints-build.txt",
@@ -487,8 +493,6 @@
         "zstd-f8745da6ff1ad1e7bab384bd1f9d742439278e99.tar.gz",
         "eigen-3147391d946bb4b6c68edd901f2add6ac1f31f8c.tar.gz"
       ],
-      "source_patch_sha256": "abf1c19048bb8492ca89942edd68e6a93e76b9f4e649fc087475ea7e8da2c724",
-      "patched_source_artifact_sha256": "2f517b781dba803cef29efb89cf6357b03440bdcdd64a78107bebdf95b6cf194",
       "rationale": "Controlled, patched source build on every supported platform. The exact upstream sdist, bundled libCZI and pybind11 source, pinned zstd source, reviewed patch, build receipt, and native input hashes accompany the application."
     }
   ]

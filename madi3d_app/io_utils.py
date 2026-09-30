@@ -112,13 +112,15 @@ def staged_file(destination, *, cancel_check=None, publish=True):
 
 
 def publish_file_pair(stage, destination, companion_stage, companion_destination, *, cancel_check=None, replace_func=None,
-                      optional_history=False, recovery_path=None, on_commit=None):
+                      optional_history=False, recovery_path=None, on_commit=None,
+                      fail_if_exists=False):
     """Publish under an import barrier; restore prior files on ordinary failure.
 
     Two renames are not atomic. The barrier survives an interrupted process or
     failed rollback, so consumers cannot accept a partial pair. Recovery copies
     are retained only when restoration itself fails. ``on_commit`` reports the
-    guarded pair's commit before any backup cleanup can raise.
+    guarded pair's commit before any backup cleanup can raise. Reformat uses
+    ``fail_if_exists`` to reject an occupied destination after staging.
     """
     target, companion = Path(destination), Path(companion_destination)
     replace = replace_func or os.replace
@@ -170,6 +172,11 @@ def publish_file_pair(stage, destination, companion_stage, companion_destination
                     raise OSError("The writer did not produce a complete output file.")
                 with output.open("rb+") as stream:
                     os.fsync(stream.fileno())
+        if fail_if_exists and (
+            target.exists() or target.is_symlink()
+            or companion.exists() or companion.is_symlink()
+        ):
+            raise FileExistsError(f"Output already exists: {target}")
         for path in (target, companion):
             if path.is_file():
                 if path == target and recovery_path is not None:

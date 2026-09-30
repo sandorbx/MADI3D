@@ -2756,6 +2756,8 @@ def _probe_czi(
     expected_subselection = (
         {"S": selected.scene_index} if selected.scene_index is not None else {}
     )
+    if selected.view_index is not None:
+        expected_subselection["V"] = selected.view_index
     supplied = dict(source_subselection or {})
     errors = []
     if axis_resolution:
@@ -2790,6 +2792,8 @@ def _probe_czi(
         "source_selection": selected.source_selection(),
         "channel": index if len(selected.channel_indices) > 1 else None,
         "channel_source_index": selected.channel_indices[index],
+        **({"channel_source_coordinates": dict(selected.channel_coordinates[index])}
+           if selected.view_index is not None or "I" in dict(selected.channel_coordinates[index]) else {}),
         "axes": list(labels),
         "scalar_dtype": selected.channel_scalar_dtypes[index],
         "significant_bit_depth": selected.channel_scalar_bit_depths[index],
