@@ -152,7 +152,7 @@
     },
     "pylibczirw": {
       "status": "bundled when collected",
-      "license": "LGPL-3.0",
+      "license": "LGPL-3.0-or-later",
       "source": "https://github.com/ZEISS/pylibCZIrw/tree/3fd66f681d82f5781e404fa56d783e5b8b74684f",
       "notice": "LICENSES/pylibCZIrw-NOTICE.md",
       "retained_notices": {

@@ -2,7 +2,7 @@
 
 MADI3D uses ZEISS `pylibCZIrw` 6.1.0, with a small reviewed source patch, to
 read CZI files. The Python wrapper and the statically linked libCZI code in its
-`_pylibCZIrw` extension are licensed under GNU LGPL version 3. Copyright
+`_pylibCZIrw` extension are licensed under GNU LGPL version 3 or later. Copyright
 notices in the exact source distribution identify Carl Zeiss Microscopy GmbH
 (2022 for pylibCZIrw and 2017–2025 for libCZI). The upstream package notice
 credits Carl Zeiss Microscopy GmbH. The extension also contains pybind11 under
@@ -11,6 +11,10 @@ matching source. `LGPL-3.0.txt` supplies the LGPL terms; the full libCZI LGPL
 notice, bundled third-party notices, and pybind11 license are retained in the
 adjacent `libCZI-LGPL-3.0.txt`, `libCZI-THIRD-PARTY-LICENSES.txt`, and
 `pybind11-LICENSE.txt` files.
+
+ZEISS is a registered trademark of Carl Zeiss AG. MADI3D is an independent
+project and is not affiliated with, sponsored by, or endorsed by Carl Zeiss AG
+or Carl Zeiss Microscopy GmbH.
 
 The application uses the same pylibCZIrw API on Windows x64, Linux x64, macOS
 Intel x64, and macOS Apple Silicon. The replacement is a matched set: the
