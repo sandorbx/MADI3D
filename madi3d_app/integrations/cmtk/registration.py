@@ -23,6 +23,7 @@ from typing import Callable, Optional
 
 import numpy as np
 
+from madi3d_app.io_utils import atomic_replace
 from madi3d_app.integrations.cmtk.backend import CMTKError, process_error
 from madi3d_app.integrations.cmtk.process import CMTKProcessResult, run_cmtk_streaming
 from madi3d_app.integrations.cmtk.xform import (
@@ -687,7 +688,7 @@ def update_artifact_bundle_qc(
     temporary = manifest_path.with_name(manifest_path.name + ".tmp")
     try:
         temporary.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-        os.replace(temporary, manifest_path)
+        atomic_replace(temporary, manifest_path)
     finally:
         temporary.unlink(missing_ok=True)
     return verify_artifact_bundle(bundle_dir)
@@ -939,17 +940,7 @@ def persist_artifact_bundle(
                 raise CMTKError(
                     f"Refusing to replace non-directory CMTK artifact destination: {destination}"
                 )
-        # Sync clients and scanners can briefly hold the newly copied bundle
-        # open on Windows. Retry only sharing violations, without recopying or
-        # weakening the verified-directory publication boundary (3.1 s total).
-        for attempt in range(6):
-            try:
-                os.replace(temporary, destination)
-                break
-            except OSError as exc:
-                if getattr(exc, "winerror", None) != 32 or attempt == 5:
-                    raise
-                time.sleep(0.1 * (2 ** attempt))
+        atomic_replace(temporary, destination)
         return verify_artifact_bundle(destination)
     except BaseException:
         shutil.rmtree(temporary, ignore_errors=True)
@@ -1539,7 +1530,7 @@ class CMTKRegistrationRunner:
             }
             tmp = work / "manifest.json.tmp"
             tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-            os.replace(tmp, manifest)
+            atomic_replace(tmp, manifest)
 
         except BaseException:
             for name in (

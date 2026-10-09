@@ -104,10 +104,10 @@ def split_internal_source_state(
 ) -> tuple[dict[str, Any], tuple[tuple[str, Any], ...]]:
     """Separate external raw evidence from MADI3D-owned state.
 
-    The returned internal entries retain their complete JSON-safe values so a
-    project migration can move them to the operation registry without data
-    loss.  New observations must reject such entries rather than relying on
-    this migration helper.
+    The returned entries are detached compatibility input. The ingestion
+    boundary recovers explicit scientific records and discards opaque leftovers;
+    these entries are never themselves scientific operations. New observations
+    must reject internal state rather than relying on read-time normalization.
     """
 
     internal: list[tuple[str, Any]] = []

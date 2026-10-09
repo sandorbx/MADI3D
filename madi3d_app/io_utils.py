@@ -10,8 +10,8 @@ import time
 
 CHUNK_BYTES = 1024 * 1024
 MEMORY_BUDGET_FRACTION = 0.90
-_WINDOWS_SHARING_VIOLATIONS = {32, 33}
-_PUBLICATION_RETRY_DELAYS = (0.025, 0.05, 0.1, 0.2, 0.4, 0.4, 0.4, 0.4)
+_WINDOWS_FILE_LOCK_ERRORS = {5, 32, 33}
+_PUBLICATION_RETRY_DELAYS = (0.1, 0.2, 0.4, 0.8, 1.6)
 
 
 def file_revision(path):
@@ -68,15 +68,29 @@ def copy_file(source, destination, *, cancel_check=None):
     shutil.copystat(source, destination)
 
 
-def _retry_windows_sharing_violation(operation):
-    """Retry transient Windows sharing violations from sync/AV file watchers."""
+def _retry_windows_file_lock(operation):
+    """Bound retries for Windows locks; persistent access denial still fails."""
     for delay in (*_PUBLICATION_RETRY_DELAYS, None):
         try:
             return operation()
         except OSError as exc:
-            if getattr(exc, "winerror", None) not in _WINDOWS_SHARING_VIOLATIONS or delay is None:
+            if getattr(exc, "winerror", None) not in _WINDOWS_FILE_LOCK_ERRORS or delay is None:
                 raise
             time.sleep(delay)
+
+
+def atomic_replace(source, destination, *, cancel_check=None):
+    """Replace atomically, allowing up to 3.1 seconds for Windows locks to clear.
+
+    Replacing an open destination without delete sharing can report access
+    denied (5), as well as sharing/lock violations (32/33). Retrying the rename
+    preserves the old destination; it never falls back to deleting or copying.
+    """
+    def replace():
+        check_cancelled(cancel_check)
+        os.replace(source, destination)
+
+    _retry_windows_file_lock(replace)
 
 
 @contextmanager
@@ -99,13 +113,13 @@ def staged_file(destination, *, cancel_check=None, publish=True):
         with stage.open("rb+") as stream:
             os.fsync(stream.fileno())
         check_cancelled(cancel_check)
-        _retry_windows_sharing_violation(lambda: os.replace(stage, target))
+        atomic_replace(stage, target, cancel_check=cancel_check)
     except BaseException as exc:
         failure = exc
         raise
     finally:
         try:
-            _retry_windows_sharing_violation(lambda: stage.unlink(missing_ok=True))
+            _retry_windows_file_lock(lambda: stage.unlink(missing_ok=True))
         except OSError:
             if failure is None:
                 raise
@@ -123,7 +137,7 @@ def publish_file_pair(stage, destination, companion_stage, companion_destination
     ``fail_if_exists`` to reject an occupied destination after staging.
     """
     target, companion = Path(destination), Path(companion_destination)
-    replace = replace_func or os.replace
+    replace = replace_func or atomic_replace
     if optional_history:
         # Retire old metadata before replacing independently interpretable data.
         # Failure to make it harmless aborts before touching the primary file.
@@ -134,17 +148,20 @@ def publish_file_pair(stage, destination, companion_stage, companion_destination
             os.close(fd)
             previous = Path(name)
             try:
-                os.replace(companion, previous)
+                atomic_replace(companion, previous, cancel_check=cancel_check)
             except BaseException:
                 previous.unlink(missing_ok=True)
                 raise
         try:
             try:
                 check_cancelled(cancel_check)
-                replace(stage, target)
+                if replace_func is None:
+                    atomic_replace(stage, target, cancel_check=cancel_check)
+                else:
+                    replace(stage, target)
             except BaseException:
                 if previous is not None:
-                    os.replace(previous, companion)
+                    atomic_replace(previous, companion)
                 raise
             # Commit point: cancellation must not report the primary as unwritten.
             if companion_stage is not None:
@@ -189,7 +206,10 @@ def publish_file_pair(stage, destination, companion_stage, companion_destination
         check_cancelled(cancel_check)
         # No cancellation boundary after the first visible replacement.
         published.append(target)
-        replace(stage, target)
+        if replace_func is None:
+            atomic_replace(stage, target, cancel_check=cancel_check)
+        else:
+            replace(stage, target)
         published.append(companion)
         if companion_stage is None:
             companion.unlink(missing_ok=True)
@@ -206,7 +226,7 @@ def publish_file_pair(stage, destination, companion_stage, companion_destination
                         with staged_file(path) as restored_stage:
                             copy_file(recovery_path, restored_stage)
                     else:
-                        os.replace(backups[path], path)
+                        atomic_replace(backups[path], path)
                 else:
                     path.unlink(missing_ok=True)
             restored = True

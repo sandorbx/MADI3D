@@ -83,6 +83,11 @@ def validate_serialized_volume(probe, snapshots, grid, output_format, output_dty
     """Check the post-write structure and the representable output grid before publication."""
     from .geometry import canonical_space_units, general_grid_affine_from_components
     snapshots = list(snapshots)
+    if probe.authored_metadata_error:
+        raise ValueError(
+            "Serialized volume has invalid authored geometry metadata: "
+            + probe.authored_metadata_error
+        )
     facts = serialized_volume_facts(probe)
     if probe.errors or probe.requires_axis_resolution or probe.requires_series_selection:
         raise ValueError("Serialized volume is not unambiguous: " + "; ".join((*probe.errors, *probe.ambiguities)))
@@ -302,6 +307,11 @@ def capture_volume_operation_inputs(model, consumed_snapshots):
     Unlike :func:`capture_volume_inputs`, this does not construct portable
     history.  The returned records are a bounded runtime envelope which may be
     installed atomically with one completed operation.
+
+    Each input supplies source_id, channel_id, backing_source_id, selector,
+    geometry_revision, acquisition_geometry_revision, shared_pose,
+    producing_operation_id and source_checksum. The caller selects the actual
+    consumed frames in selector and obtains the producer from the channel.
     """
     from collections import ChainMap
     from madi3d_app.project.scientific_records import (
@@ -313,76 +323,14 @@ def capture_volume_operation_inputs(model, consumed_snapshots):
     direct_records = {}
     references = []
     for snapshot in consumed_snapshots or ():
-        snapshot = dict(snapshot or {})
-        descriptor = dict(snapshot.get("descriptor") or {})
-        dependency = dict(snapshot.get("dependency_revision") or {})
-        source_id = snapshot.get("source_id") or descriptor.get("source_id")
-        channel_id = snapshot.get("channel_id") or descriptor.get("channel_id")
-        backing_source_id = (
-            snapshot.get("backing_source_id")
-            or descriptor.get("backing_source_id")
-        )
-        if not all((source_id, channel_id, backing_source_id)):
-            raise ValueError(
-                "A modeled-volume operation capture requires source, channel, and backing identities."
-            )
-        selector = snapshot.get("selector")
-        if selector is None:
-            selector = snapshot.get("channel_selector", snapshot.get("channel"))
-        if selector is None:
-            selector = descriptor.get("selector", descriptor.get("channel_selector"))
-        consumed_time_index = snapshot.get(
-            "registration_time_index", snapshot.get("time_index")
-        )
-        if consumed_time_index is not None:
-            if isinstance(consumed_time_index, bool):
-                raise ValueError("Consumed volume time index must be an integer.")
-            try:
-                consumed_time_index = int(consumed_time_index)
-            except (TypeError, ValueError, OverflowError) as exc:
-                raise ValueError("Consumed volume time index must be an integer.") from exc
-            if consumed_time_index < 0:
-                raise ValueError("Consumed volume time index must be non-negative.")
-            if isinstance(selector, dict):
-                selector = {**copy.deepcopy(selector), "time_index": consumed_time_index}
-            else:
-                selector = {
-                    "source_selector": copy.deepcopy(selector),
-                    "time_index": consumed_time_index,
-                }
-        local_revision = (
-            snapshot.get("geometry_revision")
-            or descriptor.get("geometry_revision")
-            or dependency.get("geometry_revision")
-        )
-        acquisition_revision = (
-            snapshot.get("acquisition_geometry_revision")
-            or descriptor.get("acquisition_geometry_revision")
-        )
-        producer = snapshot.get("producing_operation_id")
-        if producer is None:
-            producer = descriptor.get("producing_operation_id")
-        if producer is None:
-            source_operations = snapshot.get("source_operation_ids") or descriptor.get("source_operation_ids") or ()
-            producer = source_operations[0] if len(source_operations) == 1 else None
-        record = volume_revision_record(model, {
-            "source_id": str(source_id),
-            "channel_id": str(channel_id),
-            "backing_source_id": str(backing_source_id),
-            "selector": selector,
-            "geometry_revision_id": local_revision,
-            "acquisition_geometry_revision_id": acquisition_revision,
-            "shared_pose": snapshot.get("shared_pose", snapshot.get("actor_matrix")),
-            "producing_operation_id": producer,
-            "source_checksum": snapshot.get("source_checksum", descriptor.get("source_checksum")),
-        })
+        record = volume_revision_record(model, snapshot)
         existing = model.scientific_records.get(record["record_id"])
         if existing is not None and not _scientific_record_payloads_equal(existing, record):
             raise ValueError(
                 f"Scientific record {record['record_id']!r} has conflicting payloads."
             )
         direct_records[record["record_id"]] = record
-        references.append({"object_id": str(channel_id), "record_id": record["record_id"]})
+        references.append({"object_id": record["channel_id"], "record_id": record["record_id"]})
     candidate = copy.copy(model)
     candidate.scientific_records = ChainMap(direct_records, model.scientific_records)
     validate_records(candidate, record_ids=direct_records, operation_ids=())
@@ -390,16 +338,10 @@ def capture_volume_operation_inputs(model, consumed_snapshots):
 
 
 def _captured_input_candidate(model, captures):
-    """Validate detached input closures without changing the live owner."""
+    """Validate direct input records without changing the live owner."""
     from collections import ChainMap
     candidate = copy.copy(model)
-    for name in (
-        "scientific_records",
-        "operation_records",
-        "geometry_records",
-        "geometry_events",
-        "backing_sources",
-    ):
+    for name in ("scientific_records", "operation_records"):
         setattr(candidate, name, ChainMap({}, getattr(model, name)))
     candidate.unavailable_history_operation_ids = set(
         model.unavailable_history_operation_ids
@@ -410,28 +352,13 @@ def _captured_input_candidate(model, captures):
         if capture is None or id(capture) in seen:
             continue
         seen.add(id(capture))
-        direct_records = capture.get("direct_records")
-        if direct_records is not None:
-            from madi3d_app.project.scientific_records import insert_records
-            insert_records(candidate, direct_records.values())
-        else:
-            from madi3d_app.project.scientific_records import merge_history
-            merge_history(
-                candidate,
-                capture["model"],
-                source_file=capture.get("source_file"),
-            )
+        from madi3d_app.project.scientific_records import insert_records
+        insert_records(candidate, capture["direct_records"].values())
     return candidate
 
 
 def _commit_captured_input_candidate(model, candidate):
-    for name in (
-        "scientific_records",
-        "operation_records",
-        "geometry_records",
-        "geometry_events",
-        "backing_sources",
-    ):
+    for name in ("scientific_records", "operation_records"):
         current = getattr(model, name)
         current.update(getattr(candidate, name).maps[0])
     model.unavailable_history_operation_ids = set(
@@ -441,7 +368,7 @@ def _commit_captured_input_candidate(model, candidate):
 
 
 def merge_captured_volume_inputs(model, captures):
-    """Publish only previously detached, validated consumed-volume closures."""
+    """Publish detached direct input records with completed query evidence."""
     candidate = _captured_input_candidate(model, captures)
     _commit_captured_input_candidate(model, candidate)
 
@@ -519,6 +446,7 @@ def volume_result_projection(
 def volume_companion_content(probe, snapshots, grid, options, projection):
     """Final capsule content describes actual serialized facts plus scoped lineage."""
     from madi3d_app.project.scientific_records import export_coordinates
+    from .history_summary import volume_history_summary
     first = snapshots[0]
     coordinates = export_coordinates(first.get("actor_matrix"), baked=bool(options.get("bake_transform", True)),
         units=list(probe.space_units) if probe.space_units else "unknown",
@@ -531,7 +459,17 @@ def volume_companion_content(probe, snapshots, grid, options, projection):
                  "conversion": snap.get("serialized_conversion") or {"source_dtype": str(snap.get("dtype", probe.scalar_dtype))},
                  "metadata": projection.get("channel_metadata", [{}]*len(snapshots))[index]}
                 for index, snap in enumerate(snapshots)]
-    return {"volume": {"coordinates": coordinates, "selected_frame_indices": frames},
+    history = projection["scientific_history"]
+    summary = volume_history_summary(
+        {r["record_id"]: r for r in history["scientific_records"]},
+        {r["operation_id"]: r for r in history["operation_records"]},
+        {r["backing_source_id"]: r for r in history["backing_sources"]},
+        record_ids=[reference["record_id"] for reference in projection["references"]],
+        geometry_events=history["geometry_events"],
+        channel_names=[channel["name"] for channel in channels],
+    )
+    return {"summary": summary,
+            "volume": {"coordinates": coordinates, "selected_frame_indices": frames},
             "channels": channels, "scientific_history": projection["scientific_history"],
             "evidence": projection.get("evidence", {})}
 

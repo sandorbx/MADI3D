@@ -193,7 +193,12 @@ def retain_remote(metadata, project_metadata, *, sources=None):
                 # Historical standalone descriptors have no originating hit.
                 evidence["remote_source"] = remote.to_dict()
                 return
-            original = remote_for_reference(evidence, project, sources=sources)
+            original_evidence = dict(evidence)
+            # Compare with the originating hit, not this projection's retained
+            # observation or asset retrieval.
+            for reference in ("source_observation_ref", "resolution_ref", "retrieval_ref"):
+                original_evidence.pop(reference, None)
+            original = remote_for_reference(original_evidence, project, sources=sources)
             if remote.source != original.source or remote.data_version != original.data_version:
                 observation = {"source": remote.source.to_dict(), "data_version": remote.data_version}
                 key = _record_key(observation)
@@ -326,7 +331,8 @@ def merge_sessions(metadata, sessions):
         if key != parsed.session.session_id:
             raise ValueError("NeuronBridge session key disagrees with its identity.")
         if key in registry:
-            parsed = merge_search_results(SearchResults.from_dict(registry[key]), parsed)
+            current = project_search_results(SearchResults.from_dict(registry[key]))
+            parsed = merge_search_results(current, parsed)
         registry[key] = json.loads(json.dumps(parsed.to_dict(), allow_nan=False))
     return result
 
@@ -338,6 +344,8 @@ def project_search_results(results, hit_ids=None, *, index=None):
     them it is an explicitly retained complete search artifact containing all
     retained candidates, but never the originating whole CSV/API/manifest.
     """
+    from .thumbnails import thumbnail_reference
+
     complete = hit_ids is None
     hit_ids = ({o.occurrence_id for o in results.occurrences}
                if complete else set(hit_ids))
@@ -348,14 +356,15 @@ def project_search_results(results, hit_ids=None, *, index=None):
         raise ValueError("Missing originating NeuronBridge hit evidence.")
     external = {}
     for hit in hits:
+        preview = thumbnail_reference(hit, results.session)
         if hit.evidence_index is not None:
-            original = results.session.external_evidence[hit.evidence_ref]
             response = external.setdefault(hit.evidence_ref, {
                 "scope": "selected_results",
                 "selected_results": {},
             })
             response["selected_results"][str(hit.evidence_index)] = _durable_observation(
                 results.session.evidence_for(hit))
+            retained = response["selected_results"][str(hit.evidence_index)]
         elif hit.evidence_ref:
             pending = [hit.evidence_ref]
             while pending:
@@ -367,6 +376,13 @@ def project_search_results(results, hit_ids=None, *, index=None):
                 pending.extend(record.get("references", {}).values())
                 if record.get("response_ref"):
                     pending.append(record["response_ref"])
+            retained = external[hit.evidence_ref]
+        else:
+            continue
+        if preview is not None:
+            # Preserve the resolved locator without retaining the catalog or
+            # rewriting observed image files or scientific source identity.
+            retained["preview_reference"] = {preview.asset_type: preview.url}
     # Old column observations are materialized only for the selected CSV rows.
     if results.session.source_kind == "imported_csv":
         hits = tuple(replace(o, fields=o.fields or results.session.historical_fields_for(o)) for o in hits)

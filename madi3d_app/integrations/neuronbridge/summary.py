@@ -12,6 +12,25 @@ from types import MappingProxyType
 from .records import MatchOccurrence, SearchSession
 
 
+def session_display_name(session, query_records=None):
+    """Resolve a readable search label without changing retained evidence."""
+    if session.csv_provenance is not None:
+        return session.csv_provenance.filename
+    query = (query_records or {}).get(session.query_reference, {})
+    source_name = session.query_source.published_name if session.query_source else None
+    return query.get("label") or source_name or session.query_reference or session.source_kind
+
+
+def match_display_label(match, query_records=None):
+    query = session_display_name(match.session, query_records)
+    source = match.occurrence.target
+    target = (source.published_name or source.biological.neuron_instance
+              or source.biological.line_name or source.biological.neuron_type
+              or source.kind)
+    return (f"{query} (ID: {match.session.session_id}) / "
+            f"{target} (ID: {match.occurrence.occurrence_id})")
+
+
 def resolution_metadata_warnings(resolution):
     """User-facing warnings from retained resolution evidence, with no lookup."""
     gender = resolution.get("metadata_discrepancies", {}).get("gender")
@@ -71,8 +90,7 @@ class MatchSummary:
 
     @property
     def selector_label(self):
-        query = self.session.query_reference
-        return f"{self.key[0]} / {self.key[1]}" + (f" — {query}" if query else "")
+        return match_display_label(self)
 
     def compact_text(self, *, derived=False):
         prefix = "NeuronBridge source-match evidence" if derived else "NeuronBridge"

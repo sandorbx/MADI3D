@@ -122,6 +122,7 @@ class VolumeSourceProbe:
         MicroscopyAcquisitionMetadata
     ] = None
     microscopy_channel_metadata: tuple[MicroscopyChannelMetadata, ...] = ()
+    authored_metadata_error: str = ""
 
     @property
     def is_multichannel(self) -> bool:
@@ -210,8 +211,17 @@ def _nifti_madi3d_geometry_provenance(header) -> tuple[dict[str, Any], str]:
             content = extension.get_content()
         except Exception:
             continue
+        text = (
+            bytes(content).decode("utf-8", "replace")
+            if isinstance(content, (bytes, np.bytes_))
+            else content
+        )
         record, error = _madi3d_geometry_provenance(content)
         if error:
+            if isinstance(text, str) and re.search(
+                r'"madi3d_geometry_provenance"\s*:', text
+            ):
+                return {}, error
             continue
         if "madi3d_geometry_provenance" in record:
             return _madi3d_geometry_provenance(
@@ -674,8 +684,6 @@ def _probe_h5j(
         madi3d_geometry, madi3d_geometry_error = _madi3d_geometry_provenance(
             handle.attrs.get("madi3d_geometry_provenance")
         )
-        if madi3d_geometry_error:
-            errors.append(madi3d_geometry_error)
         raw_fields = _raw_fields(
             dimensions=reported_dimensions,
             spacing=raw_spacing,
@@ -769,6 +777,7 @@ def _probe_h5j(
         resolution_required=resolution_required,
         resolution_provenance=tuple(resolution_provenance),
         madi3d_geometry_provenance=madi3d_geometry,
+        authored_metadata_error=madi3d_geometry_error,
     )
 
 
@@ -1212,8 +1221,6 @@ def _probe_tiff(
         madi3d_geometry, madi3d_geometry_error = _madi3d_geometry_provenance(
             imagej.get("madi3d_geometry_provenance")
         )
-        if madi3d_geometry_error:
-            errors.append(madi3d_geometry_error)
         channel_count = int(shape[semantics.index("channel")]) if "channel" in semantics else 1
         if is_lsm:
             names, channel_order_verified = lsm_channel_names(
@@ -1736,6 +1743,7 @@ def _probe_tiff(
         resolution_required=bool(unknown) or channel_order_ambiguous,
         resolution_provenance=tuple(resolution_provenance),
         madi3d_geometry_provenance=madi3d_geometry,
+        authored_metadata_error=madi3d_geometry_error,
     )
 
 
@@ -1819,6 +1827,7 @@ def _probe_nrrd(
         return VolumeSourceProbe(
             container_format="nrrd",
             errors=("NRRD header does not contain valid positive axis sizes.",),
+            authored_metadata_error=madi3d_geometry_error,
         )
 
     count = len(shape)
@@ -1852,8 +1861,6 @@ def _probe_nrrd(
     errors = []
     physical_geometry_diagnostics = []
     ambiguities = []
-    if madi3d_geometry_error:
-        errors.append(madi3d_geometry_error)
     scalar_error = _scalar_type_error(scalar_dtype, "NRRD")
     if scalar_error or scalar_dtype is None:
         errors.append(
@@ -2144,6 +2151,7 @@ def _probe_nrrd(
             else ()
         ),
         madi3d_geometry_provenance=madi3d_geometry,
+        authored_metadata_error=madi3d_geometry_error,
     )
 
 
@@ -2161,6 +2169,7 @@ def _probe_nifti(path: str, *, image=None) -> VolumeSourceProbe:
         return VolumeSourceProbe(
             container_format="nifti",
             errors=(f"NIfTI has unsupported shape {shape}.",),
+            authored_metadata_error=madi3d_geometry_error,
         )
     try:
         spatial_unit, time_unit = header.get_xyzt_units()
@@ -2203,8 +2212,6 @@ def _probe_nifti(path: str, *, image=None) -> VolumeSourceProbe:
     errors = []
     physical_geometry_diagnostics = []
     nifti_affine_diagnostics = []
-    if madi3d_geometry_error:
-        errors.append(madi3d_geometry_error)
     scalar_error = _scalar_type_error(scalar_dtype, "NIfTI")
     if scalar_error:
         errors.append(scalar_error)
@@ -2317,6 +2324,7 @@ def _probe_nifti(path: str, *, image=None) -> VolumeSourceProbe:
         raw_fields=raw_fields,
         physical_geometry_diagnostics=tuple(physical_geometry_diagnostics),
         madi3d_geometry_provenance=madi3d_geometry,
+        authored_metadata_error=madi3d_geometry_error,
     )
 
 

@@ -22,6 +22,7 @@ from madi3d_app.volume.geometry import (
     canonical_space_units,
     invertible_affine4,
 )
+from madi3d_app.volume.model import physical_grid_input_reference
 
 
 STITCHING_JOB_SCHEMA_VERSION = "MADI3D_stitching_job_v3"
@@ -29,6 +30,10 @@ STITCHING_WORKSPACE_SCHEMA_VERSION = "MADI3D_stitching_workspace_v2"
 UNAVAILABLE_STITCHING_RESULT_CODE = "unavailable-result"
 _LEGACY_STITCHING_JOB_SCHEMAS = {"MADI3D_stitching_job_v2"}
 _LEGACY_STITCHING_WORKSPACE_SCHEMAS = {"MADI3D_stitching_workspace_v1"}
+
+
+class InvalidStitchingWorkspaceInputError(ValueError):
+    """A serialized stitching workspace failed an explicit model check."""
 
 _REGISTRATION_RESULT_FIELDS = {
     "assumptions",
@@ -106,125 +111,247 @@ def _json_value(value):
     return copy.deepcopy(value)
 
 
+def _workspace_integer(value, label, *, minimum=0):
+    if isinstance(value, bool):
+        raise InvalidStitchingWorkspaceInputError(f"{label} must be an integer.")
+    if isinstance(value, int):
+        result = value
+    elif isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        result = int(value)
+    elif isinstance(value, str):
+        try:
+            result = int(value.strip())
+        except ValueError as exc:
+            raise InvalidStitchingWorkspaceInputError(
+                f"{label} must be an integer."
+            ) from exc
+    else:
+        raise InvalidStitchingWorkspaceInputError(f"{label} must be an integer.")
+    if result < minimum:
+        raise InvalidStitchingWorkspaceInputError(
+            f"{label} must be at least {minimum}."
+        )
+    return result
+
+
+def _workspace_status(value, validator, label, default):
+    try:
+        return validator(default if value is None else value)
+    except ValueError as exc:
+        raise InvalidStitchingWorkspaceInputError(
+            f"{label} is invalid."
+        ) from exc
+
+
+def _workspace_registration_result(value):
+    if value is None or isinstance(value, StitchingRegistrationResult):
+        return value
+    if not isinstance(value, Mapping):
+        raise InvalidStitchingWorkspaceInputError(
+            "Stitching registration result must be an object or null."
+        )
+    registration_id = value.get("registration_id")
+    if not isinstance(registration_id, str) or not registration_id.strip():
+        raise InvalidStitchingWorkspaceInputError(
+            "Stitching registration result requires a nonblank registration ID."
+        )
+    for key, validator, label, default in (
+        ("execution_status", validate_execution_status, "execution status", "succeeded"),
+        ("qc_status", validate_qc_status, "QC status", "not-evaluated"),
+        ("user_decision", validate_user_decision, "user decision", "unapplied"),
+    ):
+        if key in value:
+            _workspace_status(value[key], validator, f"Stitching result {label}", default)
+    for key in StitchingRegistrationResult._MATRIX_MAP_FIELDS:
+        if key not in value:
+            continue
+        matrices = value[key]
+        if not isinstance(matrices, Mapping):
+            raise InvalidStitchingWorkspaceInputError(
+                f"Stitching registration result {key} must be an object."
+            )
+        for name, matrix in matrices.items():
+            try:
+                invertible_affine4(matrix, f"Stitching registration result {key} {name}")
+            except (TypeError, ValueError) as exc:
+                raise InvalidStitchingWorkspaceInputError(
+                    f"Stitching registration result {key} contains an invalid transform."
+                ) from exc
+    for key in ("edges", "rejections"):
+        if key in value and (
+            not isinstance(value[key], (list, tuple))
+            or any(not isinstance(item, Mapping) for item in value[key])
+        ):
+            raise InvalidStitchingWorkspaceInputError(
+                f"Stitching registration result {key} must be a list of objects."
+            )
+    return value
+
+
+def _workspace_result_ids(value, label):
+    if not isinstance(value, (list, tuple)) or any(
+        not isinstance(item, str)
+        or not item.strip().startswith("stitching-registration:")
+        or not item.strip().partition(":")[2].strip()
+        for item in value
+    ):
+        raise InvalidStitchingWorkspaceInputError(
+            f"{label} must be a list of stable stitching result IDs."
+        )
+    return list(dict.fromkeys(value))
+
+
 def _finite_json_value(value, field_name):
     payload = _json_value(value)
     try:
         json.dumps(payload, allow_nan=False, sort_keys=True)
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"{field_name} must contain finite JSON values.") from exc
+        raise InvalidStitchingWorkspaceInputError(f"{field_name} must contain finite JSON values.") from exc
     return payload
 
 
 def _validated_project_state(value, field_name="Stitching project state"):
     if not isinstance(value, Mapping):
-        raise ValueError(f"{field_name} must be a mapping.")
+        raise InvalidStitchingWorkspaceInputError(f"{field_name} must be a mapping.")
     payload = _finite_json_value(value, field_name)
     tiles = payload.get("tiles", [])
     if not isinstance(tiles, list):
-        raise ValueError(f"{field_name} tiles must be a list.")
+        raise InvalidStitchingWorkspaceInputError(f"{field_name} tiles must be a list.")
     if tiles:
         if not str(payload.get("project_id") or "").strip():
-            raise ValueError(f"{field_name} requires a stable project ID.")
+            raise InvalidStitchingWorkspaceInputError(f"{field_name} requires a stable project ID.")
         schema = str(payload.get("schema") or "")
         if schema != "MADI3D_stitching_project_tree_v2":
-            raise ValueError(f"{field_name} uses unsupported schema {schema!r}.")
+            raise InvalidStitchingWorkspaceInputError(f"{field_name} uses unsupported schema {schema!r}.")
     tile_ids = []
     for tile in tiles:
         if not isinstance(tile, Mapping):
-            raise ValueError(f"{field_name} tile records must be mappings.")
+            raise InvalidStitchingWorkspaceInputError(f"{field_name} tile records must be mappings.")
         tile_id = str(tile.get("tile_id") or "").strip()
         if not tile_id:
-            raise ValueError(f"{field_name} tiles require stable tile IDs.")
+            raise InvalidStitchingWorkspaceInputError(f"{field_name} tiles require stable tile IDs.")
         tile_ids.append(tile_id)
         channels = tile.get("channels", [])
         if not isinstance(channels, list):
-            raise ValueError(f"{field_name} tile channels must be a list.")
+            raise InvalidStitchingWorkspaceInputError(f"{field_name} tile channels must be a list.")
         for channel in channels:
             if not isinstance(channel, Mapping):
-                raise ValueError(f"{field_name} channel records must be mappings.")
+                raise InvalidStitchingWorkspaceInputError(f"{field_name} channel records must be mappings.")
             descriptor = channel.get("descriptor")
             if not isinstance(descriptor, Mapping):
-                raise ValueError(
+                raise InvalidStitchingWorkspaceInputError(
                     f"{field_name} channels require source descriptors."
                 )
             migration_status = str(descriptor.get("migration_status") or "")
             if migration_status != "unresolved-legacy-source":
                 if not str(descriptor.get("source_id") or "").strip():
-                    raise ValueError(
+                    raise InvalidStitchingWorkspaceInputError(
                         f"{field_name} channels require authoritative SourceID."
                     )
                 if not str(descriptor.get("channel_id") or "").strip():
-                    raise ValueError(
+                    raise InvalidStitchingWorkspaceInputError(
                         f"{field_name} channels require authoritative channel identity."
                     )
             pose = descriptor.get("project_capture_pose")
             if pose is not None:
-                invertible_affine4(pose, "Stitching project captured pose")
+                try:
+                    invertible_affine4(pose, "Stitching project captured pose")
+                except (TypeError, ValueError) as exc:
+                    raise InvalidStitchingWorkspaceInputError(
+                        f"{field_name} contains an invalid captured pose."
+                    ) from exc
     if len(tile_ids) != len(set(tile_ids)):
-        raise ValueError(f"{field_name} tile IDs must be unique.")
+        raise InvalidStitchingWorkspaceInputError(f"{field_name} tile IDs must be unique.")
     return payload
 
 
 def _validated_pose_state(value, field_name):
     payload = _finite_json_value(value or {}, field_name)
     if not isinstance(payload, dict):
-        raise ValueError(f"{field_name} must be a mapping.")
+        raise InvalidStitchingWorkspaceInputError(f"{field_name} must be a mapping.")
     for key in ("before_matrices", "after_matrices", "exact_target_matrices"):
         matrices = payload.get(key, {})
         if matrices:
             if not isinstance(matrices, Mapping):
-                raise ValueError(f"{field_name} {key} must be a mapping.")
+                raise InvalidStitchingWorkspaceInputError(f"{field_name} {key} must be a mapping.")
             for source_key, matrix in matrices.items():
-                invertible_affine4(
-                    matrix, f"{field_name} {key} {source_key}"
-                )
+                try:
+                    invertible_affine4(
+                        matrix, f"{field_name} {key} {source_key}"
+                    )
+                except (TypeError, ValueError) as exc:
+                    raise InvalidStitchingWorkspaceInputError(
+                        f"{field_name} contains an invalid transform."
+                    ) from exc
     return payload
 
 
 def _validated_initial_layout(value):
     payload = _finite_json_value(value or {}, "Stitching initial-placement evidence")
     if not isinstance(payload, dict):
-        raise ValueError("Stitching initial-placement evidence must be a mapping.")
+        raise InvalidStitchingWorkspaceInputError("Stitching initial-placement evidence must be a mapping.")
     deltas = payload.get("placement_deltas", {})
     if not isinstance(deltas, Mapping):
-        raise ValueError("Stitching initial-placement deltas must be a mapping.")
+        raise InvalidStitchingWorkspaceInputError("Stitching initial-placement deltas must be a mapping.")
     for tile_id, matrix in deltas.items():
-        invertible_affine4(
-            matrix, f"Stitching initial-placement delta {tile_id}"
-        )
+        try:
+            invertible_affine4(
+                matrix, f"Stitching initial-placement delta {tile_id}"
+            )
+        except (TypeError, ValueError) as exc:
+            raise InvalidStitchingWorkspaceInputError(
+                "Stitching initial-placement evidence contains an invalid transform."
+            ) from exc
     return payload
 
 
 def _validated_pose_undo_stack(value):
     payload = _finite_json_value(value or [], "Stitching pose undo stack")
     if not isinstance(payload, list):
-        raise ValueError("Stitching pose undo stack must be a list.")
+        raise InvalidStitchingWorkspaceInputError("Stitching pose undo stack must be a list.")
     for index, entry in enumerate(payload):
         if not isinstance(entry, Mapping):
-            raise ValueError("Stitching pose undo entries must be mappings.")
+            raise InvalidStitchingWorkspaceInputError("Stitching pose undo entries must be mappings.")
         matrices = entry.get("matrices", {})
         if not isinstance(matrices, Mapping):
-            raise ValueError("Stitching pose undo matrices must be a mapping.")
+            raise InvalidStitchingWorkspaceInputError("Stitching pose undo matrices must be a mapping.")
         for source_key, matrix in matrices.items():
-            invertible_affine4(
-                matrix,
-                f"Stitching pose undo entry {index} matrix {source_key}",
-            )
+            try:
+                invertible_affine4(
+                    matrix,
+                    f"Stitching pose undo entry {index} matrix {source_key}",
+                )
+            except (TypeError, ValueError) as exc:
+                raise InvalidStitchingWorkspaceInputError(
+                    "Stitching pose undo stack contains an invalid transform."
+                ) from exc
     return payload
 
 
 def _finite_float(value, field_name):
-    result = float(value)
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise InvalidStitchingWorkspaceInputError(
+            f"{field_name} must be finite."
+        ) from exc
     if not math.isfinite(result):
-        raise ValueError(f"{field_name} must be finite.")
+        raise InvalidStitchingWorkspaceInputError(f"{field_name} must be finite.")
     return result
 
 
 def _float_vector(value, length, field_name, default):
     source = default if value is None else value
-    array = np.asarray(source, dtype=float)
+    try:
+        array = np.asarray(source, dtype=float)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise InvalidStitchingWorkspaceInputError(
+            f"{field_name} must contain {length} finite values."
+        ) from exc
     if array.shape != (length,) or not np.all(np.isfinite(array)):
-        raise ValueError(f"{field_name} must contain {length} finite values.")
+        raise InvalidStitchingWorkspaceInputError(
+            f"{field_name} must contain {length} finite values."
+        )
     return tuple(float(component) for component in array)
 
 
@@ -406,28 +533,17 @@ class PoseGraphResidual:
     affine_frobenius: float = 0.0
 
     def __post_init__(self):
-        values = (
-            self.translation_world,
-            self.rotation_degrees,
-            self.affine_frobenius,
-        )
-        if any(float(value) < 0.0 for value in values):
-            raise ValueError("Pose-graph residuals cannot be negative.")
-        object.__setattr__(
-            self,
-            "translation_world",
-            _finite_float(self.translation_world, "translation residual"),
-        )
-        object.__setattr__(
-            self,
-            "rotation_degrees",
-            _finite_float(self.rotation_degrees, "rotation residual"),
-        )
-        object.__setattr__(
-            self,
-            "affine_frobenius",
-            _finite_float(self.affine_frobenius, "affine residual"),
-        )
+        for field_name, label in (
+            ("translation_world", "translation residual"),
+            ("rotation_degrees", "rotation residual"),
+            ("affine_frobenius", "affine residual"),
+        ):
+            value = _finite_float(getattr(self, field_name), label)
+            if value < 0.0:
+                raise InvalidStitchingWorkspaceInputError(
+                    "Pose-graph residuals cannot be negative."
+                )
+            object.__setattr__(self, field_name, value)
 
     @classmethod
     def from_edge(cls, edge):
@@ -458,15 +574,18 @@ class StitchingRejection:
 
     def __post_init__(self):
         if not str(self.code).strip():
-            raise ValueError("A stitching rejection requires a code.")
+            raise InvalidStitchingWorkspaceInputError("A stitching rejection requires a code.")
         if not str(self.reason).strip():
-            raise ValueError("A stitching rejection requires a reason.")
+            raise InvalidStitchingWorkspaceInputError("A stitching rejection requires a reason.")
         if self.score is not None:
             object.__setattr__(
                 self, "score", _finite_float(self.score, "rejected edge score")
             )
-        details = _json_value(dict(self.details or {}))
-        json.dumps(details, allow_nan=False, ensure_ascii=False, sort_keys=True)
+        if self.details is not None and not isinstance(self.details, Mapping):
+            raise InvalidStitchingWorkspaceInputError(
+                "Stitching rejection details must be an object."
+            )
+        details = _finite_json_value(self.details or {}, "Stitching rejection details")
         object.__setattr__(self, "details", details)
 
     @classmethod
@@ -479,7 +598,7 @@ class StitchingRejection:
             fixed_name=str(payload.get("fixed_name") or ""),
             moving_name=str(payload.get("moving_name") or ""),
             score=payload.get("score"),
-            details=dict(payload.get("details") or {}),
+            details=payload.get("details", {}),
         )
 
     def to_dict(self):
@@ -515,19 +634,21 @@ class StitchingEdgeResult:
 
     def __post_init__(self):
         object.__setattr__(self, "score", _finite_float(self.score, "edge score"))
+        try:
+            correction = invertible_affine4(self.correction, "Stitching edge correction")
+        except (TypeError, ValueError) as exc:
+            raise InvalidStitchingWorkspaceInputError(str(exc)) from exc
         object.__setattr__(
             self,
             "correction",
-            invertible_affine4(self.correction, "Stitching edge correction").copy(),
+            correction.copy(),
         )
         object.__setattr__(
             self,
             "translation_xyz",
             _float_vector(self.translation_xyz, 3, "edge translation", (0.0,) * 3),
         )
-        affine = tuple(float(value) for value in self.affine_params)
-        if len(affine) != 12 or not np.all(np.isfinite(affine)):
-            raise ValueError("edge affine parameters must contain 12 finite values.")
+        affine = _float_vector(self.affine_params, 12, "edge affine parameters", None)
         object.__setattr__(self, "affine_params", affine)
         object.__setattr__(
             self,
@@ -549,6 +670,13 @@ class StitchingEdgeResult:
             "global_rotation_residual_deg", "global_affine_residual", "residual",
         }
         residual_payload = payload.get("residual")
+        if residual_payload is not None and (
+            not isinstance(residual_payload, Mapping)
+            or set(residual_payload) - set(PoseGraphResidual.__dataclass_fields__)
+        ):
+            raise InvalidStitchingWorkspaceInputError(
+                "Stitching edge residual must contain supported residual fields."
+            )
         residual = (
             PoseGraphResidual(**residual_payload)
             if isinstance(residual_payload, Mapping)
@@ -564,7 +692,7 @@ class StitchingEdgeResult:
             translation_xyz=_float_vector(
                 payload.get("translation_xyz"), 3, "edge translation", (0.0,) * 3
             ),
-            affine_params=tuple(payload.get("affine_params", (0.0,) * 12)),
+            affine_params=payload.get("affine_params", (0.0,) * 12),
             scale_xyz=_float_vector(
                 payload.get("scale_xyz"), 3, "edge scale", (1.0,) * 3
             ),
@@ -605,10 +733,10 @@ def detached_stitching_settings(value, field_name="Stitching settings"):
     if value is None:
         return {}
     if not isinstance(value, Mapping):
-        raise ValueError(f"{field_name} must be a mapping.")
+        raise InvalidStitchingWorkspaceInputError(f"{field_name} must be a mapping.")
     payload = _finite_json_value(value, field_name)
     if not isinstance(payload, dict):
-        raise ValueError(f"{field_name} must be a mapping.")
+        raise InvalidStitchingWorkspaceInputError(f"{field_name} must be a mapping.")
     return payload
 
 
@@ -820,9 +948,65 @@ def normalize_stitching_registration_operations(
     """Replace historical full-result payloads with the current canonical form."""
     legacy_workspace_overrides = {}
     for operation_id, raw_record in list(model.operation_records.items()):
+        if not isinstance(raw_record, Mapping):
+            continue
         if raw_record.get("operation_type") != "stitching_registration":
             continue
-        legacy_result = raw_record.get("result") or {}
+        legacy_result = raw_record.get("result", {})
+        try:
+            if not isinstance(legacy_result, Mapping):
+                raise InvalidStitchingWorkspaceInputError(
+                    "Historical stitching result must be an object."
+                )
+            prefix = "stitching-registration:"
+            if (
+                not isinstance(operation_id, str)
+                or not operation_id.startswith(prefix)
+                or not operation_id[len(prefix):].strip()
+            ):
+                raise InvalidStitchingWorkspaceInputError(
+                    "Historical stitching operation has an invalid identity."
+                )
+            candidate = dict(legacy_result)
+            candidate.setdefault("registration_id", operation_id[len(prefix):])
+            _workspace_registration_result(candidate)
+            _workspace_status(
+                raw_record.get("execution_status"),
+                validate_execution_status,
+                "Historical stitching execution status",
+                "succeeded",
+            )
+            _workspace_status(
+                raw_record.get("qc_status"),
+                validate_qc_status,
+                "Historical stitching QC status",
+                "not-evaluated",
+            )
+            if "project_revision" in legacy_result:
+                _workspace_integer(
+                    legacy_result["project_revision"],
+                    "Historical stitching project revision",
+                )
+            if "user_decision" in legacy_result:
+                _workspace_status(
+                    legacy_result["user_decision"],
+                    validate_user_decision,
+                    "Historical stitching result user decision",
+                    "unapplied",
+                )
+            if "user_decision" in raw_record:
+                _workspace_status(
+                    raw_record["user_decision"],
+                    validate_user_decision,
+                    "Historical stitching operation user decision",
+                    "unapplied",
+                )
+        except InvalidStitchingWorkspaceInputError:
+            if not tolerate_unavailable:
+                raise
+            model.operation_records.pop(operation_id, None)
+            model.unavailable_history_operation_ids.add(operation_id)
+            continue
         overrides = {
             key: copy.deepcopy(legacy_result[key])
             for key in _WORKSPACE_RESULT_OVERRIDE_FIELDS
@@ -836,7 +1020,7 @@ def normalize_stitching_registration_operations(
             legacy_workspace_overrides[operation_id] = overrides
         try:
             typed = materialize_stitching_registration(raw_record)
-        except (AttributeError, KeyError, TypeError, ValueError):
+        except InvalidStitchingWorkspaceInputError:
             if not tolerate_unavailable:
                 raise
             model.operation_records.pop(operation_id, None)
@@ -1044,25 +1228,98 @@ def project_workspace_results(
 ):
     """Project bounded result references and expand them only for live UI use."""
 
-    payload = copy.deepcopy(workspace or {})
+    if not isinstance(workspace, Mapping):
+        raise InvalidStitchingWorkspaceInputError(
+            "Stitching workspace must be an object."
+        )
+    payload = copy.deepcopy(dict(workspace))
     if not payload:
         return {}
-    reviews = copy.deepcopy(payload.get("result_reviews") or {})
+    reviews = copy.deepcopy(payload.get("result_reviews", {}))
+    if not isinstance(reviews, Mapping):
+        raise InvalidStitchingWorkspaceInputError(
+            "Stitching workspace reviews must be an object."
+        )
+    reviews = dict(reviews)
+    for operation_id, review in reviews.items():
+        _workspace_result_ids([operation_id], "Stitching workspace review IDs")
+        if not isinstance(review, Mapping) or set(review) - {"decision"}:
+            raise InvalidStitchingWorkspaceInputError(
+                "Stitching workspace review entries must contain only a decision."
+            )
+        _workspace_status(
+            review.get("decision"), validate_user_decision,
+            "Stitching workspace review decision", "unapplied",
+        )
+    active_project = payload.get("active_project")
+    jobs = payload.get("jobs", [])
+    if active_project is not None and not isinstance(active_project, Mapping):
+        raise InvalidStitchingWorkspaceInputError(
+            "Stitching active project must be an object or null."
+        )
+    if not isinstance(jobs, (list, tuple)) or any(
+        not isinstance(owner, Mapping) for owner in jobs
+    ):
+        raise InvalidStitchingWorkspaceInputError(
+            "Stitching workspace jobs must be a list of objects."
+        )
     unavailable_operation_ids = (
         unavailable_operation_ids
         if unavailable_operation_ids is not None
         else set()
     )
-    owners = [payload.get("active_project"), *payload.get("jobs", [])]
+    owners = [active_project, *jobs]
     for owner in owners:
-        if not owner:
+        if owner is None:
             continue
         result = owner.get("registration_result")
-        result_ids = [
-            str(value)
-            for value in owner.get("result_operation_ids") or ()
-            if str(value).strip()
-        ]
+        if result is not None and not isinstance(result, Mapping):
+            raise InvalidStitchingWorkspaceInputError(
+                "Stitching workspace registration result must be an object or null."
+            )
+        result_ids = _workspace_result_ids(
+            owner.get("result_operation_ids", []),
+            "Stitching workspace result references",
+        )
+        if result is not None:
+            if "operation_id" in result:
+                if set(result) - {"operation_id", "result_overrides"}:
+                    raise InvalidStitchingWorkspaceInputError(
+                        "Compact stitching result references contain unsupported fields."
+                    )
+                compact_id = result.get("operation_id")
+                compact_ids = _workspace_result_ids(
+                    [compact_id], "Compact stitching result references"
+                )
+                result_ids = list(dict.fromkeys([*compact_ids, *result_ids]))
+            else:
+                _workspace_registration_result(result)
+            result_overrides = result.get("result_overrides", {})
+            if not isinstance(result_overrides, Mapping):
+                raise InvalidStitchingWorkspaceInputError(
+                    "Stitching result overrides must be an object."
+                )
+            for key, value in result_overrides.items():
+                if key not in _WORKSPACE_RESULT_OVERRIDE_FIELDS:
+                    raise InvalidStitchingWorkspaceInputError(
+                        f"Unsupported stitching result override: {key}."
+                    )
+                if key == "project_revision":
+                    _workspace_integer(value, "Stitching project revision")
+                else:
+                    _workspace_status(
+                        value, validate_user_decision,
+                        "Stitching result user decision", "unapplied",
+                    )
+            for key in _WORKSPACE_RESULT_OVERRIDE_FIELDS.intersection(result):
+                value = result[key]
+                if key == "project_revision":
+                    _workspace_integer(value, "Stitching project revision")
+                else:
+                    _workspace_status(
+                        value, validate_user_decision,
+                        "Stitching result user decision", "unapplied",
+                    )
         if restore:
             legacy_operation_id = str(
                 (result or {}).get("operation_id") or ""
@@ -1080,7 +1337,7 @@ def project_workspace_results(
                 if operation_id not in unavailable_operation_ids
             ]
             if undeclared_missing and not tolerate_unavailable:
-                raise ValueError(
+                raise InvalidStitchingWorkspaceInputError(
                     "Stitching workspace references an unavailable completed result."
                 )
             if tolerate_unavailable:
@@ -1129,9 +1386,14 @@ def project_workspace_results(
             )
             if result:
                 overrides.update(copy.deepcopy(result.get("result_overrides") or {}))
+                overrides.update({
+                    key: copy.deepcopy(result[key])
+                    for key in _WORKSPACE_RESULT_OVERRIDE_FIELDS
+                    if key in result
+                })
             unsupported = sorted(set(overrides) - _WORKSPACE_RESULT_OVERRIDE_FIELDS)
             if unsupported:
-                raise ValueError(
+                raise InvalidStitchingWorkspaceInputError(
                     "Stitching workspace registration reference contains unsupported "
                     "overrides: " + ", ".join(unsupported) + "."
                 )
@@ -1152,7 +1414,7 @@ def project_workspace_results(
             operation_id = "stitching-registration:" + str(result["registration_id"])
             record = operation_records.get(operation_id)
             if record is None:
-                raise ValueError(
+                raise InvalidStitchingWorkspaceInputError(
                     "Stitching workspace result has no canonical registration operation."
                 )
             result_ids.insert(0, operation_id)
@@ -1163,7 +1425,7 @@ def project_workspace_results(
                 prior = reviews.get(operation_id)
                 review = {"decision": decision}
                 if prior is not None and prior != review:
-                    raise ValueError(
+                    raise InvalidStitchingWorkspaceInputError(
                         "Stitching workspace contains conflicting review state for "
                         f"{operation_id}."
                     )
@@ -1174,7 +1436,7 @@ def project_workspace_results(
                 operation_id not in operation_records
                 and operation_id not in unavailable_operation_ids
             ):
-                raise ValueError(
+                raise InvalidStitchingWorkspaceInputError(
                     "Stitching workspace references an unavailable completed result."
                 )
         owner["result_operation_ids"] = result_ids
@@ -1293,11 +1555,13 @@ class StitchingProjectState:
         self.settings = detached_stitching_settings(
             self.settings, "Stitching project settings"
         )
+        if self.registration_result is not None:
+            _workspace_registration_result(self.registration_result)
         self.registration_result = (
             self.registration_result
             if isinstance(self.registration_result, StitchingRegistrationResult)
             else StitchingRegistrationResult.from_dict(self.registration_result)
-            if self.registration_result
+            if self.registration_result is not None
             else None
         )
         if self.registration_result is not None:
@@ -1309,26 +1573,33 @@ class StitchingProjectState:
                     "stitching-registration:" + registration_id,
                     *self.result_operation_ids,
                 ]
-        self.result_operation_ids = list(dict.fromkeys(
-            str(value) for value in self.result_operation_ids if str(value).strip()
-        ))
+        self.result_operation_ids = _workspace_result_ids(
+            self.result_operation_ids, "Stitching result references"
+        )
         self.applied_state = _validated_pose_state(
             self.applied_state, "Stitching applied state"
         )
         self.initial_layout = _validated_initial_layout(self.initial_layout)
         self.pose_undo_stack = _validated_pose_undo_stack(self.pose_undo_stack)
         self.loaded_job_id = (
-            int(self.loaded_job_id) if self.loaded_job_id is not None else None
+            _workspace_integer(self.loaded_job_id, "Loaded stitching job ID")
+            if self.loaded_job_id is not None else None
         )
-        self.qc_status = validate_qc_status(self.qc_status)
-        self.user_decision = validate_user_decision(self.user_decision)
+        self.qc_status = _workspace_status(
+            self.qc_status, validate_qc_status, "Stitching project QC status",
+            "not-evaluated",
+        )
+        self.user_decision = _workspace_status(
+            self.user_decision, validate_user_decision,
+            "Stitching project user decision", "unapplied",
+        )
         issues = _finite_json_value(
             self.binding_issues or [], "Stitching project binding issues"
         )
         if not isinstance(issues, list) or any(
             not isinstance(value, Mapping) for value in issues
         ):
-            raise ValueError("Stitching project binding issues must be a list of mappings.")
+            raise InvalidStitchingWorkspaceInputError("Stitching project binding issues must be a list of mappings.")
         self.binding_issues = [dict(value) for value in issues]
 
     def to_dict(self):
@@ -1342,22 +1613,58 @@ class StitchingProjectState:
 
     @classmethod
     def from_dict(cls, payload):
-        payload = dict(payload or {})
+        if not isinstance(payload, Mapping):
+            raise InvalidStitchingWorkspaceInputError(
+                "Stitching active project must be an object."
+            )
+        payload = dict(payload)
+        project_state = payload.get("project_state", {})
+        settings = payload.get("settings", {})
+        registration_result = payload.get("registration_result")
+        initial_layout = payload.get("initial_layout", {})
+        applied_state = payload.get("applied_state", {})
+        pose_undo_stack = payload.get("pose_undo_stack", [])
+        binding_issues = payload.get("binding_issues", [])
+        result_ids = payload.get("result_operation_ids", [])
+        loaded_job_id = payload.get("loaded_job_id")
+        if not isinstance(project_state, Mapping):
+            raise InvalidStitchingWorkspaceInputError(
+                "Stitching project state must be an object."
+            )
+        if not isinstance(settings, Mapping):
+            raise InvalidStitchingWorkspaceInputError(
+                "Stitching project settings must be an object."
+            )
+        if not isinstance(initial_layout, Mapping) or not isinstance(applied_state, Mapping):
+            raise InvalidStitchingWorkspaceInputError(
+                "Stitching layout and applied state must be objects."
+            )
+        if not isinstance(pose_undo_stack, (list, tuple)):
+            raise InvalidStitchingWorkspaceInputError(
+                "Stitching pose undo stack must be a list."
+            )
+        if not isinstance(binding_issues, (list, tuple)):
+            raise InvalidStitchingWorkspaceInputError(
+                "Stitching project binding issues must be a list."
+            )
+        _workspace_result_ids(result_ids, "Stitching result references")
+        if loaded_job_id is not None:
+            _workspace_integer(loaded_job_id, "Loaded stitching job ID")
+        _workspace_registration_result(registration_result)
         registration_result = (
-            StitchingRegistrationResult.from_dict(payload["registration_result"])
-            if payload.get("registration_result")
-            else None
+            StitchingRegistrationResult.from_dict(registration_result)
+            if registration_result is not None else None
         )
         return cls(
-            project_state=copy.deepcopy(payload.get("project_state") or {}),
+            project_state=copy.deepcopy(project_state),
             settings=detached_stitching_settings(
-                payload.get("settings"), "Stitching project settings"
+                settings, "Stitching project settings"
             ),
             registration_result=registration_result,
-            initial_layout=copy.deepcopy(payload.get("initial_layout") or {}),
-            applied_state=copy.deepcopy(payload.get("applied_state") or {}),
-            pose_undo_stack=copy.deepcopy(payload.get("pose_undo_stack") or []),
-            loaded_job_id=payload.get("loaded_job_id"),
+            initial_layout=copy.deepcopy(initial_layout),
+            applied_state=copy.deepcopy(applied_state),
+            pose_undo_stack=copy.deepcopy(pose_undo_stack),
+            loaded_job_id=loaded_job_id,
             qc_status=payload.get(
                 "qc_status",
                 registration_result.qc_status
@@ -1368,10 +1675,8 @@ class StitchingProjectState:
                 registration_result.user_decision
                 if registration_result is not None else "unapplied",
             ),
-            binding_issues=copy.deepcopy(payload.get("binding_issues") or []),
-            result_operation_ids=copy.deepcopy(
-                payload.get("result_operation_ids") or []
-            ),
+            binding_issues=copy.deepcopy(binding_issues),
+            result_operation_ids=copy.deepcopy(result_ids),
         )
 
 
@@ -1400,18 +1705,37 @@ class StitchingJob:
     result_operation_ids: list[str] = field(default_factory=list)
 
     def __post_init__(self):
-        self.job_id = int(self.job_id)
-        self.execution_status = validate_execution_status(self.execution_status)
-        self.qc_status = validate_qc_status(self.qc_status)
-        self.user_decision = validate_user_decision(self.user_decision)
+        self.job_id = _workspace_integer(self.job_id, "Stitching job ID", minimum=1)
+        self.execution_status = _workspace_status(
+            self.execution_status, validate_execution_status,
+            "Stitching job execution status", "pending",
+        )
+        self.qc_status = _workspace_status(
+            self.qc_status, validate_qc_status, "Stitching job QC status",
+            "not-evaluated",
+        )
+        self.user_decision = _workspace_status(
+            self.user_decision, validate_user_decision,
+            "Stitching job user decision", "unapplied",
+        )
+        if not isinstance(self.settings, Mapping):
+            raise InvalidStitchingWorkspaceInputError(
+                "Stitching job settings must be an object."
+            )
         self.settings = detached_stitching_settings(
             self.settings, "Stitching job settings"
         )
+        if not isinstance(self.project_state, Mapping):
+            raise InvalidStitchingWorkspaceInputError(
+                "Stitching job project state must be an object."
+            )
+        if self.registration_result is not None:
+            _workspace_registration_result(self.registration_result)
         self.registration_result = (
             self.registration_result
             if isinstance(self.registration_result, StitchingRegistrationResult)
             else StitchingRegistrationResult.from_dict(self.registration_result)
-            if self.registration_result
+            if self.registration_result is not None
             else None
         )
         if self.registration_result is not None:
@@ -1423,9 +1747,9 @@ class StitchingJob:
                     "stitching-registration:" + registration_id,
                     *self.result_operation_ids,
                 ]
-        self.result_operation_ids = list(dict.fromkeys(
-            str(value) for value in self.result_operation_ids if str(value).strip()
-        ))
+        self.result_operation_ids = _workspace_result_ids(
+            self.result_operation_ids, "Stitching result references"
+        )
         self.project_state = _finite_json_value(
             self.project_state or {}, "Stitching job project state"
         )
@@ -1440,8 +1764,20 @@ class StitchingJob:
         if not isinstance(issues, list) or any(
             not isinstance(value, Mapping) for value in issues
         ):
-            raise ValueError("Stitching job binding issues must be a list of mappings.")
+            raise InvalidStitchingWorkspaceInputError("Stitching job binding issues must be a list of mappings.")
         self.binding_issues = [dict(value) for value in issues]
+
+    def physical_grid_dependency_record(self) -> dict[str, Any]:
+        """Query frozen tile inputs without serializing runtime status or results."""
+        return {
+            "job_id": str(self.job_id),
+            "name": str(self.name),
+            "input_dependencies": tuple(
+                physical_grid_input_reference(channel.get("descriptor", {}))
+                for tile in self.project_state.get("tiles", ())
+                for channel in tile.get("channels", ())
+            ),
+        }
 
     def to_dict(self):
         persisted_status = (
@@ -1449,7 +1785,7 @@ class StitchingJob:
             else self.execution_status
         )
         if persisted_status == "succeeded" and not self.result_operation_ids:
-            raise ValueError(
+            raise InvalidStitchingWorkspaceInputError(
                 "A completed stitching job must reference its result operation."
             )
         return {
@@ -1468,53 +1804,102 @@ class StitchingJob:
 
     @classmethod
     def from_dict(cls, payload):
-        payload = dict(payload or {})
-        schema = str(payload.get("schema") or STITCHING_JOB_SCHEMA_VERSION)
+        if not isinstance(payload, Mapping):
+            raise InvalidStitchingWorkspaceInputError(
+                "Stitching job must be an object."
+            )
+        payload = dict(payload)
+        schema_value = payload.get("schema")
+        schema = str(
+            STITCHING_JOB_SCHEMA_VERSION
+            if schema_value is None else schema_value
+        )
         if schema not in {
             STITCHING_JOB_SCHEMA_VERSION, *_LEGACY_STITCHING_JOB_SCHEMAS,
         }:
-            raise ValueError(f"Unsupported stitching job schema: {schema}")
+            raise InvalidStitchingWorkspaceInputError(f"Unsupported stitching job schema: {schema}")
+        if "job_id" not in payload:
+            raise InvalidStitchingWorkspaceInputError(
+                "Stitching jobs require an explicit job ID."
+            )
+        job_id = _workspace_integer(payload["job_id"], "Stitching job ID", minimum=1)
+        project_state = payload.get("project_state", {})
+        settings = payload.get("settings", {})
+        result = payload.get("registration_result")
+        initial_layout = payload.get("initial_layout", {})
+        applied_state = payload.get("applied_state", {})
+        pose_undo_stack = payload.get("pose_undo_stack", [])
+        selection_descriptors = payload.get("selection_descriptors", [])
+        binding_issues = payload.get("binding_issues", [])
+        result_ids = payload.get("result_operation_ids", [])
+        outputs = payload.get("outputs", [])
+        if not isinstance(project_state, Mapping):
+            raise InvalidStitchingWorkspaceInputError(
+                "Stitching job project state must be an object."
+            )
+        if not isinstance(settings, Mapping):
+            raise InvalidStitchingWorkspaceInputError(
+                "Stitching job settings must be an object."
+            )
+        if not isinstance(initial_layout, Mapping) or not isinstance(applied_state, Mapping):
+            raise InvalidStitchingWorkspaceInputError(
+                "Stitching job layout and applied state must be objects."
+            )
+        for value, label in (
+            (pose_undo_stack, "Stitching job pose undo stack"),
+            (selection_descriptors, "Stitching job selections"),
+            (binding_issues, "Stitching job binding issues"),
+            (outputs, "Stitching job outputs"),
+        ):
+            if not isinstance(value, (list, tuple)):
+                raise InvalidStitchingWorkspaceInputError(f"{label} must be a list.")
+        _workspace_result_ids(result_ids, "Stitching result references")
+        _workspace_registration_result(result)
         execution_status = payload.get("execution_status", "pending")
         if execution_status == "running":
             execution_status = "interrupted"
+        execution_status = _workspace_status(
+            execution_status, validate_execution_status,
+            "Stitching job execution status", "pending",
+        )
+        qc_status = _workspace_status(
+            payload.get("qc_status"), validate_qc_status,
+            "Stitching job QC status",
+            result.get("qc_status", "not-evaluated")
+            if isinstance(result, Mapping) else "not-evaluated",
+        )
+        user_decision = _workspace_status(
+            payload.get("user_decision"), validate_user_decision,
+            "Stitching job user decision",
+            result.get("user_decision", "unapplied")
+            if isinstance(result, Mapping) else "unapplied",
+        )
         registration_result = (
-            StitchingRegistrationResult.from_dict(payload["registration_result"])
-            if payload.get("registration_result") else None
+            StitchingRegistrationResult.from_dict(result)
+            if result is not None else None
         )
         return cls(
-            job_id=payload["job_id"],
+            job_id=job_id,
             name=payload.get("name", "Stitching job"),
             registration_mode=payload.get("registration_mode", "needs_review"),
             settings=detached_stitching_settings(
-                payload.get("settings"), "Stitching job settings"
+                settings, "Stitching job settings"
             ),
-            project_state=copy.deepcopy(payload.get("project_state") or {}),
+            project_state=copy.deepcopy(project_state),
             registration_result=registration_result,
-            initial_layout=copy.deepcopy(payload.get("initial_layout") or {}),
-            applied_state=copy.deepcopy(payload.get("applied_state") or {}),
-            pose_undo_stack=copy.deepcopy(payload.get("pose_undo_stack") or []),
-            selection_descriptors=copy.deepcopy(
-                payload.get("selection_descriptors") or []
-            ),
+            initial_layout=copy.deepcopy(initial_layout),
+            applied_state=copy.deepcopy(applied_state),
+            pose_undo_stack=copy.deepcopy(pose_undo_stack),
+            selection_descriptors=copy.deepcopy(selection_descriptors),
             execution_status=execution_status,
-            qc_status=payload.get(
-                "qc_status",
-                registration_result.qc_status
-                if registration_result is not None else "not-evaluated",
-            ),
-            user_decision=payload.get(
-                "user_decision",
-                registration_result.user_decision
-                if registration_result is not None else "unapplied",
-            ),
+            qc_status=qc_status,
+            user_decision=user_decision,
             execution_phase=payload.get("execution_phase", ""),
-            outputs=[str(path) for path in payload.get("outputs") or []],
+            outputs=[str(path) for path in outputs],
             error=payload.get("error", ""),
-            binding_issues=copy.deepcopy(payload.get("binding_issues") or []),
+            binding_issues=copy.deepcopy(binding_issues),
             created=payload.get("created", ""),
-            result_operation_ids=copy.deepcopy(
-                payload.get("result_operation_ids") or []
-            ),
+            result_operation_ids=copy.deepcopy(result_ids),
         )
 
 
@@ -1543,7 +1928,7 @@ class StitchingWorkspaceState:
             self.result_reviews or {}, "Stitching workspace reviews"
         )
         if not isinstance(reviews, dict):
-            raise ValueError("Stitching workspace reviews must be keyed by operation ID.")
+            raise InvalidStitchingWorkspaceInputError("Stitching workspace reviews must be keyed by operation ID.")
         for owner in [self.active_project, *self.jobs]:
             if owner is None or owner.registration_result is None:
                 continue
@@ -1555,23 +1940,29 @@ class StitchingWorkspaceState:
             if operation_id and decision != "unapplied":
                 review = {"decision": decision}
                 if operation_id in reviews and reviews[operation_id] != review:
-                    raise ValueError(
+                    raise InvalidStitchingWorkspaceInputError(
                         "Stitching workspace contains conflicting review state for "
                         f"{operation_id}."
                     )
                 reviews[operation_id] = review
         for operation_id, review in reviews.items():
-            if not str(operation_id).strip() or not isinstance(review, Mapping):
-                raise ValueError("Stitching workspace review entries are invalid.")
+            if (
+                not isinstance(operation_id, str)
+                or not operation_id.startswith("stitching-registration:")
+                or not operation_id.partition(":")[2].strip()
+                or not isinstance(review, Mapping)
+            ):
+                raise InvalidStitchingWorkspaceInputError("Stitching workspace review entries are invalid.")
             unknown = set(review) - {"decision"}
             if unknown:
-                raise ValueError(
+                raise InvalidStitchingWorkspaceInputError(
                     "Stitching workspace review contains unsupported fields: "
                     + ", ".join(sorted(unknown))
                     + "."
                 )
-            review["decision"] = validate_user_decision(
-                review.get("decision", "unapplied")
+            review["decision"] = _workspace_status(
+                review.get("decision"), validate_user_decision,
+                "Stitching workspace review decision", "unapplied",
             )
         referenced_result_ids = {
             operation_id
@@ -1581,7 +1972,7 @@ class StitchingWorkspaceState:
         }
         orphan_reviews = sorted(set(reviews) - referenced_result_ids)
         if orphan_reviews:
-            raise ValueError(
+            raise InvalidStitchingWorkspaceInputError(
                 "Stitching workspace reviews refer to unlisted results: "
                 + ", ".join(orphan_reviews)
                 + "."
@@ -1589,10 +1980,12 @@ class StitchingWorkspaceState:
         self.result_reviews = reviews
         job_ids = [job.job_id for job in self.jobs]
         if len(job_ids) != len(set(job_ids)):
-            raise ValueError("Stitching workspace job IDs must be unique.")
-        self.job_counter = int(self.job_counter)
-        if self.job_counter < 0 or self.job_counter < max(job_ids, default=0):
-            raise ValueError(
+            raise InvalidStitchingWorkspaceInputError("Stitching workspace job IDs must be unique.")
+        self.job_counter = _workspace_integer(
+            self.job_counter, "Stitching workspace job counter"
+        )
+        if self.job_counter < max(job_ids, default=0):
+            raise InvalidStitchingWorkspaceInputError(
                 "Stitching workspace job counter must cover every queued job ID."
             )
         for job in self.jobs:
@@ -1605,7 +1998,7 @@ class StitchingWorkspaceState:
             and self.active_project.loaded_job_id is not None
             and self.active_project.loaded_job_id not in set(job_ids)
         ):
-            raise ValueError(
+            raise InvalidStitchingWorkspaceInputError(
                 "The active stitching project refers to a missing queued job."
             )
 
@@ -1628,26 +2021,205 @@ class StitchingWorkspaceState:
 
     @classmethod
     def from_dict(cls, payload):
-        payload = dict(payload or {})
+        if not isinstance(payload, Mapping):
+            raise InvalidStitchingWorkspaceInputError(
+                "Stitching workspace must be an object."
+            )
+        payload = dict(payload)
         if not payload:
             return cls()
-        schema = str(payload.get("schema") or STITCHING_WORKSPACE_SCHEMA_VERSION)
+        schema_value = payload.get("schema")
+        schema = str(
+            STITCHING_WORKSPACE_SCHEMA_VERSION
+            if schema_value is None else schema_value
+        )
         if schema not in {
             STITCHING_WORKSPACE_SCHEMA_VERSION,
             *_LEGACY_STITCHING_WORKSPACE_SCHEMAS,
         }:
-            raise ValueError(f"Unsupported stitching workspace schema: {schema}")
+            raise InvalidStitchingWorkspaceInputError(f"Unsupported stitching workspace schema: {schema}")
+        active_payload = payload.get("active_project")
+        jobs_payload = payload.get("jobs", [])
+        job_counter = payload.get("job_counter", 0)
+        result_reviews = payload.get("result_reviews", {})
+        if active_payload is not None and not isinstance(active_payload, Mapping):
+            raise InvalidStitchingWorkspaceInputError(
+                "Stitching active project must be an object or null."
+            )
+        if not isinstance(jobs_payload, (list, tuple)):
+            raise InvalidStitchingWorkspaceInputError(
+                "Stitching workspace jobs must be a list."
+            )
+        _workspace_integer(job_counter, "Stitching workspace job counter")
+        if not isinstance(result_reviews, Mapping):
+            raise InvalidStitchingWorkspaceInputError(
+                "Stitching workspace reviews must be an object."
+            )
         return cls(
             active_project=(
-                StitchingProjectState.from_dict(payload["active_project"])
-                if payload.get("active_project")
+                StitchingProjectState.from_dict(active_payload)
+                if active_payload is not None
                 else None
             ),
-            jobs=[StitchingJob.from_dict(job) for job in payload.get("jobs") or []],
-            job_counter=payload.get("job_counter", 0),
-            result_reviews=copy.deepcopy(payload.get("result_reviews") or {}),
+            jobs=[StitchingJob.from_dict(job) for job in jobs_payload],
+            job_counter=job_counter,
+            result_reviews=copy.deepcopy(dict(result_reviews)),
         )
 
+
+def stage_stitching_project_state(raw, volume_sources, *, report_loss):
+    """Project recoverable workspace state against available result owners."""
+    legacy_result_overrides = normalize_stitching_registration_operations(
+        volume_sources, tolerate_unavailable=True
+    )
+    if raw is None or (isinstance(raw, Mapping) and not raw):
+        return {}
+    if not isinstance(raw, Mapping):
+        report_loss(
+            "invalid-stitching-root", "stitching_workspace",
+            "The stitching workspace was omitted; completed scientific results remain available.",
+        )
+        return {}
+    schema = raw.get("schema")
+    if schema not in {
+        STITCHING_WORKSPACE_SCHEMA_VERSION, *_LEGACY_STITCHING_WORKSPACE_SCHEMAS
+    }:
+        report_loss(
+            "invalid-stitching-schema", "stitching_workspace.schema",
+            "The stitching workspace was omitted; completed scientific results remain available.",
+        )
+        return {}
+    if set(raw) - {
+        "schema", "active_project", "jobs", "job_counter", "result_reviews",
+    }:
+        report_loss(
+            "unsupported-stitching-fields", "stitching_workspace",
+            "The stitching workspace was omitted because it contains unsupported fields.",
+        )
+        return {}
+    raw_reviews = raw.get("result_reviews", {})
+    if not isinstance(raw_reviews, Mapping):
+        report_loss(
+            "invalid-stitching-reviews", "stitching_workspace.result_reviews",
+            "The stitching workspace was omitted because its review state was malformed.",
+        )
+        return {}
+
+    raw_jobs = raw.get("jobs", ())
+    if not isinstance(raw_jobs, (list, tuple)):
+        raw_jobs = ()
+        report_loss(
+            "invalid-stitching-job-list", "stitching_workspace.jobs",
+            "Queued stitching jobs were omitted because their list shape was invalid.",
+        )
+
+    def project_owner(owner, *, active_project):
+        if not isinstance(owner, Mapping):
+            raise InvalidStitchingWorkspaceInputError(
+                "Stitching workspace owner must be an object."
+            )
+        if not active_project and owner.get("schema") not in (
+            None,
+            STITCHING_JOB_SCHEMA_VERSION,
+            *_LEGACY_STITCHING_JOB_SCHEMAS,
+        ):
+            raise InvalidStitchingWorkspaceInputError(
+                "Stitching job schema is unsupported."
+            )
+        projected_workspace = project_workspace_results(
+            {
+                "schema": schema,
+                "active_project": owner if active_project else None,
+                "jobs": [] if active_project else [owner],
+                "job_counter": raw.get("job_counter", 0),
+                "result_reviews": {},
+            },
+            volume_sources.operation_records,
+            restore=True,
+            legacy_result_overrides=legacy_result_overrides,
+            unavailable_operation_ids=set(
+                volume_sources.unavailable_history_operation_ids
+            ),
+            tolerate_unavailable=True,
+        )
+        projected_owner = (
+            projected_workspace.get("active_project")
+            if active_project else projected_workspace["jobs"][0]
+        )
+        if active_project:
+            StitchingProjectState.from_dict(projected_owner)
+        else:
+            validated_job = StitchingJob.from_dict(projected_owner)
+            projected_owner["execution_status"] = validated_job.execution_status
+        return projected_owner
+
+    active = None
+    if raw.get("active_project") is not None:
+        try:
+            active = project_owner(raw["active_project"], active_project=True)
+        except InvalidStitchingWorkspaceInputError:
+            report_loss(
+                "invalid-stitching-active-project",
+                "stitching_workspace.active_project",
+                "The active stitching project was omitted; valid queued jobs were retained.",
+            )
+    jobs = []
+    for index, value in enumerate(raw_jobs):
+        try:
+            jobs.append(project_owner(value, active_project=False))
+        except InvalidStitchingWorkspaceInputError:
+            report_loss(
+                "invalid-stitching-job", f"stitching_workspace.jobs[{index}]",
+                "This queued stitching job was omitted; valid siblings were retained.",
+            )
+
+    candidate = {
+        "schema": schema,
+        "active_project": active,
+        "jobs": jobs,
+        "job_counter": raw.get("job_counter", 0),
+        "result_reviews": copy.deepcopy(dict(raw_reviews)),
+    }
+    try:
+        projected = project_workspace_results(
+            candidate,
+            volume_sources.operation_records,
+            restore=True,
+            legacy_result_overrides=legacy_result_overrides,
+            unavailable_operation_ids=set(
+                volume_sources.unavailable_history_operation_ids
+            ),
+            tolerate_unavailable=True,
+        )
+        normalized_state = StitchingWorkspaceState.from_dict(projected)
+        normalized = projected if not normalized_state.is_empty else {}
+    except InvalidStitchingWorkspaceInputError:
+        report_loss(
+            "invalid-stitching-relationships", "stitching_workspace",
+            "The stitching workspace was omitted because result references, reviews, or queued-job relationships could not be reconciled.",
+        )
+        return {}
+
+    available_operations = volume_sources.operation_records
+    for owner_name, owner in (
+        [("active_project", normalized.get("active_project"))]
+        + [
+            (f"jobs[{index}]", job)
+            for index, job in enumerate(normalized.get("jobs", ()))
+        ]
+    ):
+        if owner is None:
+            continue
+        for operation_id in owner.get("result_operation_ids", ()):
+            if operation_id not in available_operations:
+                report_loss(
+                    "unavailable-stitching-result",
+                    f"stitching_workspace.{owner_name}.result_operation_ids",
+                    "The saved registration result was unavailable; its reference and current project state were retained.",
+                    approval_required=False,
+                    source_protection_required=False,
+                )
+    return normalized
 
 __all__ = [
     "PoseGraphResidual",
@@ -1667,6 +2239,7 @@ __all__ = [
     "material_stitching_fusion_parameters",
     "materialize_stitching_registration",
     "normalize_stitching_registration_operations",
+    "stage_stitching_project_state",
     "retain_stitching_registration",
     "stitching_export_operation_projection",
     "stitching_fusion_operation_record",

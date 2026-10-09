@@ -17,6 +17,7 @@ import os
 import sys
 import threading
 import traceback
+from collections import ChainMap
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -32,6 +33,7 @@ from madi3d_version import MADI3D_VERSION
 from madi3d_app.resources import resource_path
 from madi3d_app.ui.widgets.collapsible import CollapsibleWidget, NaturalHeightTabWidget
 from madi3d_app.ui.widgets.guide import GuideButton
+from madi3d_app.integrations.neuronbridge.evidence import OBJECT_KEY, copy_origin
 from madi3d_app.scene.object_metadata import inherit_object_origin
 from madi3d_app.scene.tree_roles import (
     ROLE_BACKING_SOURCE_ID,
@@ -51,6 +53,7 @@ from madi3d_app.scene.tree_roles import (
     ROLE_SOURCE_CHANNEL,
     ROLE_VOLUME_CHANNEL_ID,
     ROLE_VOLUME_SOURCE_ID,
+    ROLE_OBJECT_META,
 )
 from madi3d_app.volume.model import (
     CHANNEL_ROLE_LABEL_MASK,
@@ -174,14 +177,6 @@ def _numpy_matrix4(vtk_matrix):
             out[r, c] = float(vtk_matrix.GetElement(r, c))
     return out
 
-
-def _vtk_matrix4(array):
-    arr = np.asarray(array, dtype=float).reshape(4, 4)
-    mat = vtk.vtkMatrix4x4()
-    for r in range(4):
-        for c in range(4):
-            mat.SetElement(r, c, float(arr[r, c]))
-    return mat
 
 
 def _copy_direction(source, target):
@@ -589,6 +584,8 @@ class SegmentationTargetSnapshot:
     acquisition_id: str
     channel_id: str
     backing_source_id: str
+    selector: object
+    producing_operation_id: Optional[str]
     backing_format: str
     series_identity: str
     source_checksum: Optional[str]
@@ -1116,7 +1113,9 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
             button.setText(label)
             button.setAccessibleName(label)
             button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-            button.setFixedSize(34, 34)
+            button.setIconSize(QtCore.QSize(24, 24))
+            button.setMinimumSize(44, 44)
+        self.clear.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.undo.setIcon(self._action_icon("arrow-back-up"))
         self.redo.setIcon(self._action_icon("arrow-forward-up"))
         self.clear.setIcon(self._action_icon("eraser"))
@@ -1126,7 +1125,6 @@ class VolumeSegmentationPanel(QtWidgets.QWidget):
         self.undo.clicked.connect(self.undoRequested)
         self.redo.clicked.connect(self.redoRequested)
         self.clear.clicked.connect(self.clearRequested)
-        history_row.addWidget(QtWidgets.QLabel("Mask", self.operation_row))
         history_row.addWidget(self.undo)
         history_row.addWidget(self.redo)
         history_row.addWidget(self.clear)
@@ -1980,12 +1978,36 @@ class VolumeSegmentationInteractorStyle(vtk.vtkInteractorStyleTrackballCamera):
 class VolumeSegmentationController(QtCore.QObject):
     """Automatic latest-selected target controller with per-volume/per-frame masks."""
 
-    def __init__(self, main_window, panel, volume_container_class, parent=None):
-        super().__init__(parent or main_window)
-        self.main = main_window
+    def __init__(
+        self, panel, volume_container_class, *, render_window, selection,
+        snapshots, relationships, volume_pose, clipping, transforms,
+        volume_map, get_next_volume_id, commit_volume_id, update_item_icon,
+        refresh_scale_bar, project_modified, stop_volume_playback,
+        claim_mouse_tool, remove_volume_container, open_selected_signal,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.dialog_parent = parent
         self.panel = panel
         self.VolumeContainer = volume_container_class
-        self.render_window = main_window.render_window
+        self.render_window = render_window
+        self.selection = selection
+        self.snapshots = snapshots
+        self.relationships = relationships
+        self.volume_pose = volume_pose
+        self.clipping = clipping
+        self.transforms = transforms
+        # This is the existing runtime registry, not a second scientific owner.
+        self.volume_map = volume_map
+        self._get_next_volume_id = get_next_volume_id
+        self._commit_volume_id = commit_volume_id
+        self._update_item_icon = update_item_icon
+        self._refresh_scale_bar = refresh_scale_bar
+        self._project_modified = project_modified
+        self._stop_volume_playback = stop_volume_playback
+        self._claim_mouse_tool = claim_mouse_tool
+        self._remove_volume_container = remove_volume_container
+        self._open_selected_signal = open_selected_signal
         self.renderer = self.render_window.renderer
         self.overlay = SegmentationBrushOverlay(self.render_window.overlay_renderer)
         self.interactor = self._get_interactor()
@@ -2019,8 +2041,7 @@ class VolumeSegmentationController(QtCore.QObject):
         self._session_target_snapshot = None
         self._authoritative_refresh_pending = False
         self._saved_clipping_process = None
-        self._saved_transform_process = None
-        self._saved_transform_toggle_enabled = None
+        self._saved_transform_interaction = None
         self._tree_connections_installed = False
         self._settings_save_timer = QtCore.QTimer(self)
         self._settings_save_timer.setSingleShot(True)
@@ -2102,7 +2123,8 @@ class VolumeSegmentationController(QtCore.QObject):
         if self._tree_connections_installed:
             return
         try:
-            model = self.main.tree.model()
+            tree = self.snapshots.tree_adapter.tree
+            model = tree.model()
             self._target_validation_timer = QtCore.QTimer(self)
             self._target_validation_timer.setSingleShot(True)
             self._target_validation_timer.timeout.connect(self.validate_target)
@@ -2112,17 +2134,17 @@ class VolumeSegmentationController(QtCore.QObject):
             # This matters for the common lazy-load sequence: select an unloaded
             # volume, then load it.  Once ROLE_LOADED becomes true the same selected
             # row must immediately become the segmentation target.
-            self.main.tree.itemChanged.connect(
+            tree.itemChanged.connect(
                 lambda *_: QtCore.QTimer.singleShot(0, self.notify_volume_load_state_changed)
             )
             # ``currentItem`` is Qt's best representation of the row most recently
             # clicked/focused.  Only a loaded volume changes the segmentation
             # target; selecting a mesh/group afterward does not erase knowledge of
             # the latest selected volume.
-            self.main.tree.currentItemChanged.connect(
+            tree.currentItemChanged.connect(
                 lambda *_: QtCore.QTimer.singleShot(0, self.sync_target_to_latest_selection)
             )
-            self.main.tree.itemSelectionChanged.connect(
+            tree.itemSelectionChanged.connect(
                 lambda: QtCore.QTimer.singleShot(0, self.sync_target_to_latest_selection)
             )
             self._tree_connections_installed = True
@@ -2139,7 +2161,7 @@ class VolumeSegmentationController(QtCore.QObject):
             self._deactivate_session(keep_target=True)
         self.panel.set_enabled_checked(False)
         QtWidgets.QMessageBox.warning(
-            self.main,
+            self.dialog_parent,
             "Volume Segmentation Geometry Mismatch",
             message,
         )
@@ -2208,17 +2230,14 @@ class VolumeSegmentationController(QtCore.QObject):
         if item is None:
             return None
         try:
-            if not self.main._is_volume_item(item) or not bool(item.data(0, ROLE_LOADED)):
+            if not self.snapshots.tree_adapter.is_volume_item(item) or not bool(item.data(0, ROLE_LOADED)):
                 return None
-            volume_id = item.data(0, ROLE_VOLUME_ID)
-            return getattr(self.main, "volume_map", {}).get(volume_id)
+            return self.selection.get_volume_container(item)
         except Exception:
             return None
 
     def _latest_selected_volume(self):
-        tree = getattr(self.main, "tree", None)
-        if tree is None:
-            return None, None
+        tree = self.snapshots.tree_adapter.tree
 
         # The current row is the authoritative "latest selected" row when it is
         # a loaded volume.  If Qt leaves currentItem on a non-volume during a
@@ -2304,7 +2323,7 @@ class VolumeSegmentationController(QtCore.QObject):
             if self.target_vc is None:
                 self.panel.set_enabled_checked(False)
                 QtWidgets.QMessageBox.information(
-                    self.main, "Volume Segmentation",
+                    self.dialog_parent, "Volume Segmentation",
                     "Select a loaded volume before enabling Volume Segmentation."
                 )
                 return
@@ -2387,13 +2406,7 @@ class VolumeSegmentationController(QtCore.QObject):
         self.panel.set_controls_active(not self._target_locked())
         self._update_history_ui()
 
-        timer = getattr(self.main, "volume_time_play_timer", None)
-        if timer is not None and timer.isActive():
-            timer.stop()
-            try:
-                self.main._sync_volume_time_playback_indicators()
-            except Exception:
-                pass
+        self._stop_volume_playback()
 
         self._install_target_observers()
         self._acquire_preview_port()
@@ -2414,13 +2427,14 @@ class VolumeSegmentationController(QtCore.QObject):
     def has_active_work(self):
         return self._target_locked()
 
-    def reset(self):
+    def reset(self, *, preserve_masks=False):
         """Retire project-bound operations; cancelled jobs retain their borrowed inputs."""
-        self._deactivate_session(keep_target=False)
-        self.states_by_vc.clear()
+        self._deactivate_session(keep_target=False, force_cancel_all=True)
+        if not preserve_masks:
+            self.states_by_vc.clear()
 
-    def _deactivate_session(self, keep_target=True):
-        self._invalidate_operation()
+    def _deactivate_session(self, keep_target=True, *, force_cancel_all=False):
+        self._invalidate_operation(force_all=force_cancel_all)
         self._reset_speck_adjustment()
         self.set_brush_interaction_active(False, render=False)
         self._remove_target_observers()
@@ -2441,7 +2455,7 @@ class VolumeSegmentationController(QtCore.QObject):
         self.render_once()
 
     def _purge_dead_states(self):
-        live = set(id(vc) for vc in getattr(self.main, "volume_map", {}).values())
+        live = set(id(vc) for vc in self.volume_map.values())
         for key in list(self.states_by_vc):
             if key not in live:
                 self.states_by_vc.pop(key, None)
@@ -2502,7 +2516,7 @@ class VolumeSegmentationController(QtCore.QObject):
         vc = self.target_vc
         if vc is None or getattr(vc, "image", None) is None or getattr(vc, "volume", None) is None:
             return False
-        if vc not in getattr(self.main, "volume_map", {}).values():
+        if vc not in self.volume_map.values():
             return False
         item = self._item_for_vc(vc)
         if item is None or not bool(item.data(0, ROLE_LOADED)):
@@ -2511,14 +2525,11 @@ class VolumeSegmentationController(QtCore.QObject):
         return True
 
     def _item_for_vc(self, vc):
-        tree = getattr(self.main, "tree", None)
-        if tree is None:
-            return None
-        iterator = QtWidgets.QTreeWidgetItemIterator(tree)
+        iterator = QtWidgets.QTreeWidgetItemIterator(self.snapshots.tree_adapter.tree)
         while iterator.value():
             item = iterator.value()
             try:
-                if self.main.get_volume_container(item) is vc:
+                if self.selection.get_volume_container(item) is vc:
                     return item
             except Exception:
                 pass
@@ -2560,11 +2571,6 @@ class VolumeSegmentationController(QtCore.QObject):
             ),
         }.get(self.mode, "Segmentation brush active."))
 
-    def _disable_competing_mouse_tools(self):
-        from madi3d_app.controllers.interaction import claim_mouse_tool
-
-        claim_mouse_tool(self.main, "segmentation")
-
     def set_brush_interaction_active(self, enabled, render=True):
         """Give or release mouse ownership without ending segmentation itself."""
         enabled = bool(enabled)
@@ -2576,7 +2582,7 @@ class VolumeSegmentationController(QtCore.QObject):
             return
 
         if enabled:
-            self._disable_competing_mouse_tools()
+            self._claim_mouse_tool()
             self._previous_cursor_mode = getattr(
                 self.render_window, "current_cursor_mode", None
             )
@@ -2643,61 +2649,14 @@ class VolumeSegmentationController(QtCore.QObject):
             self.render_once()
 
     def _suspend_conflicting_widgets(self):
-        clipping = getattr(self.render_window, "clippingWidget", None)
-        if clipping is not None and hasattr(clipping, "GetProcessEvents"):
-            try:
-                self._saved_clipping_process = int(clipping.GetProcessEvents())
-                clipping.SetProcessEvents(False)
-            except Exception:
-                pass
-        controller = getattr(self.main, "_transform_widget_controller", None)
-        if controller is not None:
-            try:
-                self._saved_transform_process = bool(controller.process_events_enabled())
-                controller.set_process_events(False)
-            except Exception:
-                pass
-
-        # Prevent the transform toggle from re-enabling the gizmo
-        # while segmentation owns the mouse. Its checked/requested state is not
-        # changed, so the normal transform state machine can resume afterward.
-        transform_panel = getattr(self.main, "transform_panel", None)
-        toggle = getattr(transform_panel, "btnInteractiveTransform", None)
-        if toggle is not None:
-            try:
-                self._saved_transform_toggle_enabled = bool(toggle.isEnabled())
-                toggle.setEnabled(False)
-            except Exception:
-                self._saved_transform_toggle_enabled = None
+        self._saved_clipping_process = self.clipping.suspend_widget_interaction()
+        self._saved_transform_interaction = self.transforms.suspend_widget_interaction()
 
     def _restore_conflicting_widgets(self):
-        clipping = getattr(self.render_window, "clippingWidget", None)
-        if clipping is not None:
-            refresh = getattr(self.render_window, "_set_clipping_widget_active", None)
-            try:
-                if callable(refresh):
-                    refresh(bool(getattr(self.render_window, "_clipping_widget_requested", False)))
-                elif hasattr(clipping, "SetProcessEvents"):
-                    clipping.SetProcessEvents(bool(self._saved_clipping_process))
-            except Exception:
-                pass
-        controller = getattr(self.main, "_transform_widget_controller", None)
-        if controller is not None and self._saved_transform_process is not None:
-            try:
-                controller.set_process_events(bool(self._saved_transform_process))
-            except Exception:
-                pass
-
-        transform_panel = getattr(self.main, "transform_panel", None)
-        toggle = getattr(transform_panel, "btnInteractiveTransform", None)
-        if toggle is not None and self._saved_transform_toggle_enabled is not None:
-            try:
-                toggle.setEnabled(bool(self._saved_transform_toggle_enabled))
-            except Exception:
-                pass
+        self.clipping.restore_widget_interaction(self._saved_clipping_process)
+        self.transforms.restore_widget_interaction(self._saved_transform_interaction)
         self._saved_clipping_process = None
-        self._saved_transform_process = None
-        self._saved_transform_toggle_enabled = None
+        self._saved_transform_interaction = None
 
     def camera_signature(self):
         cam = self.renderer.GetActiveCamera()
@@ -2894,11 +2853,7 @@ class VolumeSegmentationController(QtCore.QObject):
         try:
             if not self._target_is_valid():
                 raise RuntimeError("Segmentation target is no longer loaded.")
-            service = getattr(self.main, "volume_snapshot_service", None)
-            if service is None:
-                raise RuntimeError(
-                    "The authoritative volume snapshot service is unavailable."
-                )
+            service = self.snapshots
             identity = service.resolve_registered_channel(
                 self.target_item or self.target_vc
             )
@@ -2958,6 +2913,15 @@ class VolumeSegmentationController(QtCore.QObject):
                 acquisition_id=str(identity.acquisition_id),
                 channel_id=str(identity.channel_id),
                 backing_source_id=str(modeled.channel.backing_source_id or ""),
+                selector=copy.deepcopy(
+                    self.relationships.model.channels[
+                        str(identity.channel_id)
+                    ].selector
+                ),
+                producing_operation_id=(
+                    str(modeled.channel.producing_operation_id)
+                    if modeled.channel.producing_operation_id else None
+                ),
                 backing_format=str(modeled.channel.backing_format or ""),
                 series_identity=str(modeled.channel.series_identity or ""),
                 source_checksum=modeled.channel.source_checksum,
@@ -3008,6 +2972,30 @@ class VolumeSegmentationController(QtCore.QObject):
             raise SegmentationPreflightError(
                 f"{stage}: {diagnostic}"
             ) from exc
+
+    @staticmethod
+    def _capture_volume_input_record(model, snapshot):
+        selector = copy.deepcopy(snapshot.selector)
+        if isinstance(selector, dict):
+            selector["time_index"] = int(snapshot.frame_index)
+        else:
+            selector = {
+                "source_selector": selector,
+                "time_index": int(snapshot.frame_index),
+            }
+        from madi3d_app.volume.provenance import capture_volume_operation_inputs
+        capture = capture_volume_operation_inputs(model, [{
+            "source_id": snapshot.acquisition_id,
+            "channel_id": snapshot.channel_id,
+            "backing_source_id": snapshot.backing_source_id,
+            "selector": selector,
+            "geometry_revision": snapshot.geometry_revision,
+            "acquisition_geometry_revision": snapshot.acquisition_geometry_revision,
+            "shared_pose": snapshot.pose,
+            "producing_operation_id": snapshot.producing_operation_id,
+            "source_checksum": snapshot.source_checksum,
+        }])
+        return copy.deepcopy(next(iter(capture["direct_records"].values())))
 
     @staticmethod
     def _require_compatible_target_snapshot(
@@ -3597,7 +3585,7 @@ class VolumeSegmentationController(QtCore.QObject):
             if not self._preview_warning_shown:
                 self._preview_warning_shown = True
                 QtWidgets.QMessageBox.warning(
-                    self.main, "Segmentation preview unavailable",
+                    self.dialog_parent, "Segmentation preview unavailable",
                     "All shared volume-renderer ports are in use. Segmentation remains functional, but the temporary 3-D mask preview is disabled."
                 )
             return
@@ -3887,9 +3875,7 @@ class VolumeSegmentationController(QtCore.QObject):
 
     def _open_signal_in_cdm(self, channel_id):
         try:
-            self.main.neuronbridge_query_controller.open(
-                prepare=True, source_channel_id=channel_id
-            )
+            self._open_selected_signal(channel_id)
         except Exception as exc:
             # Publication has succeeded; a navigation failure must not mark the
             # generated scientific output as failed or roll it back.
@@ -3918,46 +3904,56 @@ class VolumeSegmentationController(QtCore.QObject):
         operation="segmentation",
         operation_parameters=None,
         operation_snapshot=None,
+        independent_output=False,
+        publication_context=None,
     ):
         if image is None:
             raise RuntimeError("No output image was produced.")
-        if self.target_item is None or self.target_vc is None:
-            raise RuntimeError("Generated output has no active parent volume.")
-        validated_parent = self._preflight_authoritative_target(
-            "Generated output publication validation"
-        )
-        if operation_snapshot is not None:
-            self._require_compatible_target_snapshot(
-                operation_snapshot,
-                validated_parent,
-                stage="Generated output publication validation",
-                require_same_frame=True,
+        relationship_controller = self.relationships
+        model = relationship_controller.model
+        tree = relationship_controller.tree_adapter.tree
+        if independent_output:
+            if operation_snapshot is None or publication_context is None:
+                raise RuntimeError("Generated output is missing its dispatch snapshot.")
+            validated_parent = operation_snapshot
+            input_record = copy.deepcopy(publication_context["input_record"])
+            parent_item = publication_context.get("parent_item")
+        elif operation_snapshot is not None:
+            validated_parent = operation_snapshot
+            parent_item = operation_snapshot.target_item
+            input_record = self._capture_volume_input_record(model, validated_parent)
+        else:
+            if self.target_item is None or self.target_vc is None:
+                raise RuntimeError("Generated output has no active parent volume.")
+            validated_parent = self._preflight_authoritative_target(
+                "Generated output publication validation"
             )
-
-        relationship_controller = getattr(
-            self.main, "volume_relationship_controller", None
-        )
-        model = getattr(self.main, "volume_source_model", None)
-        if relationship_controller is None or not isinstance(model, VolumeSourceModel):
-            raise RuntimeError(
-                "Generated output cannot be published without the authoritative volume model."
-            )
+            input_record = None
+            parent_item = self.target_item
         parent_acquisition_id = validated_parent.acquisition_id
         parent_channel_id = validated_parent.channel_id
-        if (
-            str(self.target_item.data(0, ROLE_VOLUME_SOURCE_ID) or "").strip()
-            != parent_acquisition_id
-            or str(
-                self.target_item.data(0, ROLE_VOLUME_CHANNEL_ID) or ""
-            ).strip()
-            != parent_channel_id
-        ):
-            raise SegmentationPreflightError(
-                "Generated output publication validation: the target tree row "
-                "identity disagrees with the authoritative snapshot."
-            )
-        parent = model.acquisitions.get(parent_acquisition_id)
-        parent_channel = model.channels.get(parent_channel_id)
+        if independent_output:
+            if input_record.get("source_id") != parent_acquisition_id or input_record.get("channel_id") != parent_channel_id:
+                raise RuntimeError("Generated output input revision disagrees with its dispatch target.")
+        else:
+            if (
+                str(parent_item.data(0, ROLE_VOLUME_SOURCE_ID) or "").strip()
+                != parent_acquisition_id
+                or str(parent_item.data(0, ROLE_VOLUME_CHANNEL_ID) or "").strip()
+                != parent_channel_id
+            ):
+                raise SegmentationPreflightError(
+                    "Generated output publication validation: the target tree row "
+                    "identity disagrees with the authoritative snapshot."
+                )
+        parent = (
+            publication_context.get("parent_acquisition")
+            if independent_output else model.acquisitions.get(parent_acquisition_id)
+        )
+        parent_channel = (
+            publication_context.get("parent_channel")
+            if independent_output else model.channels.get(parent_channel_id)
+        )
         if (
             parent is None
             or parent_channel is None
@@ -3967,7 +3963,12 @@ class VolumeSegmentationController(QtCore.QObject):
                 "The segmentation target has no complete authoritative parent identity."
             )
 
-        parent_local = parent_channel.local_geometry
+        parent_local = (
+            publication_context.get("parent_geometry")
+            if independent_output else
+            model.geometry_records.get(validated_parent.geometry_revision)
+            if input_record is not None else parent_channel.local_geometry
+        )
         if (
             parent_local is None
             or parent_local.working_grid is None
@@ -4002,22 +4003,23 @@ class VolumeSegmentationController(QtCore.QObject):
         parent_extent = extent_relative_to_parent(
             runtime_parent_extent, validated_parent.extent
         )
-        target_matrix = _numpy_matrix4(self.target_vc.volume.GetMatrix())
-        if not np.allclose(
-            target_matrix,
-            np.asarray(validated_parent.pose, dtype=float),
-            rtol=0.0,
-            atol=1e-12,
-        ) or not np.allclose(
-            np.asarray(parent.shared_pose, dtype=float),
-            np.asarray(validated_parent.pose, dtype=float),
-            rtol=0.0,
-            atol=1e-12,
-        ):
-            raise SegmentationPreflightError(
-                "Generated output publication validation: the target pose "
-                "disagrees with the validated acquisition pose."
-            )
+        if input_record is None:
+            target_matrix = _numpy_matrix4(self.target_vc.volume.GetMatrix())
+            if not np.allclose(
+                target_matrix,
+                np.asarray(validated_parent.pose, dtype=float),
+                rtol=0.0,
+                atol=1e-12,
+            ) or not np.allclose(
+                np.asarray(parent.shared_pose, dtype=float),
+                np.asarray(validated_parent.pose, dtype=float),
+                rtol=0.0,
+                atol=1e-12,
+            ):
+                raise SegmentationPreflightError(
+                    "Generated output publication validation: the target pose "
+                    "disagrees with the validated acquisition pose."
+                )
         output_scalars = normalized_image.GetPointData().GetScalars()
         output_array = vtk_to_numpy(output_scalars) if output_scalars is not None else None
         scalar_dtype = (
@@ -4065,22 +4067,57 @@ class VolumeSegmentationController(QtCore.QObject):
                 )
             }
 
+        session_geometry = publication_context["session_geometry"] if independent_output else {
+            "start": getattr(state, "session_geometry_start", None),
+            "current": getattr(state, "session_geometry_current", None),
+            "refresh_count": int(getattr(state, "session_geometry_refresh_count", 0) or 0),
+        }
         generation_parameters["segmentation_session_geometry"] = {
-            "start": session_reference(
-                getattr(state, "session_geometry_start", None)
-            ),
-            "current": session_reference(
-                getattr(state, "session_geometry_current", None)
-            ),
-            "refresh_count": int(
-                getattr(state, "session_geometry_refresh_count", 0) or 0
-            ),
+            "start": session_reference(session_geometry["start"]),
+            "current": session_reference(session_geometry["current"]),
+            "refresh_count": session_geometry["refresh_count"],
         }
         acquisition_id = new_volume_identity()
         channel_id = new_volume_identity()
         generated_data_id = new_volume_identity()
         candidate = VolumeSourceModel()
-        model._seed_append_parent_chain(candidate, parent_acquisition_id)
+        if independent_output:
+            candidate.acquisitions[parent_acquisition_id] = copy.deepcopy(parent)
+            candidate.channels[parent_channel_id] = copy.deepcopy(parent_channel)
+            candidate.backing_sources[
+                publication_context["parent_backing"].backing_source_id
+            ] = copy.deepcopy(publication_context["parent_backing"])
+            candidate.geometry_records[parent_local.geometry_revision] = copy.deepcopy(
+                parent_local
+            )
+            acquisition_geometry = publication_context["parent_acquisition_geometry"]
+            candidate.geometry_records[acquisition_geometry.geometry_revision] = copy.deepcopy(
+                acquisition_geometry
+            )
+            candidate.operation_records = ChainMap({}, model.operation_records)
+            candidate.scientific_records = ChainMap({}, model.scientific_records)
+            candidate.unavailable_history_operation_ids = set(
+                model.unavailable_history_operation_ids
+            )
+            candidate.unavailable_history_record_ids = set(
+                model.unavailable_history_record_ids
+            )
+        else:
+            model._seed_append_parent_chain(candidate, parent_acquisition_id)
+            if input_record is not None:
+                candidate.geometry_records[parent_local.geometry_revision] = copy.deepcopy(
+                    parent_local
+                )
+                acquisition_geometry = model.geometry_records.get(
+                    validated_parent.acquisition_geometry_revision
+                )
+                if acquisition_geometry is None:
+                    raise RuntimeError(
+                        "Captured generated-volume input has no acquisition geometry."
+                    )
+                candidate.geometry_records[acquisition_geometry.geometry_revision] = copy.deepcopy(
+                    acquisition_geometry
+                )
         candidate.add_generated_acquisition(
             parent_acquisition_id=parent_acquisition_id,
             parent_channel_id=parent_channel_id,
@@ -4101,6 +4138,7 @@ class VolumeSegmentationController(QtCore.QObject):
             software_version=MADI3D_VERSION,
             import_version=MADI3D_VERSION,
             manual_support=manual_support,
+            input_record=input_record,
         )
         child = candidate.acquisitions[acquisition_id]
         child_channel = candidate.channels[channel_id]
@@ -4121,7 +4159,11 @@ class VolumeSegmentationController(QtCore.QObject):
                 "Generated output did not inherit the validated parent geometry and pose."
             )
 
-        target_meta = getattr(self.target_vc, "metadata", {}) or {}
+        target_meta = (
+            copy.deepcopy(publication_context.get("target_metadata") or {})
+            if independent_output else
+            copy.deepcopy(getattr(self.target_vc, "metadata", {}) or {})
+        )
 
         producer = vtk.vtkTrivialProducer()
         producer.SetOutput(normalized_image)
@@ -4131,6 +4173,10 @@ class VolumeSegmentationController(QtCore.QObject):
         )
         vc.reader = producer
         if mask_volume:
+            mask_color = (
+                publication_context["mask_color"] if independent_output
+                else tuple(float(v) for v in self.settings["mask_color"])
+            )
             vc.metadata.update(
                 {
                     "data_min": 0.0,
@@ -4139,7 +4185,7 @@ class VolumeSegmentationController(QtCore.QObject):
                     "upper_threshold": 1.0,
                     "saturation_point": 1.0,
                     "peak": 1.0,
-                    "color": tuple(float(v) for v in self.settings["mask_color"]),
+                    "color": mask_color,
                     "color_lut": "solid",
                     "global_opacity": 1.0,
                     "representation": "volume",
@@ -4168,16 +4214,17 @@ class VolumeSegmentationController(QtCore.QObject):
             vc.transfer["opacity"].AddPoint(1.0, 0.85)
             vc.transfer["color"].RemoveAllPoints()
             vc.transfer["color"].AddRGBPoint(0.0, 0.0, 0.0, 0.0)
-            vc.transfer["color"].AddRGBPoint(1.0, *self.settings["mask_color"])
+            vc.transfer["color"].AddRGBPoint(
+                1.0,
+                *(publication_context["mask_color"] if independent_output
+                  else self.settings["mask_color"]),
+            )
             vc.prop.SetInterpolationTypeToNearest()
             vc.prop.ShadeOff()
 
-        apply_exact = getattr(self.main, "apply_volume_actor_matrix_exact", None)
-        if callable(apply_exact):
-            apply_exact(vc, validated_parent.pose, scale_mode="center")
-        else:
-            vc.volume.SetUserMatrix(_vtk_matrix4(validated_parent.pose))
-            vc.volume.Modified()
+        self.volume_pose.apply_exact(
+            vc, validated_parent.pose, scale_mode="center"
+        )
         if not np.allclose(
             _numpy_matrix4(vc.volume.GetMatrix()),
             np.asarray(validated_parent.pose, dtype=float),
@@ -4191,7 +4238,15 @@ class VolumeSegmentationController(QtCore.QObject):
             pass
 
         item = QtWidgets.QTreeWidgetItem([display_name])
-        inherit_object_origin(item, (self.target_item,), operation)
+        if independent_output:
+            inherited = copy_origin(
+                publication_context.get("origin_metadata"),
+                derived=True, operation=operation,
+            ).get(OBJECT_KEY)
+            if inherited:
+                item.setData(0, ROLE_OBJECT_META, {OBJECT_KEY: inherited})
+        else:
+            inherit_object_origin(item, (parent_item,), operation)
         item.setFlags(
             item.flags()
             | Qt.ItemFlag.ItemIsEditable
@@ -4216,27 +4271,38 @@ class VolumeSegmentationController(QtCore.QObject):
             ROLE_COLOR,
             f"{color[0]:.3f},{color[1]:.3f},{color[2]:.3f}",
         )
-        item.setCheckState(0, self.target_item.checkState(0))
+        item.setCheckState(
+            0,
+            publication_context["check_state"] if independent_output
+            else self.target_item.checkState(0),
+        )
 
         append_scene_state = relationship_controller.capture_append_scene_state()
-        old_volume_id_counter = int(self.main.volume_id_counter)
+        old_volume_id_counter = int(self._get_next_volume_id())
         vol_id = old_volume_id_counter
         item.setData(0, ROLE_VOLUME_ID, vol_id)
         published_to_renderer = False
         append_result = None
         try:
-            parent_item = self.target_item.parent()
-            if (
-                parent_item is not None
-                and parent_item.data(0, ROLE_GROUP_KIND) == GROUP_KIND_MULTICHANNEL
-            ):
-                anchor = parent_item
-                insertion_parent = parent_item.parent()
+            target_item = parent_item
+            if target_item is not None and not self._tree_contains_item(tree, target_item):
+                target_item = None
+            if target_item is None:
+                anchor = None
+                insertion_parent = None
             else:
-                anchor = self.target_item
-                insertion_parent = self.target_item.parent()
+                containing_parent = target_item.parent()
+                if (
+                    containing_parent is not None
+                    and containing_parent.data(0, ROLE_GROUP_KIND) == GROUP_KIND_MULTICHANNEL
+                ):
+                    anchor = containing_parent
+                    insertion_parent = containing_parent.parent()
+                else:
+                    anchor = target_item
+                    insertion_parent = containing_parent
             # Suppress item callbacks, but let the Qt model notify the live view.
-            tree_blocker = QtCore.QSignalBlocker(self.main.tree)
+            tree_blocker = QtCore.QSignalBlocker(tree)
             try:
                 if insertion_parent is not None:
                     index = insertion_parent.indexOfChild(anchor)
@@ -4245,19 +4311,19 @@ class VolumeSegmentationController(QtCore.QObject):
                         item,
                     )
                 else:
-                    index = self.main.tree.indexOfTopLevelItem(anchor)
-                    self.main.tree.insertTopLevelItem(
+                    index = tree.indexOfTopLevelItem(anchor) if anchor is not None else -1
+                    tree.insertTopLevelItem(
                         index + 1
                         if index >= 0
-                        else self.main.tree.topLevelItemCount(),
+                        else tree.topLevelItemCount(),
                         item,
                     )
             finally:
                 del tree_blocker
 
-            self.main.volume_id_counter = old_volume_id_counter + 1
-            self.main.volume_map[vol_id] = vc
-            tree_blocker = QtCore.QSignalBlocker(self.main.tree)
+            self._commit_volume_id(old_volume_id_counter + 1)
+            self.volume_map[vol_id] = vc
+            tree_blocker = QtCore.QSignalBlocker(tree)
             try:
                 producing_operation = candidate.operation_records[
                     child_channel.producing_operation_id
@@ -4301,7 +4367,7 @@ class VolumeSegmentationController(QtCore.QObject):
                 )
                 vc.source_id = acquisition_id
                 vc.metadata.update(dict(item.data(0, ROLE_VOLUME_META) or {}))
-                self.main.update_item_color_icon(
+                self._update_item_icon(
                     item, *color, icon_size=16, shape="disc"
                 )
             finally:
@@ -4314,7 +4380,7 @@ class VolumeSegmentationController(QtCore.QObject):
                 0.5 * (bounds[4] + bounds[5]),
             )
             try:
-                should_show = bool(self.main._item_effectively_checked(item))
+                should_show = bool(self.selection._item_effectively_checked(item))
             except Exception:
                 should_show = item.checkState(0) == Qt.CheckState.Checked
             if should_show:
@@ -4325,32 +4391,17 @@ class VolumeSegmentationController(QtCore.QObject):
                         "No volume-renderer port is available for the generated output."
                     )
                 published_to_renderer = True
-            schedule_scale_bar = getattr(
-                self.main, "_schedule_scale_bar_update", None
-            )
-            if callable(schedule_scale_bar):
-                schedule_scale_bar()
+            self._refresh_scale_bar()
             self.render_window.render()
-            self.main.mark_project_modified("generated volume publication")
+            self._project_modified("generated volume publication")
         except Exception:
             if published_to_renderer or getattr(vc, "volume_index", None) is not None:
-                remove = getattr(
-                    self.main, "_remove_volume_container_without_refresh", None
-                )
-                if callable(remove):
-                    remove(vc)
-                else:
-                    try:
-                        self.render_window.set_volume_visibility(
-                            vc, False, render=False
-                        )
-                    except Exception:
-                        pass
-            self.main.volume_map.pop(vol_id, None)
-            self.main.volume_id_counter = old_volume_id_counter
+                self._remove_volume_container(vc)
+            self.volume_map.pop(vol_id, None)
+            self._commit_volume_id(old_volume_id_counter)
             if append_result is not None:
                 append_result.delta.rollback(model)
-            tree_blocker = QtCore.QSignalBlocker(self.main.tree)
+            tree_blocker = QtCore.QSignalBlocker(tree)
             try:
                 item_parent = item.parent()
                 if item_parent is not None:
@@ -4358,9 +4409,9 @@ class VolumeSegmentationController(QtCore.QObject):
                     if item_index >= 0:
                         item_parent.takeChild(item_index)
                 else:
-                    item_index = self.main.tree.indexOfTopLevelItem(item)
+                    item_index = tree.indexOfTopLevelItem(item)
                     if item_index >= 0:
-                        self.main.tree.takeTopLevelItem(item_index)
+                        tree.takeTopLevelItem(item_index)
             finally:
                 del tree_blocker
             append_scene_state.restore()
@@ -4398,20 +4449,26 @@ class VolumeSegmentationController(QtCore.QObject):
         self._operation = None
         success = False
         try:
-            if worker is None or worker.cancel_event.is_set() or not self._operation_is_current(operation):
+            independent_output = bool(
+                operation and operation.get("independent_output")
+            )
+            if worker is None or worker.cancel_event.is_set() or (
+                not self._operation_is_current(operation)
+            ):
                 self._rollback_operation(operation)
                 self.panel.activity_footer.finish("segmentation",
                     "Cancelled" if worker is not None and worker.cancel_event.is_set() else "Interrupted")
                 return
-            # Selection signals are queued. Check the actual selection before publishing
-            # even when its target-sync callback has not run yet.
-            selected, _item = self._latest_selected_volume()
-            if selected is not None and selected is not self.target_vc:
-                self._rollback_operation(operation)
-                self.sync_target_to_latest_selection()
-                self.set_status("Segmentation result discarded because the target changed.")
-                return
-            self._accept_background_result(operation["snapshot"], operation["label"])
+            if not independent_output:
+                # Selection signals are queued. Check actual selection before accepting
+                # a result which mutates the active mask or adopts a destructive edit.
+                selected, _item = self._latest_selected_volume()
+                if selected is not None and selected is not self.target_vc:
+                    self._rollback_operation(operation)
+                    self.sync_target_to_latest_selection()
+                    self.set_status("Segmentation result discarded because the target changed.")
+                    return
+                self._accept_background_result(operation["snapshot"], operation["label"])
             operation["publish"](result)
             success = True
             self.panel.activity_footer.finish("segmentation", "Completed")
@@ -4446,7 +4503,8 @@ class VolumeSegmentationController(QtCore.QObject):
 
 
     def _run_background(self, label, function, publish, *, operation_snapshot=None,
-                        preserve_threshold=False, preserve_specks=False, rollback=None):
+                        preserve_threshold=False, preserve_specks=False, rollback=None,
+                        independent_output=False, publication_context=None):
         """Dispatch once; completion returns through a queued Qt signal."""
         if self._target_locked():
             self.set_status("A segmentation calculation is still finishing. You can navigate or cancel it.")
@@ -4462,6 +4520,12 @@ class VolumeSegmentationController(QtCore.QObject):
             "label": label, "snapshot": snapshot, "publish": publish,
             "generation": self._operation_generation, "state": self.state,
             "frame": self._frame_state(snapshot.frame_index), "rollback": rollback,
+            "independent_output": bool(independent_output),
+            "model_context": (
+                publication_context.get("model")
+                if independent_output and publication_context is not None
+                else self.relationships.model
+            ),
         }
         self.panel.set_background_busy(True, label, preserve_threshold=preserve_threshold,
                                        preserve_specks=preserve_specks)
@@ -4683,8 +4747,29 @@ class VolumeSegmentationController(QtCore.QObject):
         except SegmentationPreflightError as exc:
             self._stop_for_authoritative_error(exc)
             return
-        source = self._detached_image(self.target_vc.image)
-        mask_image = self._detached_image(frame.mask)
+        source_view = (
+            _image_array_view(self.target_vc.image)
+            if not mask_volume else None
+        )
+        mask_view = _image_array_view(frame.mask)
+        source_bytes = int(source_view.nbytes) if source_view is not None else 0
+        mask_bytes = int(mask_view.nbytes)
+        try:
+            from madi3d_app.io_utils import check_resources
+            # Bound the retained input copies plus the worker output, selection
+            # mask and support encoding while this controller's one-job limit holds.
+            check_resources(
+                memory_bytes=source_bytes * (3 if source_bytes else 0)
+                + mask_bytes * 5
+            )
+        except (MemoryError, OSError) as exc:
+            self.set_status(f"{label} could not start: {exc}")
+            return
+        source = (
+            self._deep_detached_image(self.target_vc.image)
+            if source_bytes else None
+        )
+        mask_image = self._deep_detached_image(frame.mask)
         extent = tuple(frame.mask_extent)
         name = self._derived_name(suffix)
         parameters = {
@@ -4695,6 +4780,35 @@ class VolumeSegmentationController(QtCore.QObject):
         }
         if operation == "segmentation_extract_original_signal":
             parameters["margin_voxels"] = int(margin)
+        model = self.relationships.model
+        input_record = self._capture_volume_input_record(model, snapshot)
+        backing = model.backing_sources[snapshot.backing_source_id]
+        state = self.state
+        publication_context = {
+            "model": model,
+            "input_record": input_record,
+            "parent_item": snapshot.target_item,
+            "origin_metadata": copy.deepcopy(
+                snapshot.target_item.data(0, ROLE_OBJECT_META) or {}
+            ),
+            "check_state": snapshot.target_item.checkState(0),
+            "target_metadata": copy.deepcopy(getattr(snapshot.target_vc, "metadata", {}) or {}),
+            "session_geometry": {
+                "start": copy.deepcopy(getattr(state, "session_geometry_start", None)),
+                "current": copy.deepcopy(getattr(state, "session_geometry_current", None)),
+                "refresh_count": int(getattr(state, "session_geometry_refresh_count", 0) or 0),
+            },
+            "parent_acquisition": copy.deepcopy(model.acquisitions[snapshot.acquisition_id]),
+            "parent_channel": copy.deepcopy(model.channels[snapshot.channel_id]),
+            "parent_backing": copy.deepcopy(backing),
+            "parent_geometry": copy.deepcopy(
+                model.geometry_records[snapshot.geometry_revision]
+            ),
+            "parent_acquisition_geometry": copy.deepcopy(
+                model.geometry_records[snapshot.acquisition_geometry_revision]
+            ),
+            "mask_color": tuple(float(value) for value in self.settings["mask_color"]),
+        }
         def work(report):
             report(5, f"{label}: reading mask")
             mask = np.array(_image_array_view(mask_image), copy=True, dtype=np.uint8)
@@ -4742,11 +4856,14 @@ class VolumeSegmentationController(QtCore.QObject):
                 self.set_status("The current frame has no selected voxels.")
                 return
             _container, item = self._add_derived_volume(output, name, mask_volume=mask_volume,
-                operation=operation, operation_parameters=parameters, operation_snapshot=snapshot)
+                operation=operation, operation_parameters=parameters, operation_snapshot=snapshot,
+                independent_output=True, publication_context=publication_context)
             self.set_status(f"{label}: created {name}")
             if on_published is not None:
                 on_published(str(item.data(0, ROLE_VOLUME_CHANNEL_ID)))
-        self._run_background(label, work, publish, operation_snapshot=snapshot)
+        self._run_background(label, work, publish, operation_snapshot=snapshot,
+                             independent_output=True,
+                             publication_context=publication_context)
 
     @staticmethod
     def _dilate_roi(mask, extent, source, margin, *, report):
@@ -4773,6 +4890,8 @@ class VolumeSegmentationController(QtCore.QObject):
 
 
     def _operation_is_current(self, operation):
+        if operation and operation.get("independent_output"):
+            return operation.get("model_context") is self.relationships.model
         return bool(operation and self.active
                     and operation["generation"] == self._operation_generation
                     and operation["state"] is self.state
@@ -4785,19 +4904,22 @@ class VolumeSegmentationController(QtCore.QObject):
             rollback = operation.pop("rollback")
             rollback()
 
-    def _invalidate_operation(self):
+    def _invalidate_operation(self, *, force_all=False):
         self._operation_generation = getattr(self, "_operation_generation", 0) + 1
         self._pending_exact_threshold = None
-        for worker in getattr(self, "_worker_refs", {}).values():
-            worker.cancel_event.set()
+        operation = getattr(self, "_operation", None)
+        cancel_workers = force_all or not (operation and operation.get("independent_output"))
+        if cancel_workers:
+            for worker in getattr(self, "_worker_refs", {}).values():
+                worker.cancel_event.set()
         self._rollback_operation(getattr(self, "_operation", None))
-        if self._target_locked():
+        if cancel_workers and self._target_locked():
             self.panel.cancel_operation.setEnabled(False)
 
     def cancel_operation(self):
         if not self._target_locked():
             return
-        self._invalidate_operation()
+        self._invalidate_operation(force_all=True)
         self._reset_speck_adjustment()
         self.set_brush_interaction_active(False)
         self.panel.set_progress(0, "Cancelling")
@@ -4830,6 +4952,26 @@ class VolumeSegmentationController(QtCore.QObject):
         detached = vtk.vtkImageData()
         detached.ShallowCopy(image)
         return detached
+
+    @staticmethod
+    def _deep_detached_image(image):
+        if image is None:
+            return None
+        detached = vtk.vtkImageData()
+        detached.DeepCopy(image)
+        return detached
+
+    @staticmethod
+    def _tree_contains_item(tree, target):
+        pending = [tree.topLevelItem(index) for index in range(tree.topLevelItemCount())]
+        while pending:
+            item = pending.pop()
+            if item is target:
+                return True
+            pending.extend(
+                item.child(index) for index in range(item.childCount())
+            )
+        return False
 
     def _capture_computation(self, frame):
         # Metadata/pipeline wrappers are private. The scalar buffers are retained for

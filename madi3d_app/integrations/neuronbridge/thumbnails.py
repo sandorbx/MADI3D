@@ -45,10 +45,14 @@ class ThumbnailReference:
 class ThumbnailLookup:
     source: SourceIdentity
     data_version: str | None
+    library_release_from_catalog: bool = False
 
     @cached_property
     def key(self):
-        evidence = json.dumps((self.source.to_dict(), self.data_version), sort_keys=True, separators=(",", ":"))
+        identity = (self.source.to_dict(), self.data_version)
+        if self.library_release_from_catalog:
+            identity += ("library_release_from_catalog",)
+        evidence = json.dumps(identity, sort_keys=True, separators=(",", ":"))
         return "metadata:" + hashlib.sha256(evidence.encode("utf-8")).hexdigest()
 
 
@@ -72,6 +76,10 @@ def thumbnail_reference(occurrence, session):
     if session is None:
         return None
     try:
+        retained = (session.evidence_for(occurrence) if occurrence.evidence_index is not None
+                    else session.external_evidence.get(occurrence.evidence_ref, {}))
+        preview = _reference({"files": retained.get("preview_reference", {})},
+                             ("CDMBestThumbnail", "CDMBest", "CDMThumbnail", "CDM"), {})
         parameters = {p.name: p.value for p in session.parameters}
         public = session.external_evidence if session.source_kind == "precomputed" else None
         if public:
@@ -81,8 +89,8 @@ def thumbnail_reference(occurrence, session):
             if str(image.get("id")) != occurrence.target.image.image_id:
                 return None
             if parameters.get("requested_method") == "PPPM":
-                return _reference(row, ("CDMBestThumbnail", "CDMBest"), config)
-            return _reference(image, ("CDMThumbnail", "CDM"), config)
+                return preview or _reference(row, ("CDMBestThumbnail", "CDMBest"), config)
+            return preview or _reference(image, ("CDMThumbnail", "CDM"), config)
         local = session.context if session.context.get("backend") == "madi3d-local" else None
         if local:
             evidence = session.evidence_for(occurrence).get("identity", {})
@@ -94,7 +102,7 @@ def thumbnail_reference(occurrence, session):
             # qualified file URL also works when an old snapshot lacks config.
             catalog = session.external_evidence.get("catalog", {})
             config = catalog.get("config", {}).get("payload", {})
-            return _reference(image, ("CDMThumbnail", "CDM"), config)
+            return preview or _reference(image, ("CDMThumbnail", "CDM"), config)
         for asset in occurrence.target.assets:
             if asset.asset_type in {"CDMThumbnail", "CDMBestThumbnail"} and asset.url:
                 return _reference({"files": {asset.asset_type: asset.url}}, (asset.asset_type,), {})
@@ -104,18 +112,23 @@ def thumbnail_reference(occurrence, session):
 
 
 def thumbnail_request(occurrence, session):
-    """Prefer retained preview URLs; CSV may request exact metadata resolution."""
+    """Prefer retained URLs; older local results and CSV may resolve exact metadata."""
     reference = thumbnail_reference(occurrence, session)
-    if reference is not None or session is None or session.source_kind != "imported_csv":
+    if reference is not None or session is None:
         return reference
+    local = session.source_kind == "custom_query" and session.context.get("backend") == "madi3d-local"
+    if session.source_kind != "imported_csv" and not local:
+        return None
     source = occurrence.target
+    if local and not source.image.image_id:
+        return None
     if source.kind not in {"em", "lm"} or not source.library or not source.image.alignment_space:
         return None
     name = source.biological.neuron_id if source.kind == "em" else source.biological.line_name
     if not name or any(d.code in {"ambiguous_identity_field", "ambiguous_target_identity", "missing_target_identity"}
                        for d in occurrence.diagnostics):
         return None
-    return ThumbnailLookup(source, session.neuronbridge_data_version)
+    return ThumbnailLookup(source, session.neuronbridge_data_version, library_release_from_catalog=local)
 
 
 def resolve_thumbnail(request, cancel):
@@ -129,9 +142,17 @@ def resolve_thumbnail(request, cancel):
         images = (client.get_em_images(name.rsplit(":", 1)[-1]) if source.kind == "em"
                   else client.get_lm_images(name))
         _checkpoint(cancel)
-        matches = [image for image in images if not image_mismatches(source, image)]
+        matches = []
+        for image in images:
+            mismatches = image_mismatches(source, image)
+            # Local libraries declare their release in the catalog. The public
+            # image response may omit that field; an explicit conflict still fails.
+            if request.library_release_from_catalog and image.get("libraryRelease") is None:
+                mismatches.pop("libraryRelease", None)
+            if not mismatches:
+                matches.append(image)
         if len(matches) != 1:
-            raise ValueError(f"{len(matches)} published images match this CSV identity. "
+            raise ValueError(f"{len(matches)} published images match the recorded identity. "
                              "Use Public lookup to select an exact image; no preview was guessed.")
         reference = _reference(matches[0], ("CDMThumbnail", "CDM"), client.config)
         if reference is None:

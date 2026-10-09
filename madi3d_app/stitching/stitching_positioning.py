@@ -2425,6 +2425,7 @@ def _cache_key(snapshot):
         _series_index(snapshot),
         str(snapshot.get("series_identity") or ""),
         _channel_index(snapshot),
+        str(snapshot.get("channel_identity") or ""),
         _time_index(snapshot),
         _position_index(snapshot),
         selector_key,

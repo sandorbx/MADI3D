@@ -21,7 +21,9 @@ Pre-built packages are available for:
 
 ➡️ **[Download the latest MADI3D release](https://github.com/sandorbx/MADI3D/releases)**
 
-See the [changelog](CHANGELOG.md) for release changes. The capabilities below describe the prepared **0.33.0 beta**; check the Releases page for currently published packages.
+**MADI3D is also available free for Windows x64 from the [Microsoft Store](https://apps.microsoft.com/detail/9NX4SRPXVG23).** The Store and GitHub releases may receive updates at different times.
+
+See the [changelog](CHANGELOG.md) for release changes and the Releases page or Store listing for available versions.
 
 ## Install MADI3D
 
@@ -29,14 +31,18 @@ The four platform-specific MADI3D assets on the GitHub Releases page are the act
 
 ### Windows x64
 
+Install MADI3D directly from the **[Microsoft Store](https://apps.microsoft.com/detail/9NX4SRPXVG23)**, then launch it from the Start menu. Store installation does not require extracting an archive.
+
+For the portable GitHub package:
+
 1. Download `MADI3D-Windows-x64.zip` from the latest release.
 2. Extract the ZIP once to a normal writable folder.
 3. Open the extracted `MADI3D` folder and run `MADI3D.exe`.
-4. The public beta is not currently code-signed, so Windows SmartScreen may show a first-run warning. Continue only when the file came from the official MADI3D release and its checksum matches `SHA256SUMS.txt`.
+4. The GitHub Windows package is not currently code-signed, so Windows SmartScreen may show a first-run warning. Continue only when the file came from the official MADI3D release and its checksum matches `SHA256SUMS.txt`.
 
 ### Ubuntu/Linux x64
 
-The prepared 0.33.0 release targets Ubuntu 20.04 or newer on x64 (glibc 2.31 or newer). It uses the system C++ runtime and X11/xcb/OpenGL desktop libraries; minimal or headless installations may need those libraries installed. Check the notes for the release you download.
+The GitHub Linux package targets Ubuntu 20.04 or newer on x64 (glibc 2.31 or newer). It uses the system C++ runtime and X11/xcb/OpenGL desktop libraries; minimal or headless installations may need those libraries installed. Check the notes for the release you download.
 
 1. Download `MADI3D-Linux-x64.tar.gz`.
 2. Extract the archive once.
@@ -45,7 +51,7 @@ The prepared 0.33.0 release targets Ubuntu 20.04 or newer on x64 (glibc 2.31 or 
 
 ### macOS Apple Silicon
 
-Source builds with the PDFium backend require macOS 13 or newer (both Mac architectures).
+MADI3D requires macOS 13 or newer on both Mac architectures.
 
 1. Download `MADI3D-macOS-arm64.zip`.
 2. Extract the ZIP once.
@@ -76,7 +82,7 @@ MADI3D brings a range of normally separate 3D imaging tasks into one workspace:
 - landmark-assisted registration
 - interactive transforms
 - SWC and mesh visualization
-- stereoscopic 3D inspection
+- stereoscopic 3D inspection with Left-Right, Anaglyph, and Over/Under modes (left eye above right)
 - FreeFly navigation
 - photographic rendering effects
 - scientific figure preparation
@@ -192,7 +198,7 @@ The **[NeuronBridge](https://neuronbridge.janelia.org/)** workspace connects que
 
 EM results with a different sex label in the CSV and public metadata can still load thumbnails and uniquely identified geometry. Retrieval records both values and shows the discrepancy in result details and Object Info. The original CSV is preserved; conflicting library, neuron, image or alignment identities still prevent retrieval. LM image selection continues to check sex and acquisition details.
 
-Local search uses positive Color-Depth matching. Its scores are not interchangeable with every hosted NeuronBridge scoring method. Numerical reference tests do not establish biological matching accuracy or full-library performance; inspect candidates in 3D before drawing biological conclusions.
+Local search uses positive Color-Depth matching. Its scores are not interchangeable with every hosted NeuronBridge scoring method. Inspect candidates in 3D before drawing biological conclusions.
 
 ![NeuronBridge result browser with a selected candidate loaded in the MADI3D 3D scene](img/neuronbridge-search.png)
 
@@ -543,9 +549,9 @@ CZI supports scalar Gray8, Gray16 and Gray32Float data. Color/BGR pixels and uns
 
 ## 1. Download MADI3D
 
-Go to the **[Releases](https://github.com/sandorbx/MADI3D/releases)** page and download the package for your operating system.
+On Windows x64, install from the **[Microsoft Store](https://apps.microsoft.com/detail/9NX4SRPXVG23)**. For portable Windows packages, Linux or macOS, go to the **[Releases](https://github.com/sandorbx/MADI3D/releases)** page and download the package for your operating system.
 
-Extract the archive and start MADI3D. See **Install MADI3D** above for the exact package name and platform-specific first-run instructions.
+For a downloaded archive, extract it and start MADI3D. See **Install MADI3D** above for the exact package name and platform-specific first-run instructions.
 
 Packaged releases do not require a separate Python development environment.
 

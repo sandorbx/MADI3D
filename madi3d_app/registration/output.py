@@ -21,6 +21,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
+from madi3d_app.io_utils import atomic_replace
+
 
 RESULT_LAYOUTS = {"separate", "common"}
 VOLUME_FORMAT_EXTENSIONS = {
@@ -350,6 +352,42 @@ def mesh_extension(output_format: str) -> str:
         ) from exc
 
 
+def _reformat_extension(kind: str, output_format: str) -> str:
+    kind = str(kind or "").lower()
+    if kind == "volume":
+        return volume_extension(output_format)
+    if kind == "mesh":
+        return mesh_extension(output_format)
+    raise RegistrationOutputError(
+        f"Unsupported Reformat artifact kind: {kind!r}; expected 'volume' or 'mesh'."
+    )
+
+
+def _validate_reformat_paths(path: Path, name: str) -> None:
+    from madi3d_app.project.scientific_records import object_metadata_sidecar_path
+
+    if not name or name != normalize_reformat_name(name):
+        raise RegistrationOutputError(
+            f"Reformat output name {name!r} is not normalized. Normalize the "
+            "source Name before starting Reformat."
+        )
+    try:
+        temporary_path = partial_output_path(path)
+    except RegistrationOutputError as exc:
+        raise RegistrationOutputError(
+            f"Cannot publish Reformat output {name!r}: {exc}. Choose a shorter "
+            f"source Name or output root. Path: {path}"
+        ) from exc
+    for candidate in (
+        path,
+        temporary_path,
+        Path(object_metadata_sidecar_path(path)),
+        Path(object_metadata_sidecar_path(temporary_path)),
+        Path(object_metadata_sidecar_path(path) + ".publishing"),
+    ):
+        _assert_reformat_path(candidate, name)
+
+
 def registration_qc_summary(chain_payload: dict) -> dict:
     chain = copy.deepcopy(dict(chain_payload or {}))
     summaries = []
@@ -435,7 +473,7 @@ def _atomic_json(path: Path, payload: dict) -> None:
     _assert_windows_safe_path(temporary)
     try:
         temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        os.replace(temporary, path)
+        atomic_replace(temporary, path)
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise
@@ -570,6 +608,52 @@ class RegistrationOutputBundle:
         _assert_windows_safe_path(path, extra_suffix=_TEMPORARY_SUFFIX_RESERVE)
         return path
 
+    def prepare_reformat_paths(self, artifacts: Iterable[tuple[str, str, str]]) -> None:
+        """Reserve exact Reformat names by shortening this run's folder if needed.
+
+        Call before dispatch, while no worker owns output paths. Only the
+        generated run folder moves; existing artifacts and their relative
+        manifest/transform references move together within the selected root.
+        """
+        from madi3d_app.project.scientific_records import object_metadata_sidecar_path
+
+        filenames = [
+            (str(name), str(name) + _reformat_extension(kind, output_format))
+            for name, kind, output_format in artifacts
+        ]
+        if not filenames:
+            return
+        run_dir = self.run_dir.resolve()
+        category = Path("reformatted") if self.policy["layout"] == "separate" else Path()
+        # The final companion's publication barrier is longer than the partial
+        # file and its companion for every supported Reformat extension.
+        excess = max(
+            _windows_text_units(object_metadata_sidecar_path(run_dir / category / filename) + ".publishing")
+            - WINDOWS_SAFE_PATH_BUDGET
+            for _name, filename in filenames
+        )
+        if excess > 0:
+            capacity = _windows_text_units(run_dir.name) - excess
+            if capacity < _MIN_COMPACTED_COMPONENT_UNITS:
+                raise _short_result_root_error(run_dir.parent)
+            component = bounded_output_component(
+                run_dir.name, capacity, hash_source=f"{self.label}--{self.run_id}",
+            )
+            destination = run_dir.with_name(component)
+        else:
+            destination = run_dir
+        # Validate the entire invocation before moving anything, including
+        # portable component limits and names that cannot fit even at the root.
+        for name, filename in filenames:
+            _validate_reformat_paths(destination / category / filename, name)
+        if destination != run_dir:
+            if destination.exists():
+                raise RegistrationOutputError(
+                    f"Registration result folder already exists; refusing to overwrite it: {destination}"
+                )
+            run_dir.rename(destination)
+            self.run_dir = destination
+
     def reformat_artifact_path(self, name: str, kind: str, format: str) -> Path:
         """Return a Reformat artifact path without hashing or truncating ``name``.
 
@@ -578,20 +662,7 @@ class RegistrationOutputBundle:
         companion paths are checked before a worker starts.
         """
         name = str(name)
-        if not name or name != normalize_reformat_name(name):
-            raise RegistrationOutputError(
-                f"Reformat output name {name!r} is not normalized. Normalize the "
-                "source Name before starting Reformat."
-            )
-        kind = str(kind or "").lower()
-        if kind == "volume":
-            extension = volume_extension(format)
-        elif kind == "mesh":
-            extension = mesh_extension(format)
-        else:
-            raise RegistrationOutputError(
-                f"Unsupported Reformat artifact kind: {kind!r}; expected 'volume' or 'mesh'."
-            )
+        extension = _reformat_extension(kind, format)
 
         parent = (
             self.run_dir / "reformatted"
@@ -599,24 +670,7 @@ class RegistrationOutputBundle:
             else self.run_dir
         )
         path = parent / f"{name}{extension}"
-        from madi3d_app.project.scientific_records import object_metadata_sidecar_path
-
-        try:
-            temporary_path = partial_output_path(path)
-        except RegistrationOutputError as exc:
-            raise RegistrationOutputError(
-                f"Cannot publish Reformat output {name!r}: {exc}. Choose a shorter "
-                f"source Name or output root. Path: {path}"
-            ) from exc
-        paths = (
-            path,
-            temporary_path,
-            Path(object_metadata_sidecar_path(path)),
-            Path(object_metadata_sidecar_path(temporary_path)),
-            Path(object_metadata_sidecar_path(path) + ".publishing"),
-        )
-        for candidate in paths:
-            _assert_reformat_path(candidate, name)
+        _validate_reformat_paths(path, name)
         if self.policy["layout"] == "separate":
             parent.mkdir(parents=True, exist_ok=True)
         return path

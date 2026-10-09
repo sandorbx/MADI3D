@@ -1624,6 +1624,19 @@ def _cmtk_linear_backend_ui_state(manager):
     }
 
 
+def recommended_registration_threads():
+    """Bound automatic thread choices and leave one available CPU for the UI."""
+    process_count = getattr(os, "process_cpu_count", os.cpu_count)
+    available = process_count() or 1
+    affinity = getattr(os, "sched_getaffinity", None)
+    if affinity is not None:
+        try:
+            available = min(available, len(affinity(0)))
+        except OSError:
+            pass
+    return min(8, max(1, int(available) - 1))
+
+
 def _cmtk_linear_settings_from_registration(settings):
     """Map common registration settings onto the first-class CMTK linear runner."""
     settings = dict(settings or {})
@@ -4225,9 +4238,14 @@ class ReformatWorker(QtCore.QThread):
 
                     if engine == "cmtk":
                         frame_workspace = temp_root / f"task-{task_index:04d}-frame-{frame_index:04d}"
-                        out_array = self._cmtk_reformat_frame(
-                            frame, task, interpolation, dtype_mode, cmtk_runner, frame_workspace
-                        )
+                        try:
+                            out_array = self._cmtk_reformat_frame(
+                                frame, task, interpolation, dtype_mode, cmtk_runner, frame_workspace
+                            )
+                        finally:
+                            # The helper fully reads and validates the frame before
+                            # returning; later frames need no completed staging files.
+                            shutil.rmtree(frame_workspace, ignore_errors=True)
                     else:
                         out_array = self._itk_reformat_frame(
                             frame, task, interpolation, dtype_mode, frame_progress
