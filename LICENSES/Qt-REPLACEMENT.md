@@ -87,10 +87,43 @@ see diagnostics. If macOS requests approval, use its normal **Open** or
 
 ## Microsoft Store / MSIX
 
-These instructions cover the ordinary ZIP/TAR.GZ/app bundles. A signed Store
-installation can impose additional replacement and execution restrictions.
-Store/MSIX distribution requires a separate review of the actual signed package,
-Store terms and a demonstrated way for recipients to run compatible modified
-libraries. Producing or installing an MSIX is not that review. The MADI3D Store
-workflow is gated until that review is recorded; use the ordinary Windows ZIP
-for the documented replacement procedure.
+Keep the installed Store package intact. Windows protects installed package
+files, so use a separate writable application copy for compatible replacements.
+Close MADI3D, then run the following in PowerShell as the user who installed it:
+
+```powershell
+$package = Get-AppxPackage -Name Sandorbx.MADI3D
+if ($null -eq $package) { throw "Install MADI3D from the Microsoft Store first." }
+$replacement = Join-Path $env:LOCALAPPDATA ("MADI3D-Qt-replacement-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $replacement | Out-Null
+Copy-Item -LiteralPath (Join-Path $package.InstallLocation "MADI3D.exe") -Destination $replacement
+Copy-Item -LiteralPath (Join-Path $package.InstallLocation "_internal") -Destination $replacement -Recurse
+Write-Output $replacement
+```
+
+Replace compatible components under `$replacement\_internal\PySide6` and
+`$replacement\_internal\shiboken6` as described above, keeping the relative
+layout and matching native plugins. Remove stale `__pycache__` entries for the
+Python files you change. Run the modified copy normally:
+
+```powershell
+& (Join-Path $replacement "MADI3D.exe")
+```
+
+This runs the application as an ordinary desktop executable outside the Store
+package. It requires neither a MADI3D signing key nor a new signing certificate.
+Do not take ownership of WindowsApps, disable package protection, or change the
+installed copy. The modified copy uses the application's ordinary local settings
+and data locations; preserve your projects and preferences before experimenting.
+To restore the original application, close the modified copy and launch MADI3D
+from the Store/Start menu. The separate replacement folder can then be removed.
+Store updates do not update this separate copy; create a fresh copy when needed.
+
+On 8 October 2026 this procedure was tested without elevation on Windows 11 Pro
+build 26200, with the Store-installed x64 package `2026.10.7.0` (MADI3D 0.33.03),
+Python 3.11.9 and Qt/PySide/Shiboken 6.9.3.
+A deliberate change to the copied PySide Python module executed. A separate
+test changed the copied native QtCore library's version-string data: the modified
+library loaded without re-signing, its marker was observed, and the normal MADI3D
+main window rendered and exited successfully. This tested modified source-module
+and native-library execution; it did not compile Qt from source.
