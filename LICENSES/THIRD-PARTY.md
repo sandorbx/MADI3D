@@ -14,10 +14,7 @@ records hashes of the final native files. Neither file is a runtime integrity
 restriction on replacement libraries.
 
 Corresponding-source artifacts are generated from `THIRD-PARTY-SOURCES.json`
-and tied to each final package's SHA-256 and native inventory. Release readiness
-requires verification of archive contents, exact binary/source associations,
-recipes, patches and notices. Deleting a blocker record does not supply missing
-evidence. Incomplete diagnostic source artifacts remain explicitly blocked.
+and tied to each final package's SHA-256 and native inventory.
 
 The build copies original copyright, license, NOTICE and patent files from
 **collected distributions only** into `LICENSES/bundled/`. This includes native
