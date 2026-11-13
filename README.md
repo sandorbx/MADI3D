@@ -728,8 +728,7 @@ Releases carrying this notice provide the exact Qt and Qt for Python source
 archives as free assets alongside the binaries in the
 [MADI3D release repository](https://github.com/sandorbx/MADI3D/releases).
 The license expressly permits compatible library replacement and reverse
-engineering for debugging those modifications. Store/MSIX distribution requires
-a separate review of replacement and execution rights.
+engineering for debugging those modifications.
 
 ---
 
