@@ -7,40 +7,42 @@ MADI3D uses its verified managed binary for H5J and does not discover FFmpeg on
 the system PATH. If the managed binary is unavailable, the user may explicitly
 choose to download the pinned managed binary. MADI3D stores it in the current
 user's application-data directory, verifies it against a pinned SHA-256 checksum
-before use, and does not add it to the system PATH.
+before use, and does not add it to the system PATH. Installation downloads a
+pinned ZIP or TAR.XZ archive, verifies its SHA-256 checksum, streams only the pinned
+executable member to a temporary file, verifies that file's SHA-256 checksum,
+and then atomically installs it.
 
 ## Managed FFmpeg build
 
-Provider/build project: Shaka Project `static-ffmpeg-binaries`
+Provider/build projects: BtbN `FFmpeg-Builds` for Windows and Linux, and Martin
+Riedl's FFmpeg build service for macOS.
 
-Pinned release: `n8.1.2-1`
+Pinned release identity: `9.0.2-h5j12-2`
 
-FFmpeg version: `n8.1.2`
+FFmpeg version: `9.0.2`
 
-Build/release source:
-https://github.com/shaka-project/static-ffmpeg-binaries/tree/n8.1.2-1
+Build/release sources:
+https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-09-30-13-08
+https://ffmpeg.martin-riedl.de/
 
-The tag resolved to build-source revision
-`88caac417541f3bb678fa6670cb73f2d74c7aaf9` when audited on 2026-09-13.
-`versions.txt` and `build-scripts/` at that revision identify the component
-versions, patches and build flags. All four managed asset SHA-256 values in
-MADI3D's backend matched the provider's published asset digests on that date.
+Windows and Linux use the retained September monthly build. BtbN retains monthly
+builds for two years; daily-build URLs expire after fourteen builds. The macOS
+pins are unchanged. Both archive and executable checksums remain mandatory.
 
-Release assets:
-https://github.com/shaka-project/static-ffmpeg-binaries/releases/tag/n8.1.2-1
-
-The provider builds FFmpeg and its dependencies from source. The pinned build
-includes x265 and configures FFmpeg with `--enable-gpl --enable-version3`. The
-provider states that the resulting FFmpeg binaries are published under the GPL.
+The selected builds include x265 8-, 10- and 12-bit support and are licensed
+under GPL version 3 or later. Their platform-specific ZIP or TAR.XZ archive and
+extracted executable SHA-256 values are pinned in MADI3D's FFmpeg backend. The
+Windows and Linux builds are GPL-enabled with nonfree components disabled.
 
 FFmpeg project and source:
 https://ffmpeg.org/
 https://ffmpeg.org/download.html
 
-x265 source used by the provider build:
-https://bitbucket.org/multicoreware/x265_git/src/4.2/
+x265 project and source:
+https://bitbucket.org/multicoreware/x265_git/
 
-The verified executable and source identities are recorded in `EXTERNAL-TOOLS.json`.
+The verified archive and executable identities are pinned in MADI3D's FFmpeg
+backend. MADI3D does not include these executables in its installer.
 
 The GNU General Public License version 3 text distributed with MADI3D is in:
 `LICENSES/ffmpeg-gplv3.txt`.

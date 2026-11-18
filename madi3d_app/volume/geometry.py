@@ -15,6 +15,7 @@ from typing import Any, Mapping
 import numpy as np
 
 
+DEFAULT_FLIP_REFERENCES = {"x": 627.76, "y": 0.0, "z": 0.0}
 GRID_NUMERICAL_TOLERANCE = 1e-9
 WORKING_COORDINATE_MODE_PHYSICAL = "physical-grid"
 WORKING_COORDINATE_MODE_NUMERICAL = "working-grid"
@@ -180,7 +181,13 @@ def physical_grid_mismatches(reference, candidate) -> tuple[str, ...]:
         ("coordinate_space_id", "coordinate-space identity"),
     )
     for field_name, label in exact_fields:
-        if getattr(reference, field_name) != getattr(candidate, field_name):
+        if field_name == "time_units":
+            reference_value = canonical_time_unit(getattr(reference, field_name))
+            candidate_value = canonical_time_unit(getattr(candidate, field_name))
+        else:
+            reference_value = getattr(reference, field_name)
+            candidate_value = getattr(candidate, field_name)
+        if reference_value != candidate_value:
             mismatches.append(label)
     numerical_fields = (
         ("spacing", "spacing"),
@@ -624,6 +631,18 @@ class VolumeWorkingGrid:
             "direction": self.direction,
         }
 
+    @property
+    def sample_bounds(self) -> tuple[float, ...]:
+        """Local sample-center AABB, matching VTK image bounds (not cell support)."""
+        corners = np.asarray([
+            (x, y, z, 1.0)
+            for x in (0, self.dimensions[0] - 1)
+            for y in (0, self.dimensions[1] - 1)
+            for z in (0, self.dimensions[2] - 1)
+        ])
+        points = (np.asarray(self.local_index_to_working_affine) @ corners.T).T[:, :3]
+        return tuple(float(value) for pair in zip(points.min(axis=0), points.max(axis=0)) for value in pair)
+
     def state_metadata(self) -> dict[str, Any]:
         """Return runtime metadata without promoting assumptions to calibration."""
         metadata = {
@@ -767,10 +786,26 @@ def affine_matrix4(value, name="Transform") -> np.ndarray:
     return matrix
 
 
+def _require_finite_inverse(matrix, name):
+    """Check numerical invertibility without a unit-dependent determinant cutoff.
+
+    A finite inverse is the operational requirement. Conditioning limits, when
+    needed by an algorithm, are a separate policy from singularity.
+    """
+    try:
+        with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+            inverse = np.linalg.inv(matrix)
+    except np.linalg.LinAlgError as exc:
+        raise ValueError(f"{name} is singular.") from exc
+    if not np.all(np.isfinite(inverse)):
+        raise ValueError(f"{name} has no finite inverse.")
+
+
 def invertible_affine4(value, name="Transform") -> np.ndarray:
     matrix = affine_matrix4(value, name)
-    if abs(float(np.linalg.det(matrix[:3, :3]))) <= 1e-12:
-        raise ValueError(f"{name} is singular.")
+    # Tolerated homogeneous-row noise must not make a singular spatial basis valid.
+    _require_finite_inverse(matrix[:3, :3], name)
+    _require_finite_inverse(matrix, name)
     return matrix
 
 
@@ -780,8 +815,7 @@ def direction_matrix3(value, *, require_orthogonal=False) -> np.ndarray:
         raise ValueError("Direction must be a 3 x 3 matrix.")
     if not np.all(np.isfinite(matrix)):
         raise ValueError("Direction contains a non-finite value.")
-    if abs(float(np.linalg.det(matrix))) <= 1e-12:
-        raise ValueError("Direction matrix is singular.")
+    _require_finite_inverse(matrix, "Direction matrix")
     if require_orthogonal and not np.allclose(
         matrix.T @ matrix, np.eye(3), rtol=1e-6, atol=1e-6
     ):
@@ -819,8 +853,8 @@ def general_grid_affine_from_components(origin, spacing, direction):
 def grid_components_from_affine(affine):
     affine = affine_matrix4(affine, "Grid affine")
     linear = affine[:3, :3]
-    spacing = np.linalg.norm(linear, axis=0)
-    if np.any(~np.isfinite(spacing)) or np.any(spacing <= 1e-12):
+    spacing = np.hypot.reduce(linear, axis=0)
+    if np.any(~np.isfinite(spacing)) or np.any(spacing <= 0.0):
         raise ValueError("Grid affine contains zero, negative, or invalid spacing.")
     direction = linear / spacing[np.newaxis, :]
     direction_matrix3(direction)
@@ -914,6 +948,57 @@ def canonical_space_units(value):
     if len(set(units)) != 1:
         raise ValueError("All three spatial axes must use the same physical unit.")
     return tuple(units)
+
+
+def spatial_unit_scale(source_unit: str, target_unit: str) -> float:
+    """Exact decimal scale between canonical physical units, without calibration.
+
+    Callers retain their explicit numerical policy when either unit is unknown.
+    Exponent subtraction avoids ratio roundoff that can move edge samples outside
+    an otherwise identical source grid (for example mm to micron).
+    """
+    exponents = {"nm": -9, "micron": -6, "mm": -3, "cm": -2, "m": 0}
+    return 10. ** (exponents[source_unit] - exponents[target_unit])
+
+
+# Alias-only temporal comparison keys. These are comparison keys, never
+# replacement source evidence, and no numerical interval conversion happens
+# here: 1 s and 1000 ms remain distinct values under this policy.
+_TIME_UNIT_ALIASES = {
+    "s": "sec",
+    "sec": "sec",
+    "second": "sec",
+    "seconds": "sec",
+    "ms": "msec",
+    "msec": "msec",
+    "millisecond": "msec",
+    "milliseconds": "msec",
+    "us": "usec",
+    "usec": "usec",
+    "µs": "usec",
+    # Unicode case folding maps MICRO SIGN to GREEK SMALL LETTER MU.
+    "μs": "usec",
+    "microsecond": "usec",
+    "microseconds": "usec",
+    "frame": "frame",
+    "frames": "frame",
+}
+
+
+def canonical_time_unit(value):
+    """Return the pure comparison key for one temporal unit label.
+
+    Missing or empty labels return ``None``. Unrecognized labels return their
+    casefolded, stripped text so the same unknown label keeps comparing equal
+    to itself without inventing physical meaning. Missing, unknown, and frame
+    units never collapse into one another.
+    """
+    if value is None:
+        return None
+    text = str(value).strip().casefold()
+    if not text:
+        return None
+    return _TIME_UNIT_ALIASES.get(text, text)
 
 
 def _working_raw_present(value: Any) -> bool:
@@ -1538,49 +1623,12 @@ def world_to_index_points(points_xyz, index_to_world):
     return index_to_world_points(points_xyz, world_to_index_affine(index_to_world))
 
 
-def geometry_record_from_components(
-    *,
-    dimensions,
-    spacing,
-    spatial_units,
-    origin,
-    direction,
-    pose,
-    time_point_count=1,
-    time_interval=1.0,
-    time_units="frame",
-    coordinate_space_id_value,
-):
-    """Build a validated model record from canonical grid components."""
-    from .model import VolumeGeometryRecord
-
-    grid = AcquisitionPhysicalGrid(
-        dimensions=dimensions,
-        spacing=spacing,
-        spatial_units=spatial_units,
-        origin=origin,
-        direction=direction,
-        time_point_count=time_point_count,
-        time_interval=time_interval,
-        time_units=time_units,
-        coordinate_space_id=coordinate_space_id_value,
-    )
-    pose_matrix = invertible_affine4(pose, "Volume pose")
-    world_affine = grid.world_affine(pose_matrix)
-    return VolumeGeometryRecord(
-        dimensions=grid.dimensions,
-        spacing=grid.spacing,
-        spatial_units=grid.spatial_units,
-        origin=grid.origin,
-        direction=grid.direction,
-        index_to_world_affine=world_affine.tolist(),
-        effective_support=grid.world_support_bounds(pose_matrix),
-        pose=pose_matrix.tolist(),
-        time_point_count=grid.time_point_count,
-        time_interval=grid.time_interval,
-        time_units=grid.time_units,
-        coordinate_space_id=grid.coordinate_space_id,
-    )
+def local_axis_flip_matrix(axis_index, reference):
+    """Return the local reflection axis' = reference - axis (index 0/1/2)."""
+    matrix = np.eye(4, dtype=float)
+    matrix[axis_index, axis_index] = -1.0
+    matrix[axis_index, 3] = reference
+    return matrix
 
 
 def geometry_record_to_mapping(record) -> dict[str, Any]:
@@ -1592,6 +1640,7 @@ def geometry_record_to_mapping(record) -> dict[str, Any]:
 
 __all__ = [
     "AcquisitionPhysicalGrid",
+    "DEFAULT_FLIP_REFERENCES",
     "GRID_NUMERICAL_TOLERANCE",
     "PhysicalGridObservation",
     "RegistryGrid",
@@ -1608,11 +1657,11 @@ __all__ = [
     "affine_matrix4",
     "affine_support_bounds",
     "canonical_space_units",
+    "canonical_time_unit",
     "coordinate_space_id",
     "direction_matrix3",
     "finite_tuple3",
     "flattened_support_bounds",
-    "geometry_record_from_components",
     "geometry_record_to_mapping",
     "geometry_values_equivalent",
     "general_grid_affine_from_components",
@@ -1621,6 +1670,7 @@ __all__ = [
     "json_safe_source_value",
     "index_to_world_points",
     "invertible_affine4",
+    "local_axis_flip_matrix",
     "physical_grid_mismatches",
     "registry_grid_from_snapshot",
     "working_grid_geometry_status",

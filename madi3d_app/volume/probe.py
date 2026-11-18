@@ -8,11 +8,13 @@ import math
 import os
 import re
 import xml.etree.ElementTree as ET
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import asdict, dataclass, field
 from typing import Any, Optional
 
 import numpy as np
+
+from madi3d_app.io_utils import resolve_file_locator
 
 from .geometry import (
     canonical_space_units,
@@ -123,6 +125,9 @@ class VolumeSourceProbe:
     ] = None
     microscopy_channel_metadata: tuple[MicroscopyChannelMetadata, ...] = ()
     authored_metadata_error: str = ""
+    # Transient reader capabilities and decisions, never scientific state.
+    resolvable_axis_indices: tuple[int, ...] = ()
+    channel_order_required: bool = False
 
     @property
     def is_multichannel(self) -> bool:
@@ -476,6 +481,7 @@ def _probe_h5j(
     physical_geometry_diagnostics = []
     ambiguities = []
     resolution_required = False
+    channel_order_required = False
     manager = nullcontext(h5_file) if h5_file is not None else h5py.File(path, "r")
     with manager as handle:
         group = handle.get("/Channels")
@@ -502,6 +508,7 @@ def _probe_h5j(
         if not names:
             errors.append("H5J /Channels group contains no channels.")
         elif len(names) > 1 and not explicit_order:
+            channel_order_required = True
             ambiguities.append(
                 "H5J channel order is not explicit; choose and persist the intended channel order before import."
             )
@@ -584,22 +591,48 @@ def _probe_h5j(
                 )
             ]
         else:
-            for key in ("dimensions", "volume_size", "image_size"):
-                raw = handle.attrs.get(key)
+            # Encoded H5J channels are 1-D byte streams. Prefer /Channels
+            # width/height/frames — the same authority decode uses — before
+            # root attrs. Some FlyLight/Janelia-adjacent files store physical
+            # extent (spacing * voxel counts) in root image_size, which is not
+            # an integer voxel axis contract.
+            values = ()
+            if all(key in group.attrs for key in ("width", "height", "frames")):
                 try:
-                    values = tuple(int(value) for value in np.asarray(raw).reshape(-1)[:3])
-                except Exception:
-                    values = ()
-                if len(values) == 3 and all(value > 0 for value in values):
-                    dimensions = values
-                    logical_axes = ("Z", "Y", "X")
-                    axis_semantics = [
-                        AxisSemantic(1, dimensions[2], "space-z", "Z"),
-                        AxisSemantic(2, dimensions[1], "space-y", "Y"),
-                        AxisSemantic(3, dimensions[0], "space-x", "X"),
-                    ]
-                    break
-            if names and not dimensions:
+                    values = finite_tuple3(
+                        (
+                            np.asarray(group.attrs["width"]).reshape(-1)[0],
+                            np.asarray(group.attrs["height"]).reshape(-1)[0],
+                            np.asarray(group.attrs["frames"]).reshape(-1)[0],
+                        ),
+                        "H5J encoded size",
+                        positive=True,
+                        integer=True,
+                    )
+                except (TypeError, ValueError, IndexError):
+                    errors.append("H5J /Channels width, height, and frames must contain positive integer dimensions.")
+            else:
+                for key in ("dimensions", "volume_size", "image_size"):
+                    raw = handle.attrs.get(key)
+                    try:
+                        values = finite_tuple3(
+                            np.asarray(raw).reshape(-1), "H5J dimensions",
+                            positive=True, integer=True,
+                        ) if raw is not None else ()
+                    except ValueError as exc:
+                        errors.append(str(exc))
+                        values = ()
+                    if values:
+                        break
+            if values:
+                dimensions = values
+                logical_axes = ("Z", "Y", "X")
+                axis_semantics = [
+                    AxisSemantic(1, dimensions[2], "space-z", "Z"),
+                    AxisSemantic(2, dimensions[1], "space-y", "Y"),
+                    AxisSemantic(3, dimensions[0], "space-x", "X"),
+                ]
+            elif names:
                 missing_dimensions = (
                     "H5J encoded channel dimensions are not present in container metadata."
                 )
@@ -775,6 +808,7 @@ def _probe_h5j(
         raw_fields=raw_fields,
         physical_geometry_diagnostics=tuple(physical_geometry_diagnostics),
         resolution_required=resolution_required,
+        channel_order_required=channel_order_required,
         resolution_provenance=tuple(resolution_provenance),
         madi3d_geometry_provenance=madi3d_geometry,
         authored_metadata_error=madi3d_geometry_error,
@@ -810,6 +844,71 @@ def ome_series_metadata(
         return names, dict(pixels.attrib), identity
     except Exception:
         return (), {}, ""
+
+
+def tiff_time_metadata(
+    imagej: dict[str, Any],
+    lsm_metadata: dict[str, Any],
+    ome_pixels: dict[str, Any],
+    *,
+    is_lsm: bool,
+    time_axis_length: int,
+) -> tuple[float, str]:
+    """Resolve the temporal interval and units for one selected TIFF series.
+
+    This is the single TIFF timing interpretation shared by the header probe
+    and the payload decoder so the acquisition model and the loaded container
+    describe the same timing. A metadata field never creates a temporal
+    dimension: a Zeiss LSM series without a resolved time axis (or with a
+    length-1 T axis) stays an ordinary static volume at ``1.0 frame``, and
+    its header ``TimeIntervall`` remains raw source evidence instead of an
+    effective frame interval. For a genuinely multitimepoint LSM series,
+    producer-specific Zeiss LSM timing keeps precedence over generic
+    ImageJ/OME fields, and only finite positive intervals are honored;
+    otherwise the existing ``1.0 frame`` default stays.
+
+    Presence is tracked separately from the numeric value, so an acquisition
+    that explicitly records an interval of ``1.0`` keeps that value instead of
+    being mistaken for un-calibrated metadata and re-read from a
+    lower-priority field.
+    """
+    if is_lsm and int(time_axis_length) <= 1:
+        return 1.0, "frame"
+    selected_interval: Optional[float] = None
+    for key in ("finterval", "timeincrement", "TimeIncrement"):
+        try:
+            value = float(imagej.get(key))
+            if math.isfinite(value) and value > 0:
+                selected_interval = value
+                break
+        except Exception:
+            pass
+    if selected_interval is None:
+        try:
+            value = float(ome_pixels.get("TimeIncrement"))
+            if math.isfinite(value) and value > 0:
+                selected_interval = value
+        except Exception:
+            pass
+    if is_lsm:
+        try:
+            lsm_interval = float(lsm_metadata.get("TimeIntervall"))
+        except (TypeError, ValueError):
+            lsm_interval = math.nan
+        if math.isfinite(lsm_interval) and lsm_interval > 0:
+            selected_interval = lsm_interval
+        time_units = "s"
+    else:
+        time_units = str(
+            imagej.get("tunit")
+            or imagej.get("timeunit")
+            or ome_pixels.get("TimeIncrementUnit")
+            or "frame"
+        )
+    return (
+        1.0 if selected_interval is None else selected_interval,
+        time_units,
+    )
 
 
 def _resolution_spacing(
@@ -1014,6 +1113,43 @@ def _resolved_tiff_labels(labels, shape, decisions):
     return labels, tuple(applied)
 
 
+@contextmanager
+def open_tiff_source(tiff_file, path):
+    """Open TIFF with native OME companion locators for tifffile's series reader."""
+    with tiff_file(path) as tiff:
+        xml = getattr(tiff, "ome_metadata", None)
+        native_xml = None
+        if os.sep == "/" and isinstance(xml, str) and "\\" in xml:
+            try:
+                root = ET.fromstring(xml)
+            except ET.ParseError:
+                pass  # Let tifffile handle malformed OME metadata.
+            else:
+                base = os.path.dirname(os.path.abspath(path))
+                changed = False
+                for data in root.iter():
+                    if data.tag.rsplit("}", 1)[-1] != "TiffData":
+                        continue
+                    for uuid in data:
+                        name = uuid.get("FileName", "")
+                        if (uuid.tag.rsplit("}", 1)[-1] != "UUID"
+                                or "\\" not in name or os.path.isabs(name)):
+                            continue
+                        resolved = resolve_file_locator(name, base)
+                        if os.path.isabs(resolved):
+                            native = os.path.relpath(resolved, base)
+                            if native != name:
+                                uuid.set("FileName", native)
+                                changed = True
+                if changed:
+                    native_xml = ET.tostring(root, encoding="unicode")
+        if native_xml is None:
+            yield tiff, xml
+            return
+    with tiff_file(path, omexml=native_xml) as tiff:
+        yield tiff, xml
+
+
 def _probe_tiff(
     path: str,
     *,
@@ -1032,11 +1168,11 @@ def _probe_tiff(
     physical_geometry_diagnostics = []
     resolution_provenance = []
     manager = (
-        nullcontext(tiff_file)
+        nullcontext((tiff_file, None))
         if tiff_file is not None
-        else tifffile.TiffFile(path)
+        else open_tiff_source(tifffile.TiffFile, path)
     )
-    with manager as tf:
+    with manager as (tf, _):
         is_lsm = bool(getattr(tf, "is_lsm", False))
         path_format = volume_source_format(path)
         if path_format is not None and path_format.key == "lsm" and not is_lsm:
@@ -1599,37 +1735,13 @@ def _probe_tiff(
                 }
             )
         time_count = int(shape[semantics.index("time")]) if "time" in semantics else 1
-        time_interval = 1.0
-        for key in ("finterval", "timeincrement", "TimeIncrement"):
-            try:
-                value = float(imagej.get(key))
-                if math.isfinite(value) and value > 0:
-                    time_interval = value
-                    break
-            except Exception:
-                pass
-        if time_interval == 1.0:
-            try:
-                value = float(ome_pixels.get("TimeIncrement"))
-                if math.isfinite(value) and value > 0:
-                    time_interval = value
-            except Exception:
-                pass
-        if is_lsm:
-            try:
-                lsm_interval = float(lsm_metadata.get("TimeIntervall"))
-            except (TypeError, ValueError):
-                lsm_interval = math.nan
-            if math.isfinite(lsm_interval) and lsm_interval > 0:
-                time_interval = lsm_interval
-            time_units = "s"
-        else:
-            time_units = str(
-                imagej.get("tunit")
-                or imagej.get("timeunit")
-                or ome_pixels.get("TimeIncrementUnit")
-                or "frame"
-            )
+        time_interval, time_units = tiff_time_metadata(
+            imagej,
+            lsm_metadata,
+            ome_pixels,
+            is_lsm=is_lsm,
+            time_axis_length=time_count,
+        )
         raw_field_values = dict(
             dimensions=_spatial_dimensions(shape, semantics),
             resolution=raw_resolution,
@@ -1665,6 +1777,7 @@ def _probe_tiff(
                         name: lsm_scan_info.get(name)
                         for name in ("Rotation", "Nutation", "Precession")
                     },
+                    "lsm_time_intervall": lsm_metadata.get("TimeIntervall"),
                     "lsm_time_stamps": lsm_metadata.get("TimeStamps"),
                     "source_subselection": dict(selected_scene),
                 }
@@ -1741,6 +1854,8 @@ def _probe_tiff(
         raw_fields=raw_fields,
         physical_geometry_diagnostics=tuple(physical_geometry_diagnostics),
         resolution_required=bool(unknown) or channel_order_ambiguous,
+        resolvable_axis_indices=tuple(unknown),
+        channel_order_required=channel_order_ambiguous,
         resolution_provenance=tuple(resolution_provenance),
         madi3d_geometry_provenance=madi3d_geometry,
         authored_metadata_error=madi3d_geometry_error,
@@ -1791,6 +1906,60 @@ def _nrrd_scalar_descriptor(value):
     }
     raw = _decoded(value).strip().lower()
     return scalar_descriptor(aliases.get(raw, raw))
+
+
+def _resolved_nrrd_semantics(semantics, labels, kinds, decisions):
+    """Apply the NRRD reader's explicit semantic decisions to metadata only."""
+    applied_axis_resolution = []
+    semantics = list(semantics)
+    errors = []
+    decisions = dict(decisions or {})
+    aliases = {
+        "x": "space-x",
+        "y": "space-y",
+        "z": "space-z",
+        "c": "channel",
+        "t": "time",
+        "s": "component",
+    }
+    for index, semantic in enumerate(tuple(semantics)):
+        if semantic not in {"component", "unknown"}:
+            continue
+        decision = decisions.get(
+            index,
+            decisions.get(
+                str(index),
+                decisions.get(labels[index], decisions.get(kinds[index])),
+            ),
+        )
+        if decision in (None, ""):
+            continue
+        resolved = aliases.get(
+            str(decision).strip().lower(), str(decision).strip().lower()
+        )
+        if resolved not in {
+            "channel",
+            "component",
+            "time",
+            "space-x",
+            "space-y",
+            "space-z",
+        }:
+            errors.append(
+                f"Unsupported NRRD axis-resolution decision {decision!r} "
+                f"for axis {index}."
+            )
+            continue
+        semantics[index] = resolved
+        applied_axis_resolution.append(
+            {
+                "axis_index": index,
+                "source_label": labels[index] or kinds[index],
+                "semantic": resolved,
+            }
+        )
+
+    return semantics, applied_axis_resolution, errors
 
 
 def _probe_nrrd(
@@ -1912,52 +2081,10 @@ def _probe_nrrd(
             semantics[index] = missing
             assigned_spatial.add(missing)
 
-    applied_axis_resolution = []
-    decisions = dict(axis_resolution or {})
-    aliases = {
-        "x": "space-x",
-        "y": "space-y",
-        "z": "space-z",
-        "c": "channel",
-        "t": "time",
-        "s": "component",
-    }
-    for index, semantic in enumerate(tuple(semantics)):
-        if semantic not in {"component", "unknown"}:
-            continue
-        decision = decisions.get(
-            index,
-            decisions.get(
-                str(index),
-                decisions.get(labels[index], decisions.get(kinds[index])),
-            ),
-        )
-        if decision in (None, ""):
-            continue
-        resolved = aliases.get(
-            str(decision).strip().lower(), str(decision).strip().lower()
-        )
-        if resolved not in {
-            "channel",
-            "component",
-            "time",
-            "space-x",
-            "space-y",
-            "space-z",
-        }:
-            errors.append(
-                f"Unsupported NRRD axis-resolution decision {decision!r} "
-                f"for axis {index}."
-            )
-            continue
-        semantics[index] = resolved
-        applied_axis_resolution.append(
-            {
-                "axis_index": index,
-                "source_label": labels[index] or kinds[index],
-                "semantic": resolved,
-            }
-        )
+    semantics, applied_axis_resolution, resolution_errors = _resolved_nrrd_semantics(
+        semantics, labels, kinds, axis_resolution
+    )
+    errors.extend(resolution_errors)
 
     for semantic, label in (
         ("channel", "channel"),
@@ -2105,6 +2232,10 @@ def _probe_nrrd(
     return VolumeSourceProbe(
         container_format="nhdr" if path.lower().endswith(".nhdr") else "nrrd",
         series_identity="header",
+        resolvable_axis_indices=tuple(
+            index for index, semantic in enumerate(semantics)
+            if semantic in {"component", "unknown"} and shape[index] > 1
+        ),
         axis_semantics=tuple(
             AxisSemantic(index, shape[index], semantics[index], labels[index] or kinds[index])
             for index in range(count)
@@ -2241,14 +2372,16 @@ def _probe_nifti(path: str, *, image=None) -> VolumeSourceProbe:
     else:
         origin = _optional_vector3(affine[:3, 3])
         linear = affine[:3, :3]
-        spacing = np.linalg.norm(linear, axis=0)
-        if np.any(~np.isfinite(spacing)) or np.any(spacing <= 1e-12):
+        spacing = np.hypot.reduce(linear, axis=0)
+        if np.any(~np.isfinite(spacing)) or np.any(spacing <= 0.0):
             physical_geometry_diagnostics.append(
                 "NIfTI voxel-to-world affine has invalid spatial spacing."
             )
         else:
             direction = linear / spacing
-            if abs(float(np.linalg.det(direction))) < 1e-12:
+            try:
+                direction_matrix3(direction)
+            except ValueError:
                 physical_geometry_diagnostics.append(
                     "NIfTI voxel-to-world direction is singular."
                 )
@@ -3055,6 +3188,11 @@ def _probe_olympus(
         raw_fields=copy.deepcopy(selected.raw_fields),
         physical_geometry_diagnostics=selected.physical_geometry_diagnostics,
         resolution_required=unknown or channel_order_ambiguous,
+        resolvable_axis_indices=tuple(
+            index for index, semantic in enumerate(semantics)
+            if semantic == "unknown" and shape[index] > 1
+        ),
+        channel_order_required=channel_order_ambiguous,
         resolution_provenance=tuple(resolution_provenance),
         microscopy_source_metadata=copy.deepcopy(source.source_metadata),
         microscopy_acquisition_metadata=copy.deepcopy(

@@ -81,7 +81,11 @@ def serialized_affines_agree(actual, expected, output_format):
 
 def validate_serialized_volume(probe, snapshots, grid, output_format, output_dtype):
     """Check the post-write structure and the representable output grid before publication."""
-    from .geometry import canonical_space_units, general_grid_affine_from_components
+    from .geometry import (
+        canonical_space_units,
+        canonical_time_unit,
+        general_grid_affine_from_components,
+    )
     snapshots = list(snapshots)
     if probe.authored_metadata_error:
         raise ValueError(
@@ -96,7 +100,11 @@ def validate_serialized_volume(probe, snapshots, grid, output_format, output_dty
     if (facts["format"] != output_format or tuple(probe.dimensions) != expected_dims
             or probe.channel_count != len(snapshots) or probe.time_count != expected_time):
         raise ValueError("Serialized volume dimensions, container, or C/T structure disagree with the export plan.")
-    dtype = "uint8" if output_format == "h5j" else np.dtype(output_dtype).name
+    if output_format == "h5j":
+        from .h5j_quantization import h5j_output_dtype
+        dtype = h5j_output_dtype(output_dtype).name
+    else:
+        dtype = np.dtype(output_dtype).name
     if probe.scalar_dtype is None or np.dtype(probe.scalar_dtype).name != dtype:
         raise ValueError("Serialized volume dtype disagrees with the export plan.")
     units = grid.get("space_units", snapshots[0].get("space_units"))
@@ -120,10 +128,11 @@ def validate_serialized_volume(probe, snapshots, grid, output_format, output_dty
                 raise ValueError("Embedded MADI3D geometry disagrees with the serialized file.")
     # Temporal units may be format-normalized (e.g. seconds -> sec in NIfTI).
     if expected_time > 1:
-        aliases = {"s": "sec", "second": "sec", "seconds": "sec", "ms": "msec", "millisecond": "msec", "us": "usec"}
         def time_unit(value):
-            unit = str(value or "frame").casefold()
-            return aliases.get(unit, unit)
+            # This boundary records an absent temporal unit as frame-indexed,
+            # matching the export default; the shared helper itself keeps
+            # missing, unknown, and frame units distinct.
+            return canonical_time_unit(value) or "frame"
         expected_units = time_unit(snapshots[0].get("time_units", "frame"))
         if output_format == "nifti":
             from .source_formats import nifti_time_unit
@@ -149,15 +158,29 @@ def volume_companion_projection(model, snapshots, project_metadata=None, *, sour
     refs, channel_metadata = [], []
     extra_refs = []
     operations = list(operations)
+    operations_by_object = {record["object_id"]: record for record in operations if record.get("object_id")}
     for index, snap in enumerate(snapshots):
         origin = copy.deepcopy(snap.get("object_metadata") or snap.get("madi_metadata") or {})
-        parents = [volume_reference(candidate, snap["channel_id"])["record_id"]] if snap.get("channel_id") in candidate.channels else []
-        if origin.get(REFERENCE_KEY):
+        frozen = snap.get("volume_revision_reference")
+        if frozen is not None:
+            from madi3d_app.project.scientific_records import validate_reference
+            validate_reference(candidate, frozen)
+            if candidate.scientific_records[frozen["record_id"]].get("record_kind") != "volume_revision":
+                raise ValueError("A frozen volume export must identify a volume revision.")
+            parents = [frozen["record_id"]]
+        else:
+            parents = [volume_reference(candidate, snap["channel_id"])["record_id"]] if snap.get("channel_id") in candidate.channels else []
+        if origin.get(REFERENCE_KEY) and not origin[REFERENCE_KEY].get("unbound"):
             parents.append(origin[REFERENCE_KEY]["record_id"])
             extra_refs.append(origin[REFERENCE_KEY])
         if parents_by_channel is not None:
             parents = list(dict.fromkeys([*parents, *parents_by_channel[index]]))
-        operation = operations[index] if index < len(operations) else None
+        operation = (
+            operations_by_object.get(snap["id"])
+            if snap.get("id") and operations_by_object
+            else operations[index] if index < len(operations) else None
+        )
+        supplied_operation = operation is not None
         if operation is None and snap.get("channel_id") not in model.channels:
             operation = (snap.get("scientific_provenance") or {}).get("producing_operation")
         from .model import _canonical_operation_record, _operation_payloads_equal
@@ -181,7 +204,7 @@ def volume_companion_projection(model, snapshots, project_metadata=None, *, sour
             else:
                 operation.pop("input_record_ids", None)
             if operation.get("operation_id") in candidate.operation_records:
-                if index < len(operations):
+                if supplied_operation:
                     if not _operation_payloads_equal(
                         candidate.operation_records[operation["operation_id"]], operation
                     ):
@@ -217,6 +240,7 @@ def capture_volume_inputs(
     evidence_index=None,
     operation_capture=None,
     supporting_operation_ids=(),
+    additional_input_references=(),
 ):
     """Freeze consumed descriptors in the existing owner; no export protocol or pixels.
 
@@ -274,6 +298,10 @@ def capture_volume_inputs(
         origins.append(selected_origin)
         if snapshot.get("channel_id") not in by_channel or selected_origin:
             by_channel[snapshot.get("channel_id")] = (local_refs, selected_origin)
+    refs.extend(
+        copy.deepcopy(dict(reference))
+        for reference in additional_input_references or ()
+    )
     if evidence_index is None:
         evidence = validate_evidence((), project_metadata, origins=origins)
         project_metadata = evidence.freeze_metadata(project_metadata)
@@ -443,6 +471,88 @@ def volume_result_projection(
 
 
 
+def finalize_h5j_provenance(snapshots, projection, job=None):
+    """Accept actual scalar conversion before publishing history or adopting voxels."""
+    from .model import VolumeSourceModel
+    from madi3d_app.project.scientific_records import create_local_reference, history_bundle
+    from madi3d_version import MADI3D_BUILD
+
+    contract = (job or {}).get("persistence_contract")
+    final_contract = None
+    if contract is not None:
+        conversion = snapshots[0].get("serialized_conversion")
+        if conversion is not None:
+            final_contract = contract.with_serialized_conversion(conversion)
+            job["persistence_contract"] = final_contract
+            job["provenance_records"] = (
+                (final_contract.operation_record(),) if final_contract.mode != "exact" else ()
+            )
+    if final_contract is not None and final_contract.payload_json == contract.payload_json:
+        return projection
+    if final_contract is None and not any(
+        snapshot.get("serialized_conversion", {}).get("converted") for snapshot in snapshots
+    ):
+        return projection
+    model = VolumeSourceModel.from_dict(projection["scientific_history"]) if projection else None
+    references = copy.deepcopy(projection["references"]) if projection else None
+    planned = list((job or {}).get("provenance_records", ()))
+    planned_ids = {record.get("operation_id") for record in planned} - {None}
+    for index, snapshot in enumerate(snapshots):
+        conversion = snapshot.get("serialized_conversion") or {}
+        if final_contract is not None:
+            parents = [final_contract.to_dict()["input_record_id"]]
+            if final_contract.mode == "exact":
+                if references is not None:
+                    references[index] = {**references[index], "record_id": parents[0]}
+                continue
+            operation = final_contract.operation_record()
+        elif conversion.get("converted"):
+            planned_index = next((i for i, record in enumerate(planned)
+                                  if snapshot.get("id") is not None
+                                  and record.get("object_id") == snapshot["id"]), None)
+            operation = copy.deepcopy(planned[planned_index]) if planned_index is not None else {
+                "operation_type": "volume_export_conversion", "software_version": MADI3D_BUILD,
+                "object_id": snapshot.get("id"),
+            }
+            parents = list(operation.get("input_record_ids", ()))
+            producer = None
+            if model is not None:
+                current = model.scientific_records[references[index]["record_id"]]
+                producer = current.get("producing_operation_id")
+            if producer in planned_ids:
+                operation = copy.deepcopy(model.operation_records[producer])
+                parents = list(operation.get("input_record_ids", ()))
+            elif references is not None:
+                parents = [references[index]["record_id"]]
+            operation.pop("operation_id", None)
+            parameters = operation.setdefault("parameters", {})
+            parameters["scalar_serialization"] = copy.deepcopy(conversion)
+            if conversion.get("mode") in {"linear_minmax_to_uint12", "constant_to_uint12"}:
+                operation["material_changes"] = list(dict.fromkeys([
+                    *operation.get("material_changes", ()), "scalar_value_quantization",
+                ]))
+            if parents:
+                operation["input_record_ids"] = parents
+            operation = stable_scientific_operation_record(operation)
+            if planned_index is None:
+                planned.append(operation)
+            else:
+                planned[planned_index] = operation
+        else:
+            continue
+        if model is not None:
+            metadata = projection.get("channel_metadata", [{}] * len(snapshots))[index]
+            references[index] = create_local_reference(
+                model, "object_origin", metadata, parents=parents,
+                operation=operation["operation_type"], operation_record=operation,
+            )
+    if final_contract is None and job is not None:
+        job["provenance_records"] = tuple(planned)
+    if projection is None:
+        return None
+    return {**projection, "references": references, "scientific_history": history_bundle(model, references)}
+
+
 def volume_companion_content(probe, snapshots, grid, options, projection):
     """Final capsule content describes actual serialized facts plus scoped lineage."""
     from madi3d_app.project.scientific_records import export_coordinates
@@ -506,6 +616,15 @@ def read_volume_companion(path, probe, *, cancel_check=None):
                 or local[index].get("serialization_generation") != capsule["exported_artifact"].get("generation")):
             raise ValueError("Companion generation disagrees with the file.")
     validate_evidence((), capsule.get("evidence", {}), origins=[*(c.get("metadata", {}) for c in channels), *origins])
+    if "transform_resources" in capsule:
+        from pathlib import Path
+        from madi3d_app.registration.transform_resources import read_transform_resources
+        resources, resource_warnings = read_transform_resources(Path(path).parent,
+            {"scientific_history": capsule["scientific_history"]}, capsule["transform_resources"], cancel_check=cancel_check)
+        # Verified binary transport follows the existing project resource owner;
+        # it is not inserted into scientific history or channel metadata.
+        capsule["accepted_transform_resources"] = resources
+        capsule["transform_resource_warnings"] = resource_warnings
     capsule["scientific_history"] = incoming
     return capsule
 

@@ -89,12 +89,14 @@ def verify_template_file(path, cancel):
     fingerprint = lambda s: (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns)
     if fingerprint(before) != fingerprint(after) or fingerprint(after) != fingerprint(os.stat(path)):
         raise ValueError("The template file changed during verification; retry with a stable source.")
-    if digest.hexdigest() not in {p.template_sha256 for p in SEARCH_PROFILES.values()}:
+    if digest.hexdigest() not in {grid.template_sha256 for p in SEARCH_PROFILES.values()
+                                 for grid in (p, *p.equivalent_grids)}:
         raise ValueError("The reference file is not the pinned NeuronBridge search template. Supply verified external mapping evidence for converted or external templates.")
     return digest.hexdigest(), fingerprint(after)
 
 
-def automatic_mapping(model, snapshots, channel_id, *, profile_id=None):
+def automatic_mapping(model, snapshots, channel_id, *, profile_id=None, generated_by_channel=None,
+                      verified_template=None):
     """Follow explicit producers to the checksum-identified search template.
 
     A coordinate-space label or a matching shape is never template evidence.
@@ -105,7 +107,7 @@ def automatic_mapping(model, snapshots, channel_id, *, profile_id=None):
     profile = None if profile_id is None else search_profile(profile_id)
 
     def visit(key):
-        nonlocal profile
+        nonlocal profile, generated_by_channel
         if key in visited:
             raise ValueError("Cyclic template mapping provenance.")
         visited.add(key)
@@ -132,20 +134,41 @@ def automatic_mapping(model, snapshots, channel_id, *, profile_id=None):
                     and grid.physical_units == ("micron",) * 3
                     and np.allclose(affine, expected, rtol=0, atol=1e-9))
         checksum = str(channel.source_checksum or "").removeprefix("sha256:")
-        identified = next((p for p in SEARCH_PROFILES.values() if p.template_sha256 == checksum), None)
+        if not checksum and verified_template is not None:
+            request, verified_checksum, fingerprint = verified_template
+            if key == request.channel_id:
+                path = channel.runtime_path or channel.primary_path
+                stat = os.stat(path) if path else None
+                if (channel.backing_source_id != request.backing_source_id
+                        or channel.geometry_revision != request.geometry_revision or path != request.path
+                        or stat is None or (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns) != fingerprint):
+                    raise ValueError("The verified template source changed. Generate the preview again.")
+                checksum = verified_checksum
+        identified = next(((p, candidate) for p in SEARCH_PROFILES.values()
+                           for candidate in (p, *p.equivalent_grids)
+                           if candidate.template_sha256 == checksum), None)
         if identified is not None:
-            if profile is not None and identified != profile:
+            identified_profile, identified_grid = identified
+            if profile is not None and identified_profile != profile:
                 raise ValueError("Recorded template and selected search profile disagree.")
-            profile = identified
-            if not grid_matches(profile):
+            profile = identified_profile
+            if not grid_matches(identified_grid):
                 raise ValueError("The pinned template's working grid has changed.")
-            entry["template_id"] = profile.template_id
-            entry["source_checksum"] = profile.template_sha256
-            return np.eye(4), channel, grid, pose
-        template_grid = any(grid_matches(p) for p in
-                            ((profile,) if profile is not None else SEARCH_PROFILES.values()))
+            entry["template_id"] = identified_grid.template_id
+            entry["source_checksum"] = identified_grid.template_sha256
+            if identified_grid is profile:
+                return np.eye(4), channel, grid, pose
+            target_affine = np.eye(4)
+            target_affine[:3, :3] = np.asarray(profile.direction) @ np.diag(profile.spacing_xyz_um)
+            target_affine[:3, 3] = profile.origin_xyz_um
+            return np.linalg.inv(target_affine) @ affine, channel, grid, pose
+        template_grid = any(grid_matches(candidate)
+                            for p in ((profile,) if profile is not None else SEARCH_PROFILES.values())
+                            for candidate in (p, *p.equivalent_grids))
 
-        generated = model.generated_operation_index()["by_channel"].get(key)
+        if generated_by_channel is None:
+            generated_by_channel = model.generated_operation_index()["by_channel"]
+        generated = generated_by_channel.get(key)
         if generated:
             relation = generated["relation"]
             consumed = generated["input_record"]

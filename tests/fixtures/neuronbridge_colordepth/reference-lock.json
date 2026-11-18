@@ -1,0 +1,154 @@
+{
+  "accessed_utc": "2026-09-07",
+  "runtime_artifacts": [
+    {
+      "name": "Z_Code_Stack_HO.class",
+      "url": "https://raw.githubusercontent.com/JaneliaSciComp/neuronbridge-aligners/ba883d845edba801f2560f8aa9b772c4caec1f76/brain-aligner/aligner/fiji_plugins/Z_Code_Stack_HO.class",
+      "sha256": "c1adaca7a7d175525b59425046b36b9ec5b3a8e3153ddda60c85d114610aff9e"
+    },
+    {
+      "name": "MIP_right_color.class",
+      "url": "https://raw.githubusercontent.com/JaneliaSciComp/neuronbridge-aligners/ba883d845edba801f2560f8aa9b772c4caec1f76/brain-aligner/aligner/fiji_plugins/MIP_right_color.class",
+      "sha256": "3fb59522d3600ee96b4d6525e4a3e026201cb3940657fe0675d7c5de6ab25b52"
+    },
+    {
+      "name": "PsychedelicRainBow2.lut",
+      "url": "https://raw.githubusercontent.com/JaneliaSciComp/neuronbridge-aligners/ba883d845edba801f2560f8aa9b772c4caec1f76/brain-aligner/aligner/fiji_luts/PsychedelicRainBow2.lut",
+      "sha256": "10bdeb45546b89d5c311c423975072ea11a5d32ea6eb18c2b950583605a7389f"
+    },
+    {
+      "name": "ij.jar",
+      "url": "https://repo.maven.apache.org/maven2/net/imagej/ij/1.53t/ij-1.53t.jar",
+      "sha256": "c04c94af9064e06d1c9bca7a331ebbac821fec24aa8bac5a8ec7cbb893b9e503"
+    },
+    {
+      "name": "ecj.jar",
+      "url": "https://repo.maven.apache.org/maven2/org/eclipse/jdt/ecj/3.26.0/ecj-3.26.0.jar",
+      "sha256": "ac0ba5876eaf7ebb47749a0d1be179c51f194b9dd0b875d1c09e1b530f5a2db5"
+    }
+  ],
+  "sources": [
+    {
+      "repository": "ColorMIP_Mask_Search",
+      "commit": "37c310e57c331c9dba817e2b6ac5976c27817115",
+      "path": "ColorDepthMIP_Generator/Color_Depth_MIP_batch_0308_2021.ijm",
+      "url": "https://raw.githubusercontent.com/JaneliaSciComp/ColorMIP_Mask_Search/37c310e57c331c9dba817e2b6ac5976c27817115/ColorDepthMIP_Generator/Color_Depth_MIP_batch_0308_2021.ijm",
+      "sha256": "1888bed09f5ef5cdc8f3e1e1b2cb94742eda9e47b20ec66d9a76400f447c4c60"
+    },
+    {
+      "repository": "ColorMIP_Mask_Search",
+      "commit": "37c310e57c331c9dba817e2b6ac5976c27817115",
+      "path": "ColorDepthMIP_Generator/README.md",
+      "url": "https://raw.githubusercontent.com/JaneliaSciComp/ColorMIP_Mask_Search/37c310e57c331c9dba817e2b6ac5976c27817115/ColorDepthMIP_Generator/README.md",
+      "sha256": "0a3ae6a481a38da113feb1d9d28732c2d12a0cd8126aadf087df5ec89cfee4f8"
+    },
+    {
+      "repository": "neuronbridge-aligners",
+      "commit": "ba883d845edba801f2560f8aa9b772c4caec1f76",
+      "path": "brain-aligner/aligner/fiji_macros/Color_Depth_MIP_batch_0404_2019_For_Pipeline.ijm",
+      "url": "https://raw.githubusercontent.com/JaneliaSciComp/neuronbridge-aligners/ba883d845edba801f2560f8aa9b772c4caec1f76/brain-aligner/aligner/fiji_macros/Color_Depth_MIP_batch_0404_2019_For_Pipeline.ijm",
+      "sha256": "9bd85a9362a4063b72d7e6e9850535ba50e87bc24b8b801f2ce154f7031f7c3d"
+    },
+    {
+      "repository": "neuronbridge-aligners",
+      "commit": "ba883d845edba801f2560f8aa9b772c4caec1f76",
+      "path": "brain-aligner/aligner/20xBrain_Align_CMTK.sh",
+      "url": "https://raw.githubusercontent.com/JaneliaSciComp/neuronbridge-aligners/ba883d845edba801f2560f8aa9b772c4caec1f76/brain-aligner/aligner/20xBrain_Align_CMTK.sh",
+      "sha256": "51e042880d693607ccebed8fc26be3d3eb1a2b653f654038671d86673e8cedbf"
+    },
+    {
+      "repository": "neuronbridge-aligners",
+      "commit": "ba883d845edba801f2560f8aa9b772c4caec1f76",
+      "path": "brain-aligner/Dockerfile",
+      "url": "https://raw.githubusercontent.com/JaneliaSciComp/neuronbridge-aligners/ba883d845edba801f2560f8aa9b772c4caec1f76/brain-aligner/Dockerfile",
+      "sha256": "56478249049ef3c6f19cf678c538dd70995da48c14c97018e07589537cd03393"
+    },
+    {
+      "repository": "neuronbridge-aligners",
+      "commit": "ba883d845edba801f2560f8aa9b772c4caec1f76",
+      "path": "LICENSE.md",
+      "url": "https://raw.githubusercontent.com/JaneliaSciComp/neuronbridge-aligners/ba883d845edba801f2560f8aa9b772c4caec1f76/LICENSE.md",
+      "sha256": "213120b36ba1d81c6e035da5858da37579e0ec0049800a5b596e48bf35972381"
+    },
+    {
+      "repository": "neuronbridge",
+      "commit": "18d97306372d27322482208432663f9f2b6b52a8",
+      "path": "src/config.js",
+      "url": "https://raw.githubusercontent.com/JaneliaSciComp/neuronbridge/18d97306372d27322482208432663f9f2b6b52a8/src/config.js",
+      "sha256": "5cf50589ec163b499d03f255d8efee7f45f08634de469cd365967efb52fed720"
+    },
+    {
+      "repository": "neuronbridge",
+      "commit": "18d97306372d27322482208432663f9f2b6b52a8",
+      "path": "src/components/Help/HelpContents.jsx",
+      "url": "https://raw.githubusercontent.com/JaneliaSciComp/neuronbridge/18d97306372d27322482208432663f9f2b6b52a8/src/components/Help/HelpContents.jsx",
+      "sha256": "5e4f89c892e8309f00710ddf1718ef6f832b7776649c7062f485a04656664f9e"
+    },
+    {
+      "repository": "EM_MIP_search",
+      "commit": "83ee6f73cee0708f7b013c66d9dbbe11a1b3e7b2",
+      "path": "README.md",
+      "url": "https://raw.githubusercontent.com/JaneliaSciComp/EM_MIP_search/83ee6f73cee0708f7b013c66d9dbbe11a1b3e7b2/README.md",
+      "sha256": "59fb2dee0ac913fdc310b53c9c28cb65eca507390ca19b4ecb5a322ac92dc17d"
+    },
+    {
+      "repository": "open-data-flylight",
+      "commit": "cdb5c2dd51843da147a67ae6df32dfa2fd2ee96c",
+      "path": "janelia-flylight-templates/README.md",
+      "url": "https://raw.githubusercontent.com/JaneliaSciComp/open-data-flylight/cdb5c2dd51843da147a67ae6df32dfa2fd2ee96c/janelia-flylight-templates/README.md",
+      "sha256": "613dff0560c8af406aa53b4eeb8df965a030cc08c2d47db37746b65bbf12113a"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/awslabs/open-data-registry/be73a322704eb8951cf592014f74e84b1d373f64/datasets/janelia-flylight.yaml",
+      "sha256": "27739d92a4c91f77683c389a3cbd82eb5ddec976d3cd00506c275c516ae42ffd",
+      "description": "CC-BY-4.0 data license including alignment templates"
+    },
+    {
+      "repository": "ColorMIP_Mask_Search",
+      "commit": "37c310e57c331c9dba817e2b6ac5976c27817115",
+      "path": "ColorDepthMIP_Generator/Plugins_Color_MIP/Z_Code_Stack_HO.class",
+      "url": "https://raw.githubusercontent.com/JaneliaSciComp/ColorMIP_Mask_Search/37c310e57c331c9dba817e2b6ac5976c27817115/ColorDepthMIP_Generator/Plugins_Color_MIP/Z_Code_Stack_HO.class",
+      "sha256": "c1adaca7a7d175525b59425046b36b9ec5b3a8e3153ddda60c85d114610aff9e"
+    },
+    {
+      "repository": "ColorMIP_Mask_Search",
+      "commit": "37c310e57c331c9dba817e2b6ac5976c27817115",
+      "path": "ColorDepthMIP_Generator/Plugins_Color_MIP/MIP_right_color.class",
+      "url": "https://raw.githubusercontent.com/JaneliaSciComp/ColorMIP_Mask_Search/37c310e57c331c9dba817e2b6ac5976c27817115/ColorDepthMIP_Generator/Plugins_Color_MIP/MIP_right_color.class",
+      "sha256": "3fb59522d3600ee96b4d6525e4a3e026201cb3940657fe0675d7c5de6ab25b52"
+    },
+    {
+      "repository": "ColorMIP_Mask_Search",
+      "commit": "37c310e57c331c9dba817e2b6ac5976c27817115",
+      "path": "ColorDepthMIP_Generator/luts/PsychedelicRainBow2.lut",
+      "url": "https://raw.githubusercontent.com/JaneliaSciComp/ColorMIP_Mask_Search/37c310e57c331c9dba817e2b6ac5976c27817115/ColorDepthMIP_Generator/luts/PsychedelicRainBow2.lut",
+      "sha256": "a5ff63ab706f6d0c498608796728d1ed69e38e7a60d23a843ab43ace6e514087",
+      "byte_comparison": "Public source has CRLF; aligner source has LF. CRLF-to-LF normalization gives identical bytes and all 256 RGB rows are identical.",
+      "lf_normalized_sha256": "10bdeb45546b89d5c311c423975072ea11a5d32ea6eb18c2b950583605a7389f"
+    }
+  ],
+  "cfr": {
+    "version": "0.152",
+    "url": "https://repo.maven.apache.org/maven2/org/benf/cfr/0.152/cfr-0.152.jar",
+    "sha256": "f686e8f3ded377d7bc87d216a90e9e9512df4156e75b06c655a16648ae8765b2"
+  },
+  "imagej_sources": {
+    "url": "https://repo.maven.apache.org/maven2/net/imagej/ij/1.53t/ij-1.53t-sources.jar",
+    "sha256": "bf55d13760ceea6e57bee8e21a1a2bc10f7d7d892bb4837849be2d1aee33050c"
+  },
+  "fiji_archive_imagej_verification": {
+    "url": "https://downloads.imagej.net/fiji/archive/20221005-1117/fiji-linux64.zip",
+    "jar_sha256": "c04c94af9064e06d1c9bca7a331ebbac821fec24aa8bac5a8ec7cbb893b9e503",
+    "jar_size_bytes": 2478297,
+    "archive_http_etag": "\"15634de4-5ea4ba3787293\"",
+    "archive_http_last_modified": "Wed, 05 Oct 2022 15:57:49 GMT",
+    "central_directory_content_range": "bytes 358748067-358829517/358829540",
+    "archive_size_bytes": 358829540,
+    "entry": {
+      "path": "Fiji.app/jars/ij-1.53t.jar",
+      "compressed_size_bytes": 2436472,
+      "local_header_offset": 85238574,
+      "zip_compression_method": 8
+    }
+  }
+}

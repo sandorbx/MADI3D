@@ -1,0 +1,1275 @@
+{
+  "schema": 1,
+  "evidence": "observed original Java/ImageJ execution",
+  "producer": {
+    "repository": "https://github.com/JaneliaSciComp/EM_MIP_search",
+    "revision": "83ee6f73cee0708f7b013c66d9dbbe11a1b3e7b2",
+    "source_sha256": {
+      "Gradient_conv_multithread.java": "06c821db64a21bd7863720fc18da87c3ec99d0576ff5de5075134ebf9362063a",
+      "README.md": "59fb2dee0ac913fdc310b53c9c28cb65eca507390ca19b4ecb5a322ac92dc17d",
+      "LICENSE": "e5c678a0f69fc0356dd02960b0f857f3314ea108a9d747949239af8f9cd48d10"
+    },
+    "method": "Gradient_conv_multithread.Threfunction and gradientslice",
+    "settings": {
+      "ImageJ": "v1.53v",
+      "radius": 20,
+      "max_radius_dialog": "displayed value is never read by run(); stored Prefs default is 20",
+      "threads": 1,
+      "rgb_weights": [
+        0.3333333333333333,
+        0.3333333333333333,
+        0.3333333333333333
+      ],
+      "gray_conversion_scaling": true,
+      "weighted_color_preference": false,
+      "inverting_lut": false,
+      "producer_labels": {
+        "left": {
+          "xy": [
+            0,
+            0
+          ],
+          "size": [
+            330,
+            105
+          ]
+        },
+        "right": {
+          "anchor": "right",
+          "x_offset": -270,
+          "y": 0,
+          "size": [
+            270,
+            100
+          ]
+        }
+      },
+      "color_to_gray": "ImageConverter.convertToGray8",
+      "maximum_filter": "ImageJ Maximum... circular radius 20",
+      "gray16_mask": "values below 1 -> 65535, remaining -> 0",
+      "distance": "original four-connected outward propagation; scan x then y; unsigned 16-bit output"
+    }
+  },
+  "imagej": {
+    "version": "v1.53v",
+    "source_revision": "72c46b115c91cce887793141cb43a8ec31c82f5d",
+    "source_license_sha256": "618725ff649e43605de0fec0a778b4aad24b28c6be9b3cde16295764022f668c",
+    "jar_sha256": "058fdd3faae3527e53396e990c4fbdf952a6a9a46f229fa07dcde09ae3d683e8",
+    "license_source": "ImageJ v1.53v LICENSE.txt",
+    "license_sha256": "618725ff649e43605de0fec0a778b4aad24b28c6be9b3cde16295764022f668c",
+    "license_path": "LICENSES/ImageJ-LICENSE.txt"
+  },
+  "scorer": {
+    "repository": "https://github.com/JaneliaSciComp/colormipsearch",
+    "revision": "8b85c458f3b9231ec7bff5f1b4262cbf2abf8c3d",
+    "original_tests": [
+      "Shape2DMatchColorDepthSearchAlgorithmTest",
+      "GradientAreaGapUtilsTest"
+    ],
+    "reference_manifest_sha256": "d551b1d5d3c0df29e99418ad5f43c1068e73dd2ac57d8d8d8a53fcc9b13f6024",
+    "reference_harness_sha256": {
+      "RunReference.java": "53cee0cfd22c83a010bb936427a52f707638db2501e49bb76cce8e2a1e34117e",
+      "GradientProbes.java": "72ddbcbee651f715eff2381085c0eb899dfd9bdd012c87095fc7805789bb9803"
+    },
+    "original_junit_failures": 0,
+    "original_junit_errors": 0,
+    "generated_variant": "RunReference on original EM/LM cases with generated gradient PNGs and Java-derived ZGapImage; supplied Z-gap bypassed explicitly"
+  },
+  "execution": {
+    "java_version": "openjdk version \"25.0.4\" 2026-07-21\r\nOpenJDK Runtime Environment JBR-25.0.4+1-508.27-nomod (build 25.0.4+1-b508.27)\r\nOpenJDK 64-Bit Server VM JBR-25.0.4+1-508.27-nomod (build 25.0.4+1-b508.27, mixed mode, sharing)\r\n",
+    "os": "nt",
+    "producer_compile_command": [
+      "javac",
+      "-cp",
+      "<ImageJ 1.53v JAR>",
+      "-d",
+      "<scratch>",
+      "Gradient_conv_multithread.java",
+      "RunProducer.java"
+    ],
+    "producer_run_command": [
+      "java",
+      "-cp",
+      "<producer classes and ImageJ 1.53v JAR>",
+      "RunProducer",
+      "<retained LM inputs>",
+      "<scratch>",
+      "<scratch output>",
+      "<retained VNC inputs>"
+    ],
+    "scorer_test_command": [
+      "mvnw.cmd",
+      "-pl",
+      "colormipsearch-api",
+      "-am",
+      "-Dtest=Shape2DMatchColorDepthSearchAlgorithmTest,GradientAreaGapUtilsTest",
+      "-Dsurefire.failIfNoSpecifiedTests=false",
+      "test"
+    ],
+    "zgap_command": [
+      "java",
+      "-Djava.awt.headless=true",
+      "-cp",
+      "<compiled harness and Surefire classpath>",
+      "org.janelia.colormipsearch.cds.WriteZGapImages",
+      "<score inputs>",
+      "<generated cases with zgap=null>",
+      "<Java Z-gap output directory>"
+    ],
+    "generated_scorer_command": [
+      "java",
+      "-Djava.awt.headless=true",
+      "-cp",
+      "<compiled harness and Surefire classpath>",
+      "org.janelia.colormipsearch.cds.RunReference",
+      "<generated score inputs>",
+      "<generated cases with zgap=null>",
+      "<Java output JSON>"
+    ],
+    "runner_sha256": {
+      "LICENSES/ImageJ-LICENSE.txt": "618725ff649e43605de0fec0a778b4aad24b28c6be9b3cde16295764022f668c",
+      "LICENSES/EM_MIP_search-LICENSE.txt": "e5c678a0f69fc0356dd02960b0f857f3314ea108a9d747949239af8f9cd48d10",
+      "tests/reference/neuronbridge_gradient/RunProducer.java": "5a5a379d1b40422236d8dea6bd9662aa5b5892e7b75fdd015b9eb6ba7efff770",
+      "tests/reference/neuronbridge_gradient/WriteZGapImages.java": "1ff31b7be7cf27dd98c6e1bb918e5b68e7fb01e336ca7a8c2915e127fb0cf98c",
+      "tests/reference/neuronbridge_gradient/reproduce_producer.py": "831118dade744ce8960c9919186791d75d176ae950b10bdbf138fa3b185974ee",
+      "tests/reference/neuronbridge_gradient/RunReference.java": "53cee0cfd22c83a010bb936427a52f707638db2501e49bb76cce8e2a1e34117e",
+      "tests/reference/neuronbridge_gradient/GradientProbes.java": "72ddbcbee651f715eff2381085c0eb899dfd9bdd012c87095fc7805789bb9803"
+    },
+    "dependency_sha256": {
+      "ij-1.53v.jar": "058fdd3faae3527e53396e990c4fbdf952a6a9a46f229fa07dcde09ae3d683e8"
+    }
+  },
+  "outputs": [
+    {
+      "id": "BJD_127B01_AE_01-20171124_64_H6-40x-Brain-JRC2018_Unisex_20x_HR-2483089192251293794-CH2-01_CDM",
+      "path": "tests/fixtures/neuronbridge_gradient/producer/BJD_127B01_AE_01-20171124_64_H6-40x-Brain-JRC2018_Unisex_20x_HR-2483089192251293794-CH2-01_CDM.png",
+      "file_sha256": "fec50c296b3b0d091ffbe6cd573352a62964a3231dc5495c6098dbd4d92b8d5a",
+      "decoded_sha256": "eac72ece28611e6582d4bd24f6dc78b4b2368a832b14161ddc31fabb54c41de3",
+      "shape": [
+        566,
+        1210
+      ],
+      "dtype": "<u2",
+      "pixel_encoding": "unsigned uint16 little endian, row-major",
+      "input": {
+        "path": "tests/fixtures/neuronbridge_gradient/inputs/lms/BJD_127B01_AE_01-20171124_64_H6-40x-Brain-JRC2018_Unisex_20x_HR-2483089192251293794-CH2-01_CDM.tif",
+        "file_sha256": "e35a5361a1b28ca113e4b842aaedd0ff977027ceda880f73d7e5008c6c3a3c66",
+        "decoded_sha256": "0977a5d2f4df1ae83fe8b4f759b1db53978d31d8018f6750231d46197886454c",
+        "shape": [
+          566,
+          1210,
+          3
+        ]
+      },
+      "label_policy": "reference-labels",
+      "radius": 20,
+      "kind": "real-lm",
+      "profile": "Brain",
+      "archived_gradient": {
+        "path": "tests/fixtures/neuronbridge_gradient/inputs/grad/BJD_127B01_AE_01-20171124_64_H6-40x-Brain-JRC2018_Unisex_20x_HR-2483089192251293794-CH2-01_CDM.png",
+        "file_sha256": "561e54d8a823bbbec73b9a35e25edf6930d3eb156523a8c8fe328a834ef35bf7",
+        "decoded_sha256": "9f11c9a0471ac7db75b2ffff99bfb6706d01f4d3d4413ba21c9af4749c76e8b3",
+        "pixel_equal": false,
+        "different_pixels": 626959,
+        "maximum_absolute_difference": 204
+      }
+    },
+    {
+      "id": "VT016795_115C08_AE_01-20200221_61_I2-m-CH1_01",
+      "path": "tests/fixtures/neuronbridge_gradient/producer/VT016795_115C08_AE_01-20200221_61_I2-m-CH1_01.png",
+      "file_sha256": "8b865f865d344085c92a855178db0b9f39d1b076f2c633502e24865811e325ea",
+      "decoded_sha256": "7571b1e44cb46d86d74d5428d1219d1e606497b8e20e5373d623157eacac1390",
+      "shape": [
+        566,
+        1210
+      ],
+      "dtype": "<u2",
+      "pixel_encoding": "unsigned uint16 little endian, row-major",
+      "input": {
+        "path": "tests/fixtures/neuronbridge_gradient/inputs/lms/VT016795_115C08_AE_01-20200221_61_I2-m-CH1_01.tif",
+        "file_sha256": "ab480291acfad67960e35885cdf622967a6b369a5445ed8257bcf031daaddfae",
+        "decoded_sha256": "6bc97bea858e29cf5d5255f9181f6148ae7237eed965663658fbb63715450706",
+        "shape": [
+          566,
+          1210,
+          3
+        ]
+      },
+      "label_policy": "reference-labels",
+      "radius": 20,
+      "kind": "real-lm",
+      "profile": "Brain",
+      "archived_gradient": {
+        "path": "tests/fixtures/neuronbridge_gradient/inputs/grad/VT016795_115C08_AE_01-20200221_61_I2-m-CH1_01.png",
+        "file_sha256": "5d0ceb25bd34580b690081e8dbfa4e32351da97797002db28698c05363f06fa4",
+        "decoded_sha256": "7571b1e44cb46d86d74d5428d1219d1e606497b8e20e5373d623157eacac1390",
+        "pixel_equal": true,
+        "different_pixels": 0,
+        "maximum_absolute_difference": 0
+      }
+    },
+    {
+      "id": "VT033614_127B01_AE_01-20171124_64_H6-f-CH2_01",
+      "path": "tests/fixtures/neuronbridge_gradient/producer/VT033614_127B01_AE_01-20171124_64_H6-f-CH2_01.png",
+      "file_sha256": "d9724afa20caffd75a951600be1fc96c6dfd385e45bc3ed8fa0508be04f9c1ed",
+      "decoded_sha256": "cb7ab26643754a9846a4d367f38c931424f59c7548342f2cf0c0acc76c14ed76",
+      "shape": [
+        566,
+        1210
+      ],
+      "dtype": "<u2",
+      "pixel_encoding": "unsigned uint16 little endian, row-major",
+      "input": {
+        "path": "tests/fixtures/neuronbridge_gradient/inputs/lms/VT033614_127B01_AE_01-20171124_64_H6-f-CH2_01.tif",
+        "file_sha256": "efbe116e00df51337e1b927ab0907454d3c19b2b4d7d1ab2ff4e2460f11fc8b3",
+        "decoded_sha256": "13a139ed00f2cad3cec35560c7cadefc2052d606b1f85fadc14882fc05d6841c",
+        "shape": [
+          566,
+          1210,
+          3
+        ]
+      },
+      "label_policy": "reference-labels",
+      "radius": 20,
+      "kind": "real-lm",
+      "profile": "Brain",
+      "archived_gradient": {
+        "path": "tests/fixtures/neuronbridge_gradient/inputs/grad/VT033614_127B01_AE_01-20171124_64_H6-f-CH2_01.png",
+        "file_sha256": "9c3c0add658adf76f8f1a3760f9e0f3e162df089121e571c2cdbd3e5adc9b6f5",
+        "decoded_sha256": "cb7ab26643754a9846a4d367f38c931424f59c7548342f2cf0c0acc76c14ed76",
+        "pixel_equal": true,
+        "different_pixels": 0,
+        "maximum_absolute_difference": 0
+      }
+    },
+    {
+      "id": "manc-0",
+      "path": "tests/fixtures/neuronbridge_gradient/producer/manc-0.png",
+      "file_sha256": "324562a1aad096836581bf1f58b3ad37b4153871dca60ff7929c09415399d87d",
+      "decoded_sha256": "0148c06a9b6e86ab91d8ab1013f7ed7a22cc16cbe3d373798faf9f90a1938ce6",
+      "shape": [
+        1209,
+        573
+      ],
+      "dtype": "<u2",
+      "pixel_encoding": "unsigned uint16 little endian, row-major",
+      "input": {
+        "path": "tests/fixtures/neuronbridge_vnc/manc-0.tif",
+        "file_sha256": "28769620e0a49a8591281bda305cc6bfd4fb74235519ab1036b8fa918fa7d2c5",
+        "decoded_sha256": "bac219110a26221375989dbd79cf3a86edac9e4f1797fa34163585fb285460e5",
+        "shape": [
+          1209,
+          573,
+          3
+        ]
+      },
+      "label_policy": "reference-labels",
+      "radius": 20,
+      "kind": "real-vnc-manc",
+      "profile": "VNC",
+      "vnc_extra_clear_signal": {
+        "foreground_definition": "candidate foreground = RGB pixels with any nonzero channel",
+        "foreground_pixels": 12197,
+        "nonzero_pixels_in_extra_clear": 0,
+        "rgb_sum_in_extra_clear": 0,
+        "rgb_maximum_channel_in_extra_clear": 0,
+        "extra_clear_foreground_fraction": 0.0
+      }
+    },
+    {
+      "id": "manc-1",
+      "path": "tests/fixtures/neuronbridge_gradient/producer/manc-1.png",
+      "file_sha256": "5693ff3ab557c7a9d0e982f6f51108581fac31b2e901b7bd241d8598e5959b27",
+      "decoded_sha256": "33d8e4976ed44ae736c24faca291c03551924e600892c97167a8149d349eaee5",
+      "shape": [
+        1209,
+        573
+      ],
+      "dtype": "<u2",
+      "pixel_encoding": "unsigned uint16 little endian, row-major",
+      "input": {
+        "path": "tests/fixtures/neuronbridge_vnc/manc-1.tif",
+        "file_sha256": "2477e12c639d39cc4d454b9fedef86538facff4c8b57b3555e24dc8a51a92ecd",
+        "decoded_sha256": "e8386e6dfc3244b6b3953b9615ab6f6fad6796f9b0959e8b5e93848b81a1f190",
+        "shape": [
+          1209,
+          573,
+          3
+        ]
+      },
+      "label_policy": "reference-labels",
+      "radius": 20,
+      "kind": "real-vnc-manc",
+      "profile": "VNC",
+      "vnc_extra_clear_signal": {
+        "foreground_definition": "candidate foreground = RGB pixels with any nonzero channel",
+        "foreground_pixels": 9080,
+        "nonzero_pixels_in_extra_clear": 0,
+        "rgb_sum_in_extra_clear": 0,
+        "rgb_maximum_channel_in_extra_clear": 0,
+        "extra_clear_foreground_fraction": 0.0
+      }
+    },
+    {
+      "id": "manc-2",
+      "path": "tests/fixtures/neuronbridge_gradient/producer/manc-2.png",
+      "file_sha256": "ace3289af9a099958fcc1e043ed295cafb507edfe25c880dc7f7b6c510c384e6",
+      "decoded_sha256": "24e11d69407f9f984f90eef5b051d21decf23a570c80dc5f632e30a445590725",
+      "shape": [
+        1209,
+        573
+      ],
+      "dtype": "<u2",
+      "pixel_encoding": "unsigned uint16 little endian, row-major",
+      "input": {
+        "path": "tests/fixtures/neuronbridge_vnc/manc-2.tif",
+        "file_sha256": "9f7379e5397fb30fb84598b8f4947686bd6807ba7c495b3d790cfa70f832d79b",
+        "decoded_sha256": "4525c7a6db3924309417ae23a0b0ad81d64bfda22c4aa0bdb5c9a18374474542",
+        "shape": [
+          1209,
+          573,
+          3
+        ]
+      },
+      "label_policy": "reference-labels",
+      "radius": 20,
+      "kind": "real-vnc-manc",
+      "profile": "VNC",
+      "vnc_extra_clear_signal": {
+        "foreground_definition": "candidate foreground = RGB pixels with any nonzero channel",
+        "foreground_pixels": 9704,
+        "nonzero_pixels_in_extra_clear": 0,
+        "rgb_sum_in_extra_clear": 0,
+        "rgb_maximum_channel_in_extra_clear": 0,
+        "extra_clear_foreground_fraction": 0.0
+      }
+    },
+    {
+      "id": "synthetic-empty",
+      "path": "tests/fixtures/neuronbridge_gradient/producer/synthetic-empty.png",
+      "file_sha256": "04e069fd168209930b6a2f03161de2ff1101bb17e421fc433d656f7e370c78be",
+      "decoded_sha256": "e3fa20e1fe11d87fa45fd3c0907e72d1c1354619d76f2933dd17a377c94154f1",
+      "shape": [
+        566,
+        1210
+      ],
+      "dtype": "<u2",
+      "pixel_encoding": "unsigned uint16 little endian, row-major",
+      "input": {
+        "path": "synthetic://synthetic-empty",
+        "file_sha256": "5257afd170fa44acde473417b2346f894cd3337296a2066bf3e9e87126f0c991",
+        "decoded_sha256": "887ef8e86229557deb1628df662359e7daeaaf3f9e107fd2705e0a2ffd987ffb"
+      },
+      "label_policy": "reference-labels",
+      "radius": 20,
+      "kind": "synthetic",
+      "profile": "Brain",
+      "recipe": {
+        "background_rgb": [
+          0,
+          0,
+          0
+        ],
+        "points": []
+      },
+      "input_shape": [
+        566,
+        1210,
+        3
+      ],
+      "input_dtype": "|u1",
+      "input_format": "RGB uint8; ImageJ ColorProcessor saved as TIFF"
+    },
+    {
+      "id": "synthetic-full",
+      "path": "tests/fixtures/neuronbridge_gradient/producer/synthetic-full.png",
+      "file_sha256": "a32895c9903d1d9027e4c9356f1e4ff2d728835391a296352332309e9dc26753",
+      "decoded_sha256": "050c0b8deacd46a2fbd3bb93ae213075a42825623f77c42980409ad30af055b2",
+      "shape": [
+        566,
+        1210
+      ],
+      "dtype": "<u2",
+      "pixel_encoding": "unsigned uint16 little endian, row-major",
+      "input": {
+        "path": "synthetic://synthetic-full",
+        "file_sha256": "a647356e1e84fee1343a7d52f91cb861345f5b25fe9a158caf0f90426479149e",
+        "decoded_sha256": "bc7b2adbac5bf5eef3f2b3af04e7745b0f6c48fe6539cd7ca1eba86dd248ad7f"
+      },
+      "label_policy": "reference-labels",
+      "radius": 20,
+      "kind": "synthetic",
+      "profile": "Brain",
+      "recipe": {
+        "fill_rgb": [
+          255,
+          255,
+          255
+        ]
+      },
+      "input_shape": [
+        566,
+        1210,
+        3
+      ],
+      "input_dtype": "|u1",
+      "input_format": "RGB uint8; ImageJ ColorProcessor saved as TIFF"
+    },
+    {
+      "id": "synthetic-isolated",
+      "path": "tests/fixtures/neuronbridge_gradient/producer/synthetic-isolated.png",
+      "file_sha256": "41c79db8ecf30c4103c757fe22c6f23f5c154d9b0fa1a29741dc7209b686e052",
+      "decoded_sha256": "5c02cc37ea7369d0c0d39bb84be05fae5d874b778cdccd34ca9e314f19e82c71",
+      "shape": [
+        566,
+        1210
+      ],
+      "dtype": "<u2",
+      "pixel_encoding": "unsigned uint16 little endian, row-major",
+      "input": {
+        "path": "synthetic://synthetic-isolated",
+        "file_sha256": "977a6d38899b8bcb41878f86720805f9567a1a6eddabe9189817f4765e219d0d",
+        "decoded_sha256": "99dc66b45adc07fb4c01db56cd67f7579d0b5a7bcdd417bcd3fa00675418fb69"
+      },
+      "label_policy": "reference-labels",
+      "radius": 20,
+      "kind": "synthetic",
+      "profile": "Brain",
+      "recipe": {
+        "background_rgb": [
+          0,
+          0,
+          0
+        ],
+        "points": [
+          {
+            "xy": [
+              605,
+              283
+            ],
+            "rgb": [
+              255,
+              255,
+              255
+            ]
+          }
+        ]
+      },
+      "input_shape": [
+        566,
+        1210,
+        3
+      ],
+      "input_dtype": "|u1",
+      "input_format": "RGB uint8; ImageJ ColorProcessor saved as TIFF"
+    },
+    {
+      "id": "synthetic-border",
+      "path": "tests/fixtures/neuronbridge_gradient/producer/synthetic-border.png",
+      "file_sha256": "16fed9d25cb6d5a6daf2fbb706ef09fddc68bc7c1e6f5509895d2cb088269d97",
+      "decoded_sha256": "d90293631124a01ce05507c178eefa28993186d2fba4b950f948485b4a708ca8",
+      "shape": [
+        566,
+        1210
+      ],
+      "dtype": "<u2",
+      "pixel_encoding": "unsigned uint16 little endian, row-major",
+      "input": {
+        "path": "synthetic://synthetic-border",
+        "file_sha256": "6d2a961d4b484d88899311d092c4bec982508020e6828f32526d5e81a924e17c",
+        "decoded_sha256": "cec276aabf71870d009c9d0c660fdf34b5d1720d682955c1ac16367eaca65b16"
+      },
+      "label_policy": "reference-labels",
+      "radius": 20,
+      "kind": "synthetic",
+      "profile": "Brain",
+      "recipe": {
+        "background_rgb": [
+          0,
+          0,
+          0
+        ],
+        "points": [
+          {
+            "xy": [
+              600,
+              0
+            ],
+            "rgb": [
+              255,
+              255,
+              255
+            ]
+          },
+          {
+            "xy": [
+              600,
+              565
+            ],
+            "rgb": [
+              255,
+              255,
+              255
+            ]
+          }
+        ]
+      },
+      "input_shape": [
+        566,
+        1210,
+        3
+      ],
+      "input_dtype": "|u1",
+      "input_format": "RGB uint8; ImageJ ColorProcessor saved as TIFF"
+    },
+    {
+      "id": "synthetic-colors",
+      "path": "tests/fixtures/neuronbridge_gradient/producer/synthetic-colors.png",
+      "file_sha256": "54e7e28d66593df905e5b4882f162c94f77a1d8823b18303c92c937fda064f5b",
+      "decoded_sha256": "e85004cc50eb179751d13e964414f9097555176fbb1b23d6e6b451055e8bdaa3",
+      "shape": [
+        566,
+        1210
+      ],
+      "dtype": "<u2",
+      "pixel_encoding": "unsigned uint16 little endian, row-major",
+      "input": {
+        "path": "synthetic://synthetic-colors",
+        "file_sha256": "f8682daffd2be069e6ef1e0252828cbff6993b0b1bb65bf6edc3ffc21d2db471",
+        "decoded_sha256": "53810072535e3f4f803b045d3520fde0866f71ae2be0be9939f005b29957e9a0"
+      },
+      "label_policy": "reference-labels",
+      "radius": 20,
+      "kind": "synthetic",
+      "profile": "Brain",
+      "recipe": {
+        "background_rgb": [
+          0,
+          0,
+          0
+        ],
+        "points": [
+          {
+            "xy": [
+              360,
+              280
+            ],
+            "rgb": [
+              255,
+              0,
+              0
+            ]
+          },
+          {
+            "xy": [
+              460,
+              280
+            ],
+            "rgb": [
+              0,
+              255,
+              0
+            ]
+          },
+          {
+            "xy": [
+              560,
+              280
+            ],
+            "rgb": [
+              0,
+              0,
+              255
+            ]
+          },
+          {
+            "xy": [
+              660,
+              280
+            ],
+            "rgb": [
+              255,
+              255,
+              255
+            ]
+          },
+          {
+            "xy": [
+              760,
+              280
+            ],
+            "rgb": [
+              1,
+              0,
+              0
+            ]
+          },
+          {
+            "xy": [
+              860,
+              280
+            ],
+            "rgb": [
+              2,
+              0,
+              0
+            ]
+          }
+        ]
+      },
+      "input_shape": [
+        566,
+        1210,
+        3
+      ],
+      "input_dtype": "|u1",
+      "input_format": "RGB uint8; ImageJ ColorProcessor saved as TIFF"
+    },
+    {
+      "id": "synthetic-labels",
+      "path": "tests/fixtures/neuronbridge_gradient/producer/synthetic-labels.png",
+      "file_sha256": "0999c0ba91ad641dfe00cf0f998d321d34e492748c3f7f6bbf9db5db6b328edc",
+      "decoded_sha256": "6574d4341a29d879f73d82f8bc96ba7d210744ed62f3892625ebf5e334326f34",
+      "shape": [
+        566,
+        1210
+      ],
+      "dtype": "<u2",
+      "pixel_encoding": "unsigned uint16 little endian, row-major",
+      "input": {
+        "path": "synthetic://synthetic-labels",
+        "file_sha256": "17073afe98a61590f9b716e272ffcf672489bf9998525dd6c8383a59f3b46c74",
+        "decoded_sha256": "2b7568d7f28f10b223fd2f22bdfc73334e2782aa65bc4d672042ef1620e2c63c"
+      },
+      "label_policy": "reference-labels",
+      "radius": 20,
+      "kind": "synthetic",
+      "profile": "Brain",
+      "recipe": {
+        "background_rgb": [
+          0,
+          0,
+          0
+        ],
+        "points": [
+          {
+            "xy": [
+              100,
+              50
+            ],
+            "rgb": [
+              255,
+              255,
+              255
+            ]
+          },
+          {
+            "xy": [
+              1110,
+              50
+            ],
+            "rgb": [
+              255,
+              255,
+              255
+            ]
+          },
+          {
+            "xy": [
+              200,
+              104
+            ],
+            "rgb": [
+              255,
+              255,
+              255
+            ]
+          },
+          {
+            "xy": [
+              1060,
+              99
+            ],
+            "rgb": [
+              255,
+              255,
+              255
+            ]
+          },
+          {
+            "xy": [
+              400,
+              105
+            ],
+            "rgb": [
+              255,
+              255,
+              255
+            ]
+          },
+          {
+            "xy": [
+              605,
+              283
+            ],
+            "rgb": [
+              255,
+              255,
+              255
+            ]
+          }
+        ]
+      },
+      "input_shape": [
+        566,
+        1210,
+        3
+      ],
+      "input_dtype": "|u1",
+      "input_format": "RGB uint8; ImageJ ColorProcessor saved as TIFF"
+    },
+    {
+      "id": "vnc-canvas",
+      "path": "tests/fixtures/neuronbridge_gradient/producer/vnc-canvas.png",
+      "file_sha256": "d408430c150618767066e586e538d6acc8f521f9de8a72901ded5061fc9e9e2e",
+      "decoded_sha256": "7d1e50f2c98d81c88d3cc9e3b915b851b2061f93e3d97efd5747ae8edbe7981a",
+      "shape": [
+        1209,
+        573
+      ],
+      "dtype": "<u2",
+      "pixel_encoding": "unsigned uint16 little endian, row-major",
+      "input": {
+        "path": "synthetic://vnc-canvas",
+        "file_sha256": "c6a838c3e008cc40ff2397eab812b384a5c540ed4240dd81e6eb7fc99624a2a5",
+        "decoded_sha256": "64e4a75e026a774bbdc6a71d87c10cba993036905fd750817988ea1270df11de"
+      },
+      "label_policy": "reference-labels",
+      "radius": 20,
+      "kind": "synthetic",
+      "profile": "VNC",
+      "recipe": {
+        "background_rgb": [
+          0,
+          0,
+          0
+        ],
+        "points": [
+          {
+            "xy": [
+              286,
+              604
+            ],
+            "rgb": [
+              255,
+              255,
+              255
+            ]
+          }
+        ]
+      },
+      "input_shape": [
+        1209,
+        573,
+        3
+      ],
+      "input_dtype": "|u1",
+      "input_format": "RGB uint8; ImageJ ColorProcessor saved as TIFF"
+    },
+    {
+      "id": "synthetic-labels-no-labels",
+      "path": "tests/fixtures/neuronbridge_gradient/producer/synthetic-labels-no-labels.png",
+      "file_sha256": "c774d8fd51e8602abe050880b39d540e1c9f437779f9dd761bb19fda38d1037d",
+      "decoded_sha256": "75b0a5b07619620848a61400714bd5be118aa83a19511fd59fc726dadf73fda1",
+      "shape": [
+        566,
+        1210
+      ],
+      "dtype": "<u2",
+      "pixel_encoding": "unsigned uint16 little endian, row-major",
+      "input": {
+        "path": "synthetic://synthetic-labels-no-labels",
+        "file_sha256": "17073afe98a61590f9b716e272ffcf672489bf9998525dd6c8383a59f3b46c74",
+        "decoded_sha256": "2b7568d7f28f10b223fd2f22bdfc73334e2782aa65bc4d672042ef1620e2c63c"
+      },
+      "label_policy": "no-labels",
+      "radius": 20,
+      "kind": "synthetic",
+      "profile": "Brain",
+      "recipe": {
+        "background_rgb": [
+          0,
+          0,
+          0
+        ],
+        "points": [
+          {
+            "xy": [
+              100,
+              50
+            ],
+            "rgb": [
+              255,
+              255,
+              255
+            ]
+          },
+          {
+            "xy": [
+              1110,
+              50
+            ],
+            "rgb": [
+              255,
+              255,
+              255
+            ]
+          },
+          {
+            "xy": [
+              200,
+              104
+            ],
+            "rgb": [
+              255,
+              255,
+              255
+            ]
+          },
+          {
+            "xy": [
+              1060,
+              99
+            ],
+            "rgb": [
+              255,
+              255,
+              255
+            ]
+          },
+          {
+            "xy": [
+              400,
+              105
+            ],
+            "rgb": [
+              255,
+              255,
+              255
+            ]
+          },
+          {
+            "xy": [
+              605,
+              283
+            ],
+            "rgb": [
+              255,
+              255,
+              255
+            ]
+          }
+        ],
+        "label_clearing": "bypassed explicitly"
+      },
+      "input_shape": [
+        566,
+        1210,
+        3
+      ],
+      "input_dtype": "|u1",
+      "input_format": "RGB uint8; ImageJ ColorProcessor saved as TIFF"
+    }
+  ],
+  "z_gap_outputs": [
+    {
+      "id": "BJD_127B01_AE_01-20171124_64_H6-40x-Brain-JRC2018_Unisex_20x_HR-2483089192251293794-CH2-01_CDM-no-labels",
+      "path": "tests/fixtures/neuronbridge_gradient/producer/zgap/BJD_127B01_AE_01-20171124_64_H6-40x-Brain-JRC2018_Unisex_20x_HR-2483089192251293794-CH2-01_CDM-no-labels.png",
+      "file_sha256": "d426bfcc989087d7e4a032afdc8af19b29e809f97a0dba482e0c31c831217db6",
+      "decoded_sha256": "0f3e80bb4082423e912880d451a17dc32a5feffb76825016390ddf522347bf2d",
+      "shape": [
+        566,
+        1210,
+        3
+      ],
+      "dtype": "|u1",
+      "pixel_encoding": "RGB uint8, row-major",
+      "input_path": "tests/fixtures/neuronbridge_gradient/inputs/lms/BJD_127B01_AE_01-20171124_64_H6-40x-Brain-JRC2018_Unisex_20x_HR-2483089192251293794-CH2-01_CDM.tif",
+      "input_file_sha256": "e35a5361a1b28ca113e4b842aaedd0ff977027ceda880f73d7e5008c6c3a3c66",
+      "input_decoded_sha256": "0977a5d2f4df1ae83fe8b4f759b1db53978d31d8018f6750231d46197886454c",
+      "input_shape": [
+        566,
+        1210,
+        3
+      ],
+      "label_policy": "no-labels",
+      "preparation": "identity or ImageTestUtils labels -> ColorTransformation.mask(20) -> unsafeMaxFilter(10) -> toImageArray"
+    },
+    {
+      "id": "BJD_127B01_AE_01-20171124_64_H6-40x-Brain-JRC2018_Unisex_20x_HR-2483089192251293794-CH2-01_CDM",
+      "path": "tests/fixtures/neuronbridge_gradient/producer/zgap/BJD_127B01_AE_01-20171124_64_H6-40x-Brain-JRC2018_Unisex_20x_HR-2483089192251293794-CH2-01_CDM.png",
+      "file_sha256": "502eeec7ac86927adeee5f552815ee04f21a4a53950947ec608a4c77c0386186",
+      "decoded_sha256": "87a435e032020687fe54a5afef83a41121caff50f8a710f28294e0655f879201",
+      "shape": [
+        566,
+        1210,
+        3
+      ],
+      "dtype": "|u1",
+      "pixel_encoding": "RGB uint8, row-major",
+      "input_path": "tests/fixtures/neuronbridge_gradient/inputs/lms/BJD_127B01_AE_01-20171124_64_H6-40x-Brain-JRC2018_Unisex_20x_HR-2483089192251293794-CH2-01_CDM.tif",
+      "input_file_sha256": "e35a5361a1b28ca113e4b842aaedd0ff977027ceda880f73d7e5008c6c3a3c66",
+      "input_decoded_sha256": "0977a5d2f4df1ae83fe8b4f759b1db53978d31d8018f6750231d46197886454c",
+      "input_shape": [
+        566,
+        1210,
+        3
+      ],
+      "label_policy": "reference-labels",
+      "preparation": "identity or ImageTestUtils labels -> ColorTransformation.mask(20) -> unsafeMaxFilter(10) -> toImageArray"
+    },
+    {
+      "id": "VT016795_115C08_AE_01-20200221_61_I2-m-CH1_01-no-labels",
+      "path": "tests/fixtures/neuronbridge_gradient/producer/zgap/VT016795_115C08_AE_01-20200221_61_I2-m-CH1_01-no-labels.png",
+      "file_sha256": "c8c91a980bddb115a65fa44e610680f5a7d90c156bb008cdc66b73656f02fd41",
+      "decoded_sha256": "01b5c5a3f12403277f1b7e53bd5235bf10510a41dffe768c7ce4dc0b58a42753",
+      "shape": [
+        566,
+        1210,
+        3
+      ],
+      "dtype": "|u1",
+      "pixel_encoding": "RGB uint8, row-major",
+      "input_path": "tests/fixtures/neuronbridge_gradient/inputs/lms/VT016795_115C08_AE_01-20200221_61_I2-m-CH1_01.tif",
+      "input_file_sha256": "ab480291acfad67960e35885cdf622967a6b369a5445ed8257bcf031daaddfae",
+      "input_decoded_sha256": "6bc97bea858e29cf5d5255f9181f6148ae7237eed965663658fbb63715450706",
+      "input_shape": [
+        566,
+        1210,
+        3
+      ],
+      "label_policy": "no-labels",
+      "preparation": "identity or ImageTestUtils labels -> ColorTransformation.mask(20) -> unsafeMaxFilter(10) -> toImageArray"
+    },
+    {
+      "id": "VT016795_115C08_AE_01-20200221_61_I2-m-CH1_01",
+      "path": "tests/fixtures/neuronbridge_gradient/producer/zgap/VT016795_115C08_AE_01-20200221_61_I2-m-CH1_01.png",
+      "file_sha256": "111be8133fc962f2c7d7320d0036c46ab68b3a21a1f4ee46fd2c614cc6ed3d7b",
+      "decoded_sha256": "4b5a6a663aa23838b8d28ebd21ae89be042f59ab605128756a81b9b88e9f6194",
+      "shape": [
+        566,
+        1210,
+        3
+      ],
+      "dtype": "|u1",
+      "pixel_encoding": "RGB uint8, row-major",
+      "input_path": "tests/fixtures/neuronbridge_gradient/inputs/lms/VT016795_115C08_AE_01-20200221_61_I2-m-CH1_01.tif",
+      "input_file_sha256": "ab480291acfad67960e35885cdf622967a6b369a5445ed8257bcf031daaddfae",
+      "input_decoded_sha256": "6bc97bea858e29cf5d5255f9181f6148ae7237eed965663658fbb63715450706",
+      "input_shape": [
+        566,
+        1210,
+        3
+      ],
+      "label_policy": "reference-labels",
+      "preparation": "identity or ImageTestUtils labels -> ColorTransformation.mask(20) -> unsafeMaxFilter(10) -> toImageArray"
+    },
+    {
+      "id": "VT033614_127B01_AE_01-20171124_64_H6-f-CH2_01-no-labels",
+      "path": "tests/fixtures/neuronbridge_gradient/producer/zgap/VT033614_127B01_AE_01-20171124_64_H6-f-CH2_01-no-labels.png",
+      "file_sha256": "8aa091984ef5a185184d32022291d5b4dcf9e21d6f689944a7064c634e0c6dfa",
+      "decoded_sha256": "470d9377798109bcde26ef73484ca7f99c485818d3a89fb520a55b4fa3c0d139",
+      "shape": [
+        566,
+        1210,
+        3
+      ],
+      "dtype": "|u1",
+      "pixel_encoding": "RGB uint8, row-major",
+      "input_path": "tests/fixtures/neuronbridge_gradient/inputs/lms/VT033614_127B01_AE_01-20171124_64_H6-f-CH2_01.tif",
+      "input_file_sha256": "efbe116e00df51337e1b927ab0907454d3c19b2b4d7d1ab2ff4e2460f11fc8b3",
+      "input_decoded_sha256": "13a139ed00f2cad3cec35560c7cadefc2052d606b1f85fadc14882fc05d6841c",
+      "input_shape": [
+        566,
+        1210,
+        3
+      ],
+      "label_policy": "no-labels",
+      "preparation": "identity or ImageTestUtils labels -> ColorTransformation.mask(20) -> unsafeMaxFilter(10) -> toImageArray"
+    },
+    {
+      "id": "VT033614_127B01_AE_01-20171124_64_H6-f-CH2_01",
+      "path": "tests/fixtures/neuronbridge_gradient/producer/zgap/VT033614_127B01_AE_01-20171124_64_H6-f-CH2_01.png",
+      "file_sha256": "a707dd0881111bfa934e2e1f01b10f4383be138b48c90f33bcac5397f1c6a973",
+      "decoded_sha256": "74804909c6d914c6ce801e4e20267b0e18ca32873f000d78b2bcac16ab3d2e9a",
+      "shape": [
+        566,
+        1210,
+        3
+      ],
+      "dtype": "|u1",
+      "pixel_encoding": "RGB uint8, row-major",
+      "input_path": "tests/fixtures/neuronbridge_gradient/inputs/lms/VT033614_127B01_AE_01-20171124_64_H6-f-CH2_01.tif",
+      "input_file_sha256": "efbe116e00df51337e1b927ab0907454d3c19b2b4d7d1ab2ff4e2460f11fc8b3",
+      "input_decoded_sha256": "13a139ed00f2cad3cec35560c7cadefc2052d606b1f85fadc14882fc05d6841c",
+      "input_shape": [
+        566,
+        1210,
+        3
+      ],
+      "label_policy": "reference-labels",
+      "preparation": "identity or ImageTestUtils labels -> ColorTransformation.mask(20) -> unsafeMaxFilter(10) -> toImageArray"
+    }
+  ],
+  "generated_scores": [
+    {
+      "id": "provider-em-vt033614",
+      "combination": "em-vt033614",
+      "gradient_area_gap": 21365,
+      "high_expression_area": 731,
+      "combined_long": 21608,
+      "score_int": 21608,
+      "mirrored": false,
+      "zgap_mode": "test-derived",
+      "zgap_decoded_sha256": "74804909c6d914c6ce801e4e20267b0e18ca32873f000d78b2bcac16ab3d2e9a",
+      "baseline_archived_gradient_score": {
+        "gradient_area_gap": 21365,
+        "high_expression_area": 731,
+        "combined_long": 21608,
+        "score_int": 21608,
+        "mirrored": false
+      },
+      "same_as_archived_gradient_score": true
+    },
+    {
+      "id": "provider-em-bjd-derived",
+      "combination": "em-bjd-derived",
+      "gradient_area_gap": 23367,
+      "high_expression_area": 523,
+      "combined_long": 23541,
+      "score_int": 23541,
+      "mirrored": false,
+      "zgap_mode": "test-derived",
+      "zgap_decoded_sha256": "87a435e032020687fe54a5afef83a41121caff50f8a710f28294e0655f879201",
+      "baseline_archived_gradient_score": {
+        "gradient_area_gap": 23359,
+        "high_expression_area": 523,
+        "combined_long": 23533,
+        "score_int": 23533,
+        "mirrored": false
+      },
+      "same_as_archived_gradient_score": false
+    },
+    {
+      "id": "provider-em-vt016795",
+      "combination": "em-vt016795",
+      "gradient_area_gap": 40696,
+      "high_expression_area": 17253,
+      "combined_long": 46447,
+      "score_int": 46447,
+      "mirrored": true,
+      "zgap_mode": "test-derived",
+      "zgap_decoded_sha256": "4b5a6a663aa23838b8d28ebd21ae89be042f59ab605128756a81b9b88e9f6194",
+      "baseline_archived_gradient_score": {
+        "gradient_area_gap": 40696,
+        "high_expression_area": 17253,
+        "combined_long": 46447,
+        "score_int": 46447,
+        "mirrored": true
+      },
+      "same_as_archived_gradient_score": true
+    },
+    {
+      "id": "provider-fl-vt033614",
+      "combination": "fl-vt033614",
+      "gradient_area_gap": 65381,
+      "high_expression_area": 677,
+      "combined_long": 65606,
+      "score_int": 65606,
+      "mirrored": false,
+      "zgap_mode": "test-derived",
+      "zgap_decoded_sha256": "74804909c6d914c6ce801e4e20267b0e18ca32873f000d78b2bcac16ab3d2e9a",
+      "baseline_archived_gradient_score": {
+        "gradient_area_gap": 65381,
+        "high_expression_area": 677,
+        "combined_long": 65606,
+        "score_int": 65606,
+        "mirrored": false
+      },
+      "same_as_archived_gradient_score": true
+    },
+    {
+      "id": "provider-fl-vt016795",
+      "combination": "fl-vt016795",
+      "gradient_area_gap": 104449,
+      "high_expression_area": 16803,
+      "combined_long": 110050,
+      "score_int": 110050,
+      "mirrored": true,
+      "zgap_mode": "test-derived",
+      "zgap_decoded_sha256": "4b5a6a663aa23838b8d28ebd21ae89be042f59ab605128756a81b9b88e9f6194",
+      "baseline_archived_gradient_score": {
+        "gradient_area_gap": 104449,
+        "high_expression_area": 16803,
+        "combined_long": 110050,
+        "score_int": 110050,
+        "mirrored": true
+      },
+      "same_as_archived_gradient_score": true
+    },
+    {
+      "id": "direct-em-vt033614",
+      "combination": "em-vt033614",
+      "gradient_area_gap": 21365,
+      "high_expression_area": 731,
+      "combined_long": 21608,
+      "score_int": 21608,
+      "mirrored": false,
+      "zgap_mode": "test-derived",
+      "zgap_decoded_sha256": "74804909c6d914c6ce801e4e20267b0e18ca32873f000d78b2bcac16ab3d2e9a",
+      "baseline_archived_gradient_score": {
+        "gradient_area_gap": 21365,
+        "high_expression_area": 731,
+        "combined_long": 21608,
+        "score_int": 21608,
+        "mirrored": false
+      },
+      "same_as_archived_gradient_score": true
+    },
+    {
+      "id": "direct-em-bjd-supplied",
+      "combination": "em-bjd-supplied",
+      "gradient_area_gap": 23367,
+      "high_expression_area": 523,
+      "combined_long": 23541,
+      "score_int": 23541,
+      "mirrored": false,
+      "zgap_mode": "test-derived",
+      "zgap_decoded_sha256": "87a435e032020687fe54a5afef83a41121caff50f8a710f28294e0655f879201",
+      "baseline_archived_gradient_score": {
+        "gradient_area_gap": 33884,
+        "high_expression_area": 523,
+        "combined_long": 34058,
+        "score_int": 34058,
+        "mirrored": false
+      },
+      "same_as_archived_gradient_score": false
+    },
+    {
+      "id": "direct-em-bjd-mismatched",
+      "combination": "em-bjd-mismatched",
+      "gradient_area_gap": 23367,
+      "high_expression_area": 523,
+      "combined_long": 23541,
+      "score_int": 23541,
+      "mirrored": false,
+      "zgap_mode": "test-derived",
+      "zgap_decoded_sha256": "87a435e032020687fe54a5afef83a41121caff50f8a710f28294e0655f879201",
+      "baseline_archived_gradient_score": {
+        "gradient_area_gap": 23367,
+        "high_expression_area": 523,
+        "combined_long": 23541,
+        "score_int": 23541,
+        "mirrored": false
+      },
+      "same_as_archived_gradient_score": true
+    },
+    {
+      "id": "direct-em-vt016795",
+      "combination": "em-vt016795",
+      "gradient_area_gap": 40696,
+      "high_expression_area": 17253,
+      "combined_long": 46447,
+      "score_int": 46447,
+      "mirrored": true,
+      "zgap_mode": "test-derived",
+      "zgap_decoded_sha256": "4b5a6a663aa23838b8d28ebd21ae89be042f59ab605128756a81b9b88e9f6194",
+      "baseline_archived_gradient_score": {
+        "gradient_area_gap": 40696,
+        "high_expression_area": 17253,
+        "combined_long": 46447,
+        "score_int": 46447,
+        "mirrored": true
+      },
+      "same_as_archived_gradient_score": true
+    },
+    {
+      "id": "direct-fl-vt033614",
+      "combination": "fl-vt033614",
+      "gradient_area_gap": 65381,
+      "high_expression_area": 677,
+      "combined_long": 65606,
+      "score_int": 65606,
+      "mirrored": false,
+      "zgap_mode": "test-derived",
+      "zgap_decoded_sha256": "74804909c6d914c6ce801e4e20267b0e18ca32873f000d78b2bcac16ab3d2e9a",
+      "baseline_archived_gradient_score": {
+        "gradient_area_gap": 65381,
+        "high_expression_area": 677,
+        "combined_long": 65606,
+        "score_int": 65606,
+        "mirrored": false
+      },
+      "same_as_archived_gradient_score": true
+    },
+    {
+      "id": "direct-fl-vt016795",
+      "combination": "fl-vt016795",
+      "gradient_area_gap": 104449,
+      "high_expression_area": 16803,
+      "combined_long": 110050,
+      "score_int": 110050,
+      "mirrored": true,
+      "zgap_mode": "test-derived",
+      "zgap_decoded_sha256": "4b5a6a663aa23838b8d28ebd21ae89be042f59ab605128756a81b9b88e9f6194",
+      "baseline_archived_gradient_score": {
+        "gradient_area_gap": 104449,
+        "high_expression_area": 16803,
+        "combined_long": 110050,
+        "score_int": 110050,
+        "mirrored": true
+      },
+      "same_as_archived_gradient_score": true
+    }
+  ],
+  "vnc_annotation_clear": {
+    "canvas_yx": [
+      1209,
+      573
+    ],
+    "content_offset_y": 90,
+    "producer_left_box_rows_x_columns": [
+      105,
+      330
+    ],
+    "producer_right_box_rows_x_columns": [
+      100,
+      270
+    ],
+    "positive_score_exclusions": [
+      [
+        "left",
+        0,
+        0,
+        330,
+        100
+      ],
+      [
+        "right",
+        0,
+        0,
+        250,
+        90
+      ]
+    ],
+    "producer_clear_pixels": 58950,
+    "positive_exclusion_pixels": 54870,
+    "extra_clear_pixels": 4080,
+    "definition": "extra_clear = producer annotation clear AND NOT VNC positive-score exclusion; the pinned producer erases its fixed brain-origin boxes on every canvas while VNC positive CDS excludes only its header rectangles"
+  },
+  "limitations": [
+    "No source canvas large enough to exceed unsigned-16-bit distance range was executed; supported Brain/VNC canvases have finite maximum grid path distance below 65535.",
+    "Producer outputs differing from archived fixtures are distinct generated variants; no identity claim is made.",
+    "The per-MANC extra-clear signal characterization covers only the retained three-member real MANC subset; it does not establish that every MANC or VNC candidate has no signal inside that region."
+  ]
+}

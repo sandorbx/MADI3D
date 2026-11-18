@@ -12,6 +12,7 @@ import io
 import hashlib
 import json
 import math
+import struct
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from typing import Any, Mapping
@@ -226,18 +227,79 @@ class CSVProvenance:
             raise NeuronBridgeRecordError("CSV checksum must be lowercase SHA-256 hex.")
 
 
+# Identity carriers retired by the installed-library search route: a new
+# session names the distribution by library ID and installed archive digest,
+# never by a snapshot ID or an inventory/manifest hash.
+_RETIRED_LOCAL_EVIDENCE_FIELDS = frozenset({
+    "snapshot_id", "source_snapshot_id", "inventory_sha256", "source_inventory_sha256",
+    "manifest_sha256", "membership_sha256"})
+
+
 def _validate_local_execution(session, evidence):
     """Validate retained execution facts without touching a library or network."""
-    if not isinstance(evidence, dict) or type(evidence.get("schema_version")) is not int or evidence["schema_version"] != 1:
+    if not isinstance(evidence, dict) or type(evidence.get("schema_version")) is not int \
+            or evidence["schema_version"] not in (1, 2, 3):
         raise NeuronBridgeRecordError("Unsupported local search evidence.")
     if evidence.get("backend") != "madi3d-local" or evidence.get("completion_status") != "completed" or evidence.get("library_completeness") != "complete":
         raise NeuronBridgeRecordError("Only complete local rankings can become search results.")
-    for name in ("algorithm", "reference_revision", "implementation_revision", "snapshot_id", "query_id", "library", "library_release", "data_version", "query_alignment_quality"):
+    version = evidence["schema_version"]
+    historical = evidence.get("historical_provenance")
+    if historical is not None:
+        if (not isinstance(historical, dict) or set(historical) != {"source_evidence_version", "population"}
+                or historical["source_evidence_version"] not in (1, 2)
+                or not isinstance(historical["population"], list) or len(historical["population"]) > 6
+                or any(not isinstance(fact, dict) or set(fact) != {"kind", "value"}
+                       or not all(isinstance(v, str) and v for v in fact.values())
+                       for fact in historical["population"])
+                or len(json.dumps(historical).encode("utf-8")) > 32 * 1024):
+            raise NeuronBridgeRecordError("Invalid bounded historical population provenance.")
+    names = ["algorithm", "reference_revision", "implementation_revision", "query_id",
+             "library", "library_release", "data_version", "query_alignment_quality"]
+    if version == 1:
+        names.insert(3, "snapshot_id")
+    else:
+        if not evidence.get("historical_provenance"):
+            names += ["provider", "representation"]
+    for name in names:
         _string(evidence.get(name), name)
-    for name in ("inventory_sha256", "manifest_sha256", "query_png_sha256", "query_pixel_sha256"):
+    hexes = ["query_png_sha256", "query_pixel_sha256"]
+    if version == 1:
+        hexes = ["inventory_sha256", "manifest_sha256"] + hexes
+    elif version == 2:
+        for name in ("library_id", "source_snapshot_id"):
+            _string(evidence.get(name), name, optional=True)
+        # At least one published/installed package digest pins which collection
+        # content was searched: the transferred archive digest, the published
+        # inventory digest, or both.
+        hexes = ["archive_sha256", "source_inventory_sha256", "membership_sha256"] + hexes
+    else:
+        # A validated historical_provenance block marks the normalized form of a
+        # supported schema-1/2 session: the managed distribution identity that
+        # postdates it cannot be recovered and is checked only when the older
+        # record happened to retain it. Without that historical assertion, new
+        # local results require the canonical managed distribution identity.
+        if historical is None:
+            _string(evidence.get("library_id"), "library_id")
+            hexes.insert(0, "archive_sha256")
+        else:
+            _string(evidence.get("library_id"), "library_id", optional=True)
+            if evidence.get("archive_sha256") is not None:
+                hexes.insert(0, "archive_sha256")
+        retired = sorted(name for name in _RETIRED_LOCAL_EVIDENCE_FIELDS
+                         if evidence.get(name) is not None)
+        if retired:
+            raise NeuronBridgeRecordError(
+                "Installed-library search evidence cannot retain retired fields: "
+                + ", ".join(retired) + ".")
+    for name in hexes:
         value = evidence.get(name)
+        if value is None and version == 2 and name in {"archive_sha256", "source_inventory_sha256", "membership_sha256"}:
+            continue
         if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
             raise NeuronBridgeRecordError(f"Invalid local search {name}.")
+    if version == 2 and not any(evidence.get(name) for name in ("archive_sha256", "source_inventory_sha256")):
+        raise NeuronBridgeRecordError(
+            "Local search must record the installed distribution's package digest.")
     if evidence["query_id"] != session.query_reference or evidence["data_version"] != session.neuronbridge_data_version:
         raise NeuronBridgeRecordError("Local search context disagrees with its session.")
     counts = evidence.get("counts")
@@ -256,7 +318,13 @@ def _validate_local_execution(session, evidence):
         parameters = SearchParameters(**{p.name: p.value for p in session.parameters})
     except (ValueError, KeyError, TypeError) as exc:
         raise NeuronBridgeRecordError("Invalid retained local search parameters.") from exc
-    if counts["retained"] != min(counts["matched"], parameters.result_limit) or type(evidence.get("results_truncated")) is not bool or evidence["results_truncated"] != (counts["matched"] > counts["retained"]):
+    if getattr(session, "shape_execution", None) is not None:
+        # A completed shape stage republishes only the emitted shortlist rows,
+        # so a shape-cohort session may honestly retain fewer than the limit.
+        retained_ok = 0 <= counts["retained"] <= min(counts["matched"], parameters.result_limit)
+    else:
+        retained_ok = counts["retained"] == min(counts["matched"], parameters.result_limit)
+    if not retained_ok or type(evidence.get("results_truncated")) is not bool or evidence["results_truncated"] != (counts["matched"] > counts["retained"]):
         raise NeuronBridgeRecordError("Local result limit and truncation evidence disagree.")
 
 
@@ -273,6 +341,8 @@ class SearchSession:
     context: dict[str, Any] = field(default_factory=dict)
     external_evidence: dict[str, Any] = field(default_factory=dict)
     diagnostics: tuple[Diagnostic, ...] = ()
+    gradient_execution: GradientExecution | None = None
+    shape_execution: ShapeExecution | None = None
 
     def __post_init__(self) -> None:
         _string(self.session_id, "session_id")
@@ -293,10 +363,22 @@ class SearchSession:
             _json_value(getattr(self, name))
             object.__setattr__(self, name, json.loads(json.dumps(getattr(self, name), allow_nan=False)))
         _sequence(self, "diagnostics", Diagnostic)
+        if self.gradient_execution is not None and not isinstance(self.gradient_execution, GradientExecution):
+            raise NeuronBridgeRecordError("gradient_execution must be GradientExecution or None.")
+        if self.shape_execution is not None and not isinstance(self.shape_execution, ShapeExecution):
+            raise NeuronBridgeRecordError("shape_execution must be ShapeExecution or None.")
+        if (self.gradient_execution is not None and self.shape_execution is not None):
+            raise NeuronBridgeRecordError("A session records at most one reranking generation.")
         if self.context.get("backend") == "madi3d-local":
             if self.source_kind != "custom_query":
                 raise NeuronBridgeRecordError("Local execution requires a custom-query session.")
             _validate_local_execution(self, self.context)
+            if self.gradient_execution is not None:
+                reference = self.gradient_execution.bundle_reference
+                if (reference["query_id"] != self.query_reference or
+                        reference["query_png_sha256"] != self.context["query_png_sha256"] or
+                        reference["query_pixel_sha256"] != self.context["query_pixel_sha256"]):
+                    raise NeuronBridgeRecordError("Gradient bundle disagrees with local query evidence.")
 
     def evidence_for(self, occurrence):
         """Observed evidence only; never a refreshed identity or score lookup."""
@@ -332,6 +414,16 @@ class SearchSession:
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
+        if self.gradient_execution is None:
+            data.pop("gradient_execution")
+        if self.shape_execution is None:
+            data.pop("shape_execution")
+        else:
+            for name in ("gradient_producer_reference_revision",
+                         "gradient_producer_implementation_revision", "gradient_format",
+                         "scored_cohort_digest"):
+                if data["shape_execution"][name] is None:
+                    data["shape_execution"].pop(name)
         _json_value(data)
         return data
 
@@ -342,9 +434,15 @@ class SearchSession:
             data["query_source"] = SourceIdentity.from_dict(data["query_source"])
         if data.get("csv_provenance") is not None:
             data["csv_provenance"] = CSVProvenance(**data["csv_provenance"])
+        if data.get("gradient_execution") is not None:
+            data["gradient_execution"] = GradientExecution(**data["gradient_execution"])
+        if data.get("shape_execution") is not None:
+            data["shape_execution"] = ShapeExecution(**data["shape_execution"])
         data["parameters"] = tuple(SourceParameter(**item) for item in data.get("parameters", ()))
         data["diagnostics"] = tuple(Diagnostic(**item) for item in data.get("diagnostics", ()))
-        return cls(**data)
+        session = cls(**data)
+        from .record_migration import normalize_historical_session
+        return normalize_historical_session(session)
 
 
 @dataclass(frozen=True)
@@ -369,6 +467,383 @@ class Diagnostic:
         for index in self.column_indexes:
             _integer(index, "column index")
         object.__setattr__(self, "column_indexes", tuple(self.column_indexes))
+
+
+def _sha256(value: Any, name: str) -> None:
+    if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
+        raise NeuronBridgeRecordError(f"{name} must be lowercase SHA-256 hex.")
+
+
+@dataclass(frozen=True)
+class GradientObservation:
+    """One candidate's raw and normalized supplementary gradient measurement."""
+
+    gradient_area_gap: int
+    high_expression_area: int
+    combined_penalty: int
+    gradient_mirrored: bool
+    normalized_score: float
+    gradient_rank: int
+
+    def __post_init__(self) -> None:
+        for name in ("gradient_area_gap", "high_expression_area", "combined_penalty"):
+            value = getattr(self, name)
+            if type(value) is not int or not 0 <= value < (1 << 63):
+                raise NeuronBridgeRecordError(f"{name} must be a nonnegative signed 64-bit integer.")
+        if self.combined_penalty != self.gradient_area_gap + self.high_expression_area // 3:
+            raise NeuronBridgeRecordError("Combined penalty disagrees with its raw components.")
+        if type(self.gradient_mirrored) is not bool:
+            raise NeuronBridgeRecordError("gradient_mirrored must be bool.")
+        if type(self.normalized_score) is not float or not math.isfinite(self.normalized_score):
+            raise NeuronBridgeRecordError("normalized_score must be a finite binary32 float.")
+        try:
+            stored = struct.unpack("!f", struct.pack("!f", self.normalized_score))[0]
+        except (OverflowError, struct.error) as exc:
+            raise NeuronBridgeRecordError("normalized_score must fit binary32.") from exc
+        if stored != self.normalized_score:
+            raise NeuronBridgeRecordError("normalized_score must be the authoritative binary32 value.")
+        _integer(self.gradient_rank, "gradient_rank", 1)
+
+
+@dataclass(frozen=True)
+class GradientExecution:
+    """Compact immutable cohort context for an accepted gradient reranking."""
+
+    algorithm: str
+    reference_revision: str
+    implementation_revision: str
+    parameters: dict[str, Any]
+    profile_id: str
+    label_policy: str
+    normalization_policy: str
+    normalization_precision: str
+    cohort_count: int
+    membership_digest: str
+    max_positive_pixels: int | None
+    max_combined_penalty: int | None
+    bundle_reference: dict[str, Any]
+
+    def __post_init__(self) -> None:
+        for name in ("algorithm", "reference_revision", "implementation_revision", "profile_id",
+                     "label_policy", "normalization_policy", "normalization_precision"):
+            _string(getattr(self, name), name)
+        for name in ("parameters", "bundle_reference"):
+            value = getattr(self, name)
+            if not isinstance(value, dict):
+                raise NeuronBridgeRecordError(f"{name} must be a mapping.")
+            _json_value(value)
+            object.__setattr__(self, name, json.loads(json.dumps(value, allow_nan=False)))
+        _integer(self.cohort_count, "cohort_count")
+        _sha256(self.membership_digest, "membership_digest")
+        maxima = (self.max_positive_pixels, self.max_combined_penalty)
+        if self.cohort_count == 0:
+            if maxima != (None, None):
+                raise NeuronBridgeRecordError("An empty gradient cohort has no maxima.")
+        else:
+            for name, value in zip(("max_positive_pixels", "max_combined_penalty"), maxima, strict=True):
+                if type(value) is not int or not 0 <= value < (1 << 63):
+                    raise NeuronBridgeRecordError(f"{name} must be a nonnegative signed 64-bit integer.")
+        try:
+            from .gradient_scorer import GradientParameters
+            from .search_profiles import search_profile
+            if set(self.parameters) != {item.name for item in fields(GradientParameters)}:
+                raise ValueError("Gradient parameters must retain their exact executed field set.")
+            parameters = GradientParameters(**self.parameters)
+            profile = search_profile(self.profile_id)
+        except (TypeError, ValueError) as exc:
+            raise NeuronBridgeRecordError("Gradient execution parameters or profile are invalid.") from exc
+        if self.normalization_policy != "madi3d-lm-retained-cohort/1":
+            raise NeuronBridgeRecordError("Unsupported gradient normalization policy.")
+        if self.normalization_precision != "binary64-to-binary32":
+            raise NeuronBridgeRecordError("Unsupported gradient normalization precision.")
+        label_policies = {
+            "reference-labels": (True, True),
+            "no-labels": (False, False),
+            "name-label-only": (True, False),
+            "color-scale-only": (False, True),
+        }
+        if self.label_policy not in label_policies:
+            raise NeuronBridgeRecordError("Unknown gradient label policy.")
+        if (parameters.clear_name_label, parameters.clear_color_scale) != label_policies[self.label_policy]:
+            raise NeuronBridgeRecordError("Gradient parameters disagree with their label policy.")
+        if profile.profile_id != self.profile_id:
+            raise NeuronBridgeRecordError("Unknown gradient search profile.")
+        required = ("bundle_id", "query_id", "query_png_sha256", "query_pixel_sha256", "profile_id",
+                    "gradient_png_sha256", "gradient_pixel_sha256", "zgap_png_sha256", "zgap_pixel_sha256")
+        # No derivatives are consumed when the retained positive cohort is empty.
+        # Keep exact query evidence without manufacturing an unused bundle.
+        if self.cohort_count == 0 and "bundle_id" not in self.bundle_reference:
+            query_keys = {"query_id", "query_png_sha256", "query_pixel_sha256", "profile_id"}
+            if set(self.bundle_reference) != query_keys or self.bundle_reference["profile_id"] != self.profile_id:
+                raise NeuronBridgeRecordError("Empty execution requires exact query-only evidence.")
+            _string(self.bundle_reference["query_id"], "query_id")
+            for name in ("query_png_sha256", "query_pixel_sha256"):
+                _sha256(self.bundle_reference[name], name)
+            return
+        for name in required:
+            if name not in self.bundle_reference:
+                raise NeuronBridgeRecordError(f"bundle_reference is missing {name}.")
+        for name in ("bundle_id", "query_id", "profile_id"):
+            _string(self.bundle_reference[name], f"bundle_reference.{name}")
+        if self.bundle_reference["profile_id"] != self.profile_id:
+            raise NeuronBridgeRecordError("Bundle profile disagrees with gradient execution.")
+        for name in required[2:4] + required[5:]:
+            _sha256(self.bundle_reference[name], f"bundle_reference.{name}")
+        for name in self.bundle_reference:
+            if name.endswith("_sha256"):
+                _sha256(self.bundle_reference[name], f"bundle_reference.{name}")
+        allowed_reference_keys = {
+            "bundle_id", "query_id", "origin", "gradient_origin", "zgap_origin",
+            "query_png_sha256", "query_pixel_sha256", "profile_id",
+            "gradient_png_sha256", "gradient_pixel_sha256", "zgap_png_sha256", "zgap_pixel_sha256",
+            "association", "producer", "preparation", "roi_png_sha256", "roi_pixel_sha256",
+        }
+        if not set(self.bundle_reference) <= allowed_reference_keys:
+            raise NeuronBridgeRecordError("bundle_reference contains unsupported or unbounded fields.")
+        encoded_reference = json.dumps(self.bundle_reference, sort_keys=True, separators=(",", ":"),
+                                        ensure_ascii=False, allow_nan=False).encode("utf-8")
+        if len(encoded_reference) > 32 * 1024:
+            raise NeuronBridgeRecordError("bundle_reference exceeds its compact evidence bound.")
+
+
+def gradient_membership_digest(occurrences) -> str:
+    ordinals = [item.candidate_ordinal for item in occurrences]
+    member_ids = [item.member_id for item in occurrences]
+    for item in occurrences:
+        _validate_gradient_identity(item)
+    if len(set(ordinals)) != len(ordinals) or len(set(member_ids)) != len(member_ids):
+        raise NeuronBridgeRecordError("Gradient membership requires unique candidate ordinals and member IDs.")
+    members = [{
+        "candidate_ordinal": item.candidate_ordinal,
+        "member_id": item.member_id,
+        "target": {
+            "kind": item.target.kind,
+            "provider": item.target.provider,
+            "library": item.target.library,
+            "library_release": item.target.library_release,
+            "published_name": item.target.published_name,
+            "biological": asdict(item.target.biological),
+            "image": asdict(item.target.image),
+        },
+        "input_hashes": item.input_hashes,
+    } for item in occurrences]
+    encoded = json.dumps(members, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _validate_gradient_identity(occurrence) -> None:
+    if occurrence.candidate_ordinal is None or occurrence.member_id is None:
+        raise NeuronBridgeRecordError("Gradient membership requires local member IDs and candidate ordinals.")
+    _sha256(occurrence.input_hashes.get("decoded_rgb"), "decoded_rgb input hash")
+
+
+def _validate_gradient_measurement(occurrence, execution) -> None:
+    _validate_gradient_identity(occurrence)
+    observation = occurrence.gradient
+    if observation is None:
+        raise NeuronBridgeRecordError("Gradient occurrence is missing its measurement.")
+    positive = occurrence.matched_pixels
+    if positive is None:
+        raise NeuronBridgeRecordError("Gradient normalization requires the positive pixel count.")
+    if occurrence.rank is None:
+        raise NeuronBridgeRecordError("Gradient evidence must preserve the positive rank.")
+    penalty = observation.combined_penalty
+    if execution.max_positive_pixels is None or execution.max_combined_penalty is None:
+        raise NeuronBridgeRecordError("Nonempty gradient cohort requires independent maxima.")
+    if positive > execution.max_positive_pixels or penalty > execution.max_combined_penalty:
+        raise NeuronBridgeRecordError("Gradient measurement exceeds its cohort maximum.")
+    try:
+        from .gradient_scorer import normalize_score
+        expected = float(normalize_score(
+            positive, penalty, execution.max_positive_pixels, execution.max_combined_penalty,
+        ).stored_float32)
+    except (ValueError, OverflowError) as exc:
+        raise NeuronBridgeRecordError("Gradient measurements exceed the normalization contract.") from exc
+    if observation.normalized_score != expected:
+        raise NeuronBridgeRecordError("Stored gradient score disagrees with the pinned normalization.")
+
+
+_GRADIENT_SOURCES = frozenset({"supplied-archive", "generated-producer"})
+
+
+@dataclass(frozen=True)
+class ShapeObservation:
+    """One emitted candidate's separated positive, shape and combined evidence.
+
+    The three layers stay distinct on purpose: the positive Color-Depth
+    evidence (rank/score), the raw bidirectional shape measurements with the
+    shape-selected mirror, and the final Janelia combined score/rank.
+    ``positive_score`` is the reference label value (matched percent rounded
+    HALF_UP to two decimals); ``shape_gap`` is the reference's selected
+    ``realval`` entering the area-gap normalization.
+    """
+
+    positive_rank: int
+    positive_score: float
+    mask_to_sample: int
+    sample_to_mask: int
+    normal_value: int
+    flip_value: int | None
+    shape_mirrored: bool
+    shape_gap: int
+    combined_score: float
+    combined_gap_text: str
+    combined_rank: int
+    fl_renamed: bool
+    gradient_source: str
+
+    def __post_init__(self) -> None:
+        _integer(self.positive_rank, "positive_rank", 1)
+        _integer(self.combined_rank, "combined_rank", 1)
+        if type(self.positive_score) is not float or not math.isfinite(self.positive_score) \
+                or not 0.0 <= self.positive_score <= 100.0:
+            raise NeuronBridgeRecordError("positive_score must be a finite percent value.")
+        for name in ("mask_to_sample", "sample_to_mask", "normal_value", "shape_gap"):
+            value = getattr(self, name)
+            if type(value) is not int or not 0 <= value < (1 << 63):
+                raise NeuronBridgeRecordError(f"{name} must be a nonnegative signed 64-bit integer.")
+        if self.normal_value != (self.sample_to_mask + self.mask_to_sample) // 2:
+            raise NeuronBridgeRecordError("normal_value disagrees with its raw components.")
+        if type(self.shape_mirrored) is not bool:
+            raise NeuronBridgeRecordError("shape_mirrored must be bool.")
+        if self.shape_mirrored:
+            if self.flip_value is None:
+                raise NeuronBridgeRecordError("A mirrored shape selection requires the flip measurement.")
+            if type(self.flip_value) is not int or not 0 <= self.flip_value < (1 << 63):
+                raise NeuronBridgeRecordError("flip_value must be a nonnegative signed 64-bit integer.")
+            if not self.flip_value <= self.normal_value:
+                raise NeuronBridgeRecordError("The shape flip wins ties; the stored selection disagrees.")
+            if self.shape_gap != self.flip_value:
+                raise NeuronBridgeRecordError("shape_gap must be the shape-selected value.")
+        else:
+            if self.shape_gap != self.normal_value:
+                raise NeuronBridgeRecordError("An unmirrored shape selection must carry its ordinary value.")
+            if self.flip_value is not None:
+                # The mirroring trial ran and the ordinary trial won (L3124:
+                # the flip wins only ties); a retained losing value must
+                # therefore be strictly worse than the ordinary measurement.
+                if type(self.flip_value) is not int or not self.flip_value > self.normal_value:
+                    raise NeuronBridgeRecordError("A losing flip measurement must exceed the ordinary value.")
+        if type(self.combined_score) is not float or not math.isfinite(self.combined_score):
+            raise NeuronBridgeRecordError("combined_score must be a finite binary64 gap value.")
+        _string(self.combined_gap_text, "combined_gap_text")
+        if type(self.fl_renamed) is not bool:
+            raise NeuronBridgeRecordError("fl_renamed must be bool.")
+        if self.gradient_source not in _GRADIENT_SOURCES:
+            raise NeuronBridgeRecordError("Unknown candidate gradient source.")
+
+
+@dataclass(frozen=True)
+class ShapeExecution:
+    """Compact immutable cohort context for a two-stage Janelia shape search."""
+
+    algorithm: str
+    reference_revision: str
+    implementation_revision: str
+    parameters: dict[str, Any]
+    profile_id: str
+    shape_stage_executed: bool
+    positive_count: int
+    stage1_cap: int
+    scoring_budget: int
+    shortlist_count: int
+    fl_positive: int
+    max_positive_score: float | None
+    max_shape_gap: int | None
+    emitted_count: int
+    membership_digest: str
+    gradient_producer_reference_revision: str | None = None
+    gradient_producer_implementation_revision: str | None = None
+    gradient_format: str | None = None
+    scored_cohort_digest: str | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("algorithm", "reference_revision", "implementation_revision", "profile_id"):
+            _string(getattr(self, name), name)
+        if type(self.shape_stage_executed) is not bool:
+            raise NeuronBridgeRecordError("shape_stage_executed must be bool.")
+        if not isinstance(self.parameters, dict):
+            raise NeuronBridgeRecordError("parameters must be a mapping.")
+        _json_value(self.parameters)
+        object.__setattr__(self, "parameters",
+                           json.loads(json.dumps(self.parameters, allow_nan=False)))
+        if set(self.parameters) != {"mirror", "mask_threshold", "negative_radius"}:
+            raise NeuronBridgeRecordError("Shape parameters must retain their exact executed field set.")
+        if type(self.parameters["mirror"]) is not bool:
+            raise NeuronBridgeRecordError("Shape mirror preference must be boolean.")
+        if type(self.parameters["mask_threshold"]) is not int or not 0 <= self.parameters["mask_threshold"] <= 255:
+            raise NeuronBridgeRecordError("Shape mask threshold must be an integer from 0 to 255.")
+        if type(self.parameters["negative_radius"]) is not int or not 0 <= self.parameters["negative_radius"] <= 60:
+            raise NeuronBridgeRecordError("Shape negative radius must be an integer from 0 to 60.")
+        try:
+            from .search_profiles import search_profile
+            profile = search_profile(self.profile_id)
+        except (TypeError, ValueError) as exc:
+            raise NeuronBridgeRecordError("Shape execution profile is invalid.") from exc
+        if profile.profile_id != self.profile_id:
+            raise NeuronBridgeRecordError("Unknown shape search profile.")
+        for name in ("positive_count", "stage1_cap", "scoring_budget", "shortlist_count",
+                     "fl_positive", "emitted_count"):
+            _integer(getattr(self, name), name)
+        _sha256(self.membership_digest, "membership_digest")
+        if self.implementation_revision == "madi3d-janelia-shape/2":
+            for name in ("gradient_producer_reference_revision",
+                         "gradient_producer_implementation_revision", "gradient_format"):
+                _string(getattr(self, name), name)
+            _sha256(self.scored_cohort_digest, "scored_cohort_digest")
+        if not self.shape_stage_executed:
+            if (self.shortlist_count, self.emitted_count, self.max_positive_score, self.max_shape_gap) \
+                    != (0, 0, None, None):
+                raise NeuronBridgeRecordError("An unexecuted shape stage cannot carry a scored cohort.")
+            if self.scoring_budget or self.stage1_cap:
+                raise NeuronBridgeRecordError("An unexecuted shape stage cannot carry budgets.")
+        else:
+            if self.shortlist_count == 0 or self.emitted_count > self.scoring_budget:
+                raise NeuronBridgeRecordError("Executed shape cohort is inconsistent.")
+            if self.scoring_budget > self.shortlist_count:
+                raise NeuronBridgeRecordError("Shape scoring budget exceeds its shortlist.")
+            if type(self.max_positive_score) is not float or not math.isfinite(self.max_positive_score) \
+                    or not 0.0 <= self.max_positive_score <= 100.0:
+                raise NeuronBridgeRecordError("max_positive_score must be a finite percent value.")
+            if type(self.max_shape_gap) is not int or not 0 <= self.max_shape_gap < (1 << 63):
+                raise NeuronBridgeRecordError("max_shape_gap must be a nonnegative signed 64-bit integer.")
+        if self.fl_positive > self.positive_count:
+            raise NeuronBridgeRecordError("FL-positive count exceeds the positive cohort.")
+
+
+def _validate_shape_measurement(occurrence, execution) -> None:
+    _validate_gradient_identity(occurrence)
+    if execution.implementation_revision == "madi3d-janelia-shape/2":
+        _sha256(occurrence.input_hashes.get("shape_gradient"), "shape_gradient")
+    observation = occurrence.shape
+    if observation is None:
+        raise NeuronBridgeRecordError("Shape occurrence is missing its measurement.")
+    if occurrence.rank is None or occurrence.rank != observation.combined_rank:
+        raise NeuronBridgeRecordError("Shape rank evidence must match the combined rank.")
+    if observation.positive_rank > execution.positive_count:
+        raise NeuronBridgeRecordError("Shape positive rank exceeds the positive cohort.")
+    if execution.max_positive_score is None or execution.max_shape_gap is None:
+        raise NeuronBridgeRecordError("Executed shape cohort requires independent maxima.")
+    if observation.positive_score > execution.max_positive_score \
+            or observation.shape_gap > execution.max_shape_gap:
+        raise NeuronBridgeRecordError("Shape measurement exceeds its cohort maximum.")
+    try:
+        from .gradient_scorer import _format_gap, combined_gap
+        text, value = combined_gap(observation.positive_score, observation.shape_gap,
+                                   execution.max_positive_score, execution.max_shape_gap)
+    except (TypeError, ValueError) as exc:
+        raise NeuronBridgeRecordError("Shape measurements exceed the normalization contract.") from exc
+    if observation.fl_renamed and execution.implementation_revision == "madi3d-janelia-shape/1":
+        # The reference FL merge hands the emitted twin the strictly larger
+        # "_FL" duplicate's gap string (L3287-3306). The own recomputation
+        # therefore bounds the stored score from below, and the stored text
+        # must remain the reference string form of its own stored value.
+        if not math.isfinite(value) or observation.combined_score <= value:
+            raise NeuronBridgeRecordError("FL-renamed combined score disagrees with its own measurement.")
+        if _format_gap(observation.combined_score) != observation.combined_gap_text:
+            raise NeuronBridgeRecordError("FL-renamed combined gap text is not the reference string form.")
+    elif text != observation.combined_gap_text or value != observation.combined_score:
+        raise NeuronBridgeRecordError("Stored shape score disagrees with the pinned normalization.")
 
 
 @dataclass(frozen=True)
@@ -447,9 +922,17 @@ class MatchOccurrence:
     input_hashes: dict[str, str] = field(default_factory=dict)
     evidence_ref: str | None = None
     evidence_index: int | None = None
+    gradient: GradientObservation | None = None
+    shape: ShapeObservation | None = None
 
     def __post_init__(self) -> None:
         _sequence(self, "metrics", HitMetric)
+        if self.gradient is not None and not isinstance(self.gradient, GradientObservation):
+            raise NeuronBridgeRecordError("gradient must be GradientObservation or None.")
+        if self.shape is not None and not isinstance(self.shape, ShapeObservation):
+            raise NeuronBridgeRecordError("shape must be ShapeObservation or None.")
+        if self.gradient is not None and self.shape is not None:
+            raise NeuronBridgeRecordError("An occurrence carries at most one reranking generation.")
         for name in ("rank", "matched_pixels", "candidate_ordinal", "evidence_index"):
             if getattr(self, name) is not None:
                 _integer(getattr(self, name), name)
@@ -500,6 +983,10 @@ class MatchOccurrence:
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
+        if self.gradient is None:
+            del data["gradient"]
+        if self.shape is None:
+            del data["shape"]
         if not self.fields:
             del data["fields"]
         return {key: value for key, value in data.items() if value is not None and value != () and value != {}}
@@ -511,6 +998,10 @@ class MatchOccurrence:
         data["fields"] = tuple(ResultField(**item) for item in data.get("fields", ()))
         data["metrics"] = tuple(HitMetric(**item) for item in data.get("metrics", ()))
         data["diagnostics"] = tuple(Diagnostic(**item) for item in data.get("diagnostics", ()))
+        if data.get("gradient") is not None:
+            data["gradient"] = GradientObservation(**data["gradient"])
+        if data.get("shape") is not None:
+            data["shape"] = ShapeObservation(**data["shape"])
         return cls(**data)
 
 
@@ -571,6 +1062,80 @@ class SearchResults:
                 type(counts.get("retained")) is not int or counts["retained"] != (
                     self.subset["reported_retained_count"] if self.subset else len(self.occurrences))):
             raise NeuronBridgeRecordError("Search retained count disagrees with its hit records.")
+        execution = self.session.gradient_execution
+        if execution is not None:
+            if execution.bundle_reference["query_id"] != self.session.query_reference:
+                raise NeuronBridgeRecordError("Gradient bundle query disagrees with its session.")
+            if self.subset is not None:
+                if (self.subset["reported_retained_count"] != execution.cohort_count or
+                        execution.cohort_count < len(self.occurrences)):
+                    raise NeuronBridgeRecordError("Selected gradient subset counts disagree with its original cohort.")
+                selected_ranks = [item.gradient.gradient_rank for item in self.occurrences if item.gradient is not None]
+                if len(set(selected_ranks)) != len(selected_ranks):
+                    raise NeuronBridgeRecordError("Selected gradient ranks must be unique.")
+                for occurrence in self.occurrences:
+                    _validate_gradient_measurement(occurrence, execution)
+                    if occurrence.gradient.gradient_rank > execution.cohort_count:
+                        raise NeuronBridgeRecordError("Selected gradient rank exceeds its original cohort.")
+            else:
+                if execution.cohort_count != len(self.occurrences):
+                    raise NeuronBridgeRecordError("Gradient cohort count disagrees with complete occurrences.")
+                if any(item.gradient is None for item in self.occurrences):
+                    raise NeuronBridgeRecordError("Every complete gradient cohort occurrence needs a measurement.")
+                if execution.cohort_count:
+                    for occurrence in self.occurrences:
+                        _validate_gradient_measurement(occurrence, execution)
+                    actual_max_positive = max(item.matched_pixels for item in self.occurrences)
+                    actual_max_penalty = max(item.gradient.combined_penalty for item in self.occurrences)
+                    if (actual_max_positive != execution.max_positive_pixels or
+                            actual_max_penalty != execution.max_combined_penalty):
+                        raise NeuronBridgeRecordError("Gradient cohort maxima disagree with its measurements.")
+                    if gradient_membership_digest(self.occurrences) != execution.membership_digest:
+                        raise NeuronBridgeRecordError("Gradient cohort digest disagrees with its occurrences.")
+                    if any(item.rank is None or item.candidate_ordinal is None for item in self.occurrences):
+                        raise NeuronBridgeRecordError("Gradient cohort requires positive ranks and candidate ordinals.")
+                    ranked = sorted(self.occurrences, key=lambda item: (
+                        -item.gradient.normalized_score, item.rank, item.candidate_ordinal,
+                    ))
+                    if sorted(item.gradient.gradient_rank for item in ranked) != list(range(1, execution.cohort_count + 1)) or any(
+                            item.gradient.gradient_rank != position
+                            for position, item in enumerate(ranked, 1)):
+                        raise NeuronBridgeRecordError("Gradient ranks disagree with stored float32 score ordering.")
+                else:
+                    if self.occurrences:
+                        raise NeuronBridgeRecordError("An empty gradient cohort cannot contain occurrences.")
+                    if gradient_membership_digest(()) != execution.membership_digest:
+                        raise NeuronBridgeRecordError("Empty gradient cohort digest is invalid.")
+        elif any(item.gradient is not None for item in self.occurrences):
+            raise NeuronBridgeRecordError("Gradient measurements require a gradient execution context.")
+        shape_execution = self.session.shape_execution
+        if shape_execution is not None:
+            if any(item.gradient is not None for item in self.occurrences):
+                raise NeuronBridgeRecordError("Shape and retired gradient measurements cannot mix.")
+            if not shape_execution.shape_stage_executed:
+                if any(item.shape is not None for item in self.occurrences):
+                    raise NeuronBridgeRecordError("An unexecuted shape stage cannot carry measurements.")
+            else:
+                if self.subset is None and len(self.occurrences) != shape_execution.emitted_count:
+                    raise NeuronBridgeRecordError("Shape cohort size disagrees with its emitted rows.")
+                if any(item.shape is None for item in self.occurrences):
+                    raise NeuronBridgeRecordError("Every shape cohort occurrence needs a measurement.")
+                ranks = [item.shape.combined_rank for item in self.occurrences]
+                if len(set(ranks)) != len(ranks):
+                    raise NeuronBridgeRecordError("Shape combined ranks must be unique.")
+                if any(rank > shape_execution.emitted_count for rank in ranks):
+                    raise NeuronBridgeRecordError("Shape combined rank exceeds its published cohort.")
+                for occurrence in self.occurrences:
+                    _validate_shape_measurement(occurrence, shape_execution)
+                if self.subset is None:
+                    if sorted(ranks) != list(range(1, len(self.occurrences) + 1)) or any(
+                            occurrence.shape.combined_rank != position
+                            for position, occurrence in enumerate(self.occurrences, 1)):
+                        raise NeuronBridgeRecordError("Shape ranks disagree with publication order.")
+                    if gradient_membership_digest(self.occurrences) != shape_execution.membership_digest:
+                        raise NeuronBridgeRecordError("Shape cohort digest disagrees with its occurrences.")
+        elif any(item.shape is not None for item in self.occurrences):
+            raise NeuronBridgeRecordError("Shape measurements require a shape execution context.")
         ids = [item.occurrence_id for item in self.occurrences]
         if len(set(ids)) != len(ids):
             raise NeuronBridgeRecordError("Occurrence IDs must be unique within a result set.")

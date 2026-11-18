@@ -1,0 +1,9 @@
+-c ../../constraints-build.txt
+imagecodecs
+numpy
+Pillow
+pytest==8.4.2
+requests
+scipy
+tifffile
+tqdm

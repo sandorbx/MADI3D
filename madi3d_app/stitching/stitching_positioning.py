@@ -557,11 +557,7 @@ def clear_position_cache() -> None:
 
 
 def _selector(snapshot: Mapping[str, Any]) -> Mapping[str, Any]:
-    for key in ("source_channel", "channel_selector"):
-        value = snapshot.get(key)
-        if isinstance(value, Mapping):
-            return value
-    value = snapshot.get("channel")
+    value = snapshot.get("channel_selector")
     return value if isinstance(value, Mapping) else {}
 
 
@@ -587,8 +583,7 @@ def _channel_index(snapshot) -> int | None:
     )
     if explicit is not None:
         return explicit
-    channel = snapshot.get("channel")
-    return _optional_index(channel)
+    return _optional_index(snapshot.get("channel_selector"))
 
 
 def _time_index(snapshot) -> int | None:
@@ -835,14 +830,12 @@ def _ome_axis_values(element, prefix):
 
 
 def _loaded_z_spacing(snapshot) -> float | None:
-    for key in ("local_affine", "local_index_affine"):
-        value = snapshot.get(key)
-        if value is None:
-            continue
-        try:
-            matrix = affine_matrix4(value)
-        except (TypeError, ValueError):
-            continue
+    value = snapshot.get("local_affine")
+    try:
+        matrix = affine_matrix4(value)
+    except (TypeError, ValueError):
+        pass
+    else:
         spacing = float(np.linalg.norm(matrix[:3, 2]))
         if math.isfinite(spacing) and spacing > 0:
             return spacing
@@ -2387,8 +2380,6 @@ def _cache_key(snapshot):
                 fingerprint_paths.append(str(fingerprint["path"]))
     file_state = tuple(_file_fingerprint(path) for path in fingerprint_paths)
     local_value = snapshot.get("local_affine")
-    if local_value is None:
-        local_value = snapshot.get("local_index_affine")
     try:
         local_key = tuple(np.asarray(local_value, dtype=float).reshape(-1))
     except (TypeError, ValueError):
@@ -2774,8 +2765,6 @@ def _matrix_tuple(matrix) -> tuple[tuple[float, ...], ...]:
 def _world_origin(snapshot) -> np.ndarray:
     value = snapshot.get("world_affine")
     if value is None:
-        value = snapshot.get("world_index_affine")
-    if value is None:
         value = np.eye(4)
     return np.asarray(value, dtype=float).reshape(4, 4)[:3, 3].copy()
 
@@ -3105,8 +3094,6 @@ def infer_initial_layout(
         for index in available:
             snapshot = snapshots[index]
             world = snapshot.get("world_affine")
-            if world is None:
-                world = snapshot.get("world_index_affine")
             linear = np.asarray(world, dtype=float).reshape(4, 4)[:3, :3]
             dims = np.asarray(_triple(snapshot.get("dims"), 1.0), dtype=float)
             sizes.append(np.linalg.norm(linear, axis=0) * dims)

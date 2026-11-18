@@ -93,6 +93,31 @@ def config_file(name, *, platform_name=None, environ=None, home=None) -> Path:
     ) / Path(name)
 
 
+def downloaded_assets_dir(*, platform_name=None, environ=None, home=None) -> Path:
+    """Return the shared durable download root; provider overrides are separate."""
+    options = dict(platform_name=platform_name, environ=environ, home=home)
+    configured = read_json_object(config_file("downloaded_assets.json", **options)).get("root")
+    if isinstance(configured, str) and configured.strip():
+        return Path(configured).expanduser()
+    return data_dir(**options) / "Downloaded assets"
+
+
+def set_downloaded_assets_dir(path, *, platform_name=None, environ=None, home=None) -> Path:
+    """Choose a writable root for future downloads without relocating old files."""
+    destination = Path(path).expanduser().resolve()
+    destination.mkdir(parents=True, exist_ok=True)
+    # Test a real write on the destination filesystem before changing preferences.
+    with tempfile.TemporaryFile(dir=destination) as probe:
+        probe.write(b"0")
+        probe.flush()
+    atomic_write_json(
+        config_file("downloaded_assets.json", platform_name=platform_name,
+                    environ=environ, home=home),
+        {"root": str(destination)},
+    )
+    return destination
+
+
 def read_json_object(path) -> dict:
     """Read a UTF-8 JSON object, returning an empty object for missing/invalid data."""
     return read_json_object_with_status(path).value
@@ -136,7 +161,7 @@ def atomic_write_text(path, text, *, encoding="utf-8") -> Path:
             mode="w",
             encoding=encoding,
             dir=destination.parent,
-            prefix=f".{destination.name}.",
+            prefix=".madi3d-write-",
             suffix=".tmp",
             delete=False,
         ) as handle:
@@ -168,6 +193,8 @@ __all__ = [
     "config_dir",
     "config_file",
     "data_dir",
+    "downloaded_assets_dir",
+    "set_downloaded_assets_dir",
     "read_json_object",
     "read_json_object_with_status",
 ]

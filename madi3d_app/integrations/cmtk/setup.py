@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
-"""First-use CMTK setup UI and platform provisioning for MADI3D."""
+"""First-use CMTK setup sessions and platform provisioning for MADI3D."""
 from __future__ import annotations
 
 import codecs
 import hashlib
 import os
 import platform
-import queue
 import shutil
 import subprocess
 import tarfile
@@ -15,6 +14,7 @@ import time
 from pathlib import Path
 from urllib import request
 
+from madi3d_app.io_utils import atomic_replace
 from madi3d_app.integrations.cmtk.backend import (
     CMTK_CORE_TOOLS,
     CMTK_STATE_UNCHECKED,
@@ -26,7 +26,9 @@ from madi3d_app.integrations.cmtk.backend import (
     WSLCMTKBackend,
     decode_console,
     get_cmtk_manager,
+    host_wsl_version,
     process_error,
+    wsl_runtime_guidance,
 )
 
 
@@ -48,6 +50,10 @@ UBUNTU_WSL_IMAGES = {
 }
 DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 MAX_WSL_IMAGE_BYTES = 2 * 1024 * 1024 * 1024
+
+# Character bounds also cap Python text storage at four bytes per character.
+SETUP_DIAGNOSTIC_CHARS = 64 * 1024
+SETUP_STREAM_CHARS = 4096
 
 CMTK_MACOS_ARCHIVE_NAME = "cmtk-3.4.0-dev-macos-arm64-gcd.tar.gz"
 CMTK_MACOS_ARM64_ARCHIVE_URL = (
@@ -92,6 +98,30 @@ exec "$_bin/$_tool" "$@"
 """
 
 
+class _SetupLogTail:
+    """Replaceable diagnostic traffic; writers never wait for a consumer."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._text = ""
+        self._truncated = False
+
+    def append(self, text):
+        text = str(text)
+        with self._lock:
+            self._truncated |= len(self._text) + len(text) > SETUP_DIAGNOSTIC_CHARS
+            self._text = (
+                self._text + text[-SETUP_DIAGNOSTIC_CHARS:]
+            )[-SETUP_DIAGNOSTIC_CHARS:]
+
+    def take(self):
+        with self._lock:
+            text, truncated = self._text, self._truncated
+            self._text, self._truncated = "", False
+        marker = "[Earlier setup output omitted]\n" if truncated else ""
+        return marker + text[-(SETUP_DIAGNOSTIC_CHARS - len(marker)):]
+
+
 class _WSL2FeatureUnavailable(CMTKUnavailableError):
     """The WSL command exists, but its version-2 VM cannot be created."""
 
@@ -104,6 +134,58 @@ def _is_wsl2_feature_error(message):
         "0x80370102",
         "required feature is not installed",
     ))
+
+
+class _WSLFeatureCapture:
+    def __init__(self):
+        self.tail = ""
+        self.matched = False
+
+    def __call__(self, text):
+        # Every recognized marker fits in the overlap, including split chunks.
+        combined = self.tail + text
+        self.matched |= _is_wsl2_feature_error(combined)
+        self.tail = combined[-64:]
+
+
+class _AptPolicyCapture:
+    """Parse the first Candidate field without retaining repository output."""
+
+    def __init__(self):
+        # Only the exact key and the empty/none/(none) values affect the decision;
+        # longer strings need no further retained characters.
+        self.key = ""
+        self.value = ""
+        self.in_value = False
+        self.gap = False
+        self.has_candidate = None
+
+    def __call__(self, text):
+        for char in text:
+            if self.has_candidate is not None:
+                return
+            if char in "\r\n":
+                self.finish_line()
+            elif not self.in_value:
+                if char == ":":
+                    self.in_value = True
+                    self.gap = False
+                elif not char.isspace():
+                    self.key = (self.key + (" " if self.gap else "") + char.lower())[:10]
+                    self.gap = False
+                elif self.key:
+                    self.gap = True
+            elif not char.isspace():
+                self.value = (self.value + (" " if self.gap else "") + char.lower())[:8]
+                self.gap = False
+            elif self.value:
+                self.gap = True
+
+    def finish_line(self):
+        if self.in_value and self.key == "candidate":
+            self.has_candidate = self.value not in ("", "none", "(none)")
+        self.key = self.value = ""
+        self.in_value = self.gap = False
 
 
 def _combined_output(proc):
@@ -179,75 +261,96 @@ def _decoded_stream_chunks(stream, chunk_size=4096):
         yield final
 
 
-def _stream_real_command(cmd, log, *, timeout, description, cancel_check, allow_terminate):
-    """Run a real setup subprocess with live combined stdout/stderr."""
+def _stream_real_command(
+    cmd, log, *, timeout, description, cancel_check, allow_terminate,
+    output_observer=None,
+):
+    """Drain independently of replaceable logs; retain only ending diagnostics."""
     try:
         proc = subprocess.Popen(
-            list(cmd),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            bufsize=0,
+            list(cmd), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0,
         )
     except Exception as exc:
         raise CMTKUnavailableError(f"{description} could not be started: {exc}") from exc
 
-    output_queue = queue.Queue()
-    sentinel = object()
+    pending = _SetupLogTail()
+    retained = _SetupLogTail()
+    reader_finished = threading.Event()
+    reader_errors = []
 
     def read_output():
         try:
-            stream = proc.stdout
-            if stream is not None:
-                for text in _decoded_stream_chunks(stream):
-                    output_queue.put(text)
+            if proc.stdout is not None:
+                for text in _decoded_stream_chunks(proc.stdout, SETUP_STREAM_CHARS):
+                    retained.append(text)
+                    pending.append(text)
+                    if output_observer is not None:
+                        output_observer(text)
+        except Exception as exc:
+            reader_errors.append(exc)
         finally:
-            output_queue.put(sentinel)
+            reader_finished.set()
 
-    threading.Thread(target=read_output, daemon=True).start()
-    output = []
-    reader_finished = False
+    reader = threading.Thread(target=read_output, name="cmtk-setup-output", daemon=True)
+    try:
+        reader.start()
+    except Exception:
+        _stop_process(proc)
+        if proc.stdout is not None:
+            proc.stdout.close()
+        raise
     deadline = time.monotonic() + float(timeout)
-    protected_timeout_reported = False
+    stop_error = None
 
-    while True:
-        try:
-            item = output_queue.get(timeout=0.1)
-            if item is sentinel:
-                reader_finished = True
-            else:
-                text = str(item).rstrip()
-                if text:
-                    output.append(text)
-                    for line in text.splitlines():
-                        log(line)
-        except queue.Empty:
-            pass
+    def deliver(text):
+        nonlocal log
+        if text and log is not None:
+            try:
+                log(text)
+            except Exception:
+                # A disposed presentation sink cannot interrupt a package step.
+                log = None
 
-        if _cancel_requested(cancel_check) and allow_terminate:
-            _stop_process(proc)
-            raise CMTKSetupCancelled(f"{description} was cancelled.")
-
-        if time.monotonic() >= deadline and proc.poll() is None:
-            if allow_terminate:
+    try:
+        while True:
+            reader_finished.wait(0.05)
+            if reader_finished.is_set() and proc.poll() is None:
+                time.sleep(0.05)
+            deliver(pending.take())
+            if _cancel_requested(cancel_check) and allow_terminate:
                 _stop_process(proc)
-                raise CMTKUnavailableError(
-                    f"{description} timed out after {int(timeout)} seconds."
-                )
-            if not protected_timeout_reported:
-                log(
+                stop_error = CMTKSetupCancelled(f"{description} was cancelled.")
+                break
+            if time.monotonic() >= deadline and proc.poll() is None:
+                if allow_terminate:
+                    _stop_process(proc)
+                    stop_error = CMTKUnavailableError(
+                        f"{description} timed out after {int(timeout)} seconds."
+                    )
+                    break
+                deliver(
                     f"{description} exceeded {int(timeout)} seconds and is still running. "
                     "MADI3D will not interrupt this protected package-manager step."
                 )
-                protected_timeout_reported = True
-            deadline = float("inf")
-
-        if proc.poll() is not None and reader_finished and output_queue.empty():
-            break
-
-    if proc.stdout is not None:
-        proc.stdout.close()
+                deadline = float("inf")
+            if proc.poll() is not None and reader_finished.is_set():
+                break
+    except BaseException:
+        if allow_terminate:
+            _stop_process(proc)
+        raise
+    finally:
+        # There is no producer backpressure, even after cancellation or sink disposal.
+        reader.join()
+        if proc.stdout is not None:
+            proc.stdout.close()
+        deliver(pending.take())
+    if stop_error is not None:
+        raise stop_error
+    if reader_errors:
+        raise CMTKUnavailableError(f"{description} output could not be read: {reader_errors[0]}")
     completed = subprocess.CompletedProcess(
-        list(cmd), proc.returncode, stdout="\n".join(output), stderr=""
+        list(cmd), proc.returncode, stdout=retained.take(), stderr=""
     )
     if _cancel_requested(cancel_check):
         raise CMTKSetupCancelled(
@@ -265,6 +368,7 @@ def _run_command(
     description="Command",
     cancel_check=None,
     allow_terminate=True,
+    output_observer=None,
 ):
     log("$ " + " ".join(str(v) for v in cmd))
     log(f"{description} is running...")
@@ -280,20 +384,30 @@ def _run_command(
                 description=description,
                 cancel_check=cancel_check,
                 allow_terminate=allow_terminate,
+                output_observer=output_observer,
             )
         else:
             proc = manager.runner(
                 list(cmd), capture_output=True, check=False, timeout=timeout
             )
+            if output_observer is not None:
+                output_observer(_combined_output(proc))
             _log_process_output(proc, log)
             if _cancel_requested(cancel_check):
                 raise CMTKSetupCancelled(
                     "Cancellation requested; the current setup step finished safely."
                 )
-    except (CMTKSetupCancelled, CMTKUnavailableError):
+    except CMTKSetupCancelled:
+        raise
+    except CMTKUnavailableError as exc:
+        if str(cmd[0]).lower() in ("wsl.exe", "wsl"):
+            exc.args = (f"{exc}\n{wsl_runtime_guidance(host_wsl_version(manager.runner))}",)
         raise
     except Exception as exc:
-        raise CMTKUnavailableError(f"{description} could not be started: {exc}") from exc
+        detail = f"{description} could not be started: {exc}"
+        if str(cmd[0]).lower() in ("wsl.exe", "wsl"):
+            detail += "\n" + wsl_runtime_guidance(host_wsl_version(manager.runner))
+        raise CMTKUnavailableError(detail) from exc
 
     if getattr(proc, "returncode", 1) != 0:
         raise CMTKUnavailableError(
@@ -541,6 +655,7 @@ def _perform_distro_import(
     else:
         install_path.mkdir()
 
+    feature = _WSLFeatureCapture()
     try:
         _run_command(
             manager,
@@ -553,11 +668,12 @@ def _perform_distro_import(
             description=f"Isolated WSL distribution import ({target})",
             cancel_check=cancel_check,
             allow_terminate=True,
+            output_observer=feature,
         )
     except CMTKUnavailableError as exc:
         if not _distro_is_installed(manager, target):
             shutil.rmtree(install_path, ignore_errors=True)
-        if _is_wsl2_feature_error(exc):
+        if feature.matched or _is_wsl2_feature_error(exc):
             raise _WSL2FeatureUnavailable(str(exc)) from exc
         raise
     except Exception:
@@ -763,6 +879,11 @@ def _automatic_windows_setup(
             manager, log, stage, cancel_check=cancel_check
         )
 
+    version = host_wsl_version(manager.runner)
+    log(f"Host WSL runtime: {version or 'version undetermined; continuing setup'}")
+    if version in ("2.4.12", "2.4.12.0"):
+        log("Warning: " + wsl_runtime_guidance(version))
+
     distro = _install_managed_distribution(
         manager, log, stage, cancel_check=cancel_check
     )
@@ -836,25 +957,43 @@ def _automatic_windows_setup(
         ("Reinstalling" if reinstall else "Installing")
         + " the Ubuntu CMTK package in the isolated MADI3D environment."
     )
-    install_args = [
-        "apt-get", "-o", "DPkg::Lock::Timeout=300", "install", "-y",
+    apt_command = [
+        "wsl.exe", "-d", distro, "-u", "root", "--exec",
+        "env", "DEBIAN_FRONTEND=noninteractive", "LC_ALL=C",
+        "apt-get", "-o", "DPkg::Lock::Timeout=300",
     ]
+    install_args = ["install", "-y"]
     if reinstall:
         install_args.append("--reinstall")
     install_args.append("cmtk")
-    _run_command(
-        manager,
-        [
-            "wsl.exe", "-d", distro, "-u", "root", "--exec",
-            "env", "DEBIAN_FRONTEND=noninteractive",
-            *install_args,
-        ],
-        log,
-        timeout=1800,
-        description="CMTK package installation",
-        cancel_check=cancel_check,
-        allow_terminate=False,
-    )
+    for attempt in range(2):
+        try:
+            _run_command(
+                manager,
+                [*apt_command, *install_args],
+                log,
+                timeout=1800,
+                description="CMTK package installation",
+                cancel_check=cancel_check,
+                allow_terminate=False,
+            )
+        except CMTKUnavailableError as exc:
+            if attempt or "unmet dependencies" not in str(exc).lower():
+                raise
+        else:
+            break
+
+        stage("Repairing Ubuntu package dependencies")
+        _run_command(
+            manager,
+            [*apt_command, "--fix-broken", "--no-remove", "install", "-y"],
+            log,
+            timeout=1800,
+            description="APT dependency repair",
+            cancel_check=cancel_check,
+            allow_terminate=False,
+        )
+        stage("Retrying CMTK package installation")
 
     if _cancel_requested(cancel_check):
         raise CMTKSetupCancelled("CMTK setup was cancelled.")
@@ -1027,7 +1166,9 @@ def _safe_macos_archive_members(archive):
         yield member
 
 
-def _extract_macos_archive(archive_path, install_root, log, *, cancel_check=None):
+def _extract_macos_archive(
+    archive_path, install_root, log, *, cancel_check=None, required_tools=CMTK_CORE_TOOLS
+):
     """Prepare a complete staged tree; the caller owns publication and rollback."""
     install_root = Path(install_root)
     staging = install_root.with_name(install_root.name + ".incomplete")
@@ -1052,7 +1193,8 @@ def _extract_macos_archive(archive_path, install_root, log, *, cancel_check=None
         if _cancel_requested(cancel_check):
             raise CMTKSetupCancelled("CMTK archive extraction was cancelled.")
         required = [CMTK_MACOS_UPSTREAM_LAUNCHER_RELPATH]
-        required.extend(f"usr/local/lib/cmtk/bin/{tool}" for tool in CMTK_CORE_TOOLS)
+        tools = tuple(dict.fromkeys((*CMTK_CORE_TOOLS, *required_tools)))
+        required.extend(f"usr/local/lib/cmtk/bin/{tool}" for tool in tools)
         missing = [name for name in required if not (staging / name).is_file()]
         if missing:
             raise CMTKUnavailableError(
@@ -1114,7 +1256,8 @@ def _automatic_macos_setup(
             "rights; no system location is modified."
         )
         _extract_macos_archive(
-            archive_path, install_root, log, cancel_check=cancel_check
+            archive_path, install_root, log, cancel_check=cancel_check,
+            required_tools=tools,
         )
 
     previous_config = manager.load_config()
@@ -1133,9 +1276,9 @@ def _automatic_macos_setup(
         manager.invalidate()
         if replacing:
             if install_root.exists():
-                os.replace(install_root, backup)
+                atomic_replace(install_root, backup)
                 moved_previous = True
-            os.replace(staging, install_root)
+            atomic_replace(staging, install_root)
             published = True
         if _cancel_requested(cancel_check):
             raise CMTKSetupCancelled("CMTK setup was cancelled.")
@@ -1159,7 +1302,7 @@ def _automatic_macos_setup(
             if published:
                 shutil.rmtree(install_root)
             if moved_previous:
-                os.replace(backup, install_root)
+                atomic_replace(backup, install_root)
             if config_changed:
                 manager._require_config_write(previous_config)
                 manager.invalidate()
@@ -1245,15 +1388,6 @@ def _native_setup_unavailable_reason(manager):
     return ""
 
 
-def _apt_policy_has_candidate(text):
-    for line in str(text or "").splitlines():
-        key, separator, value = line.partition(":")
-        if separator and key.strip().lower() == "candidate":
-            candidate = value.strip().lower()
-            return candidate not in ("", "none", "(none)")
-    return False
-
-
 def _automatic_native_setup(
     manager, tools, log, stage, cancel_check=None, *, reinstall=False
 ):
@@ -1290,7 +1424,8 @@ def _automatic_native_setup(
         allow_terminate=False,
     )
     stage("Checking CMTK package availability")
-    policy = _run_command(
+    candidate = _AptPolicyCapture()
+    _run_command(
         manager,
         [NATIVE_ENV, "LC_ALL=C", NATIVE_APT_CACHE, "policy", "cmtk"],
         log,
@@ -1298,8 +1433,10 @@ def _automatic_native_setup(
         description="CMTK package availability check",
         cancel_check=cancel_check,
         allow_terminate=True,
+        output_observer=candidate,
     )
-    if not _apt_policy_has_candidate(_combined_output(policy)):
+    candidate.finish_line()
+    if not candidate.has_candidate:
         raise CMTKUnavailableError(
             "The cmtk package has no installation candidate in the configured repositories. "
             "On Ubuntu, enable the official Universe repository and retry, or choose an "
@@ -1339,63 +1476,23 @@ def _automatic_native_setup(
     return backend
 
 
-def _choose_existing_backend(manager, parent):
-    from PySide6 import QtWidgets
-
-    if manager.platform_name() == "windows":
-        distros = manager.list_wsl_distros()
-        if not distros:
-            raise CMTKUnavailableError(
-                "WSL is installed but no Linux distribution exists yet. "
-                "Choose Automatic setup to install an isolated Ubuntu environment."
-            )
-        distro, ok = QtWidgets.QInputDialog.getItem(
-            parent,
-            "Use existing CMTK",
-            "WSL distribution containing CMTK:",
-            manager.rank_distros(distros),
-            0,
-            False,
-        )
-        if not ok or not distro:
-            raise CMTKSetupCancelled()
-        backend = WSLCMTKBackend(str(distro), runner=manager.runner)
-    else:
-        if manager.platform_name() == "linux":
-            default_path = "/usr/bin/cmtk"
-        elif manager.platform_name() == "macos":
-            default_path = "/usr/local/bin/cmtk"
-        else:
-            default_path = ""
-        path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            parent,
-            "Choose the CMTK launcher",
-            default_path,
-        )
-        if not path:
-            raise CMTKSetupCancelled()
-        backend = NativeCMTKBackend(runner=manager.runner, cmtk_command=path)
-
-    return backend
-
-
-def _setup_dialog(manager, tools, parent=None, *, force_setup=False):
-    """Detect/configure CMTK without blocking Qt; force_setup bypasses detection."""
-    from PySide6 import QtCore, QtWidgets
+def _create_setup_session(manager, tools, *, force_setup=False):
+    """Construct the private QtCore owner only for interactive setup."""
+    from PySide6 import QtCore
 
     class Worker(QtCore.QObject):
         stage = QtCore.Signal(str)
-        log = QtCore.Signal(str)
         completed = QtCore.Signal(object)
         not_found = QtCore.Signal()
         failed = QtCore.Signal(str)
         restart_required = QtCore.Signal(str)
         cancelled = QtCore.Signal(str)
 
-        def __init__(self, mode, cancel_check, candidate=None, reinstall=False):
+        def __init__(self, mode, cancel_check, log, candidate=None, reinstall=False):
             super().__init__()
             self.mode = str(mode)
             self.cancel_check = cancel_check
+            self.log = log
             self.candidate = candidate
             self.reinstall = bool(reinstall)
 
@@ -1411,6 +1508,9 @@ def _setup_dialog(manager, tools, parent=None, *, force_setup=False):
                         return
                 elif self.mode == "existing":
                     self.stage.emit("Validating the selected CMTK installation")
+                    if getattr(self.candidate, "kind", "") == "wsl":
+                        version = host_wsl_version(manager.runner)
+                        self.log(wsl_runtime_guidance(version))
                     backend = manager.validate_backend(
                         self.candidate, tools, managed=False
                     )
@@ -1426,7 +1526,7 @@ def _setup_dialog(manager, tools, parent=None, *, force_setup=False):
                     backend = _automatic_windows_setup(
                         manager,
                         tools,
-                        self.log.emit,
+                        self.log,
                         self.stage.emit,
                         cancel_check=self.cancel_check,
                         reinstall=self.reinstall,
@@ -1435,7 +1535,7 @@ def _setup_dialog(manager, tools, parent=None, *, force_setup=False):
                     backend = _automatic_macos_setup(
                         manager,
                         tools,
-                        self.log.emit,
+                        self.log,
                         self.stage.emit,
                         cancel_check=self.cancel_check,
                         reinstall=self.reinstall,
@@ -1444,7 +1544,7 @@ def _setup_dialog(manager, tools, parent=None, *, force_setup=False):
                     backend = _automatic_native_setup(
                         manager,
                         tools,
-                        self.log.emit,
+                        self.log,
                         self.stage.emit,
                         cancel_check=self.cancel_check,
                         reinstall=self.reinstall,
@@ -1458,247 +1558,123 @@ def _setup_dialog(manager, tools, parent=None, *, force_setup=False):
             else:
                 self.completed.emit(backend)
 
-    class SetupDialog(QtWidgets.QDialog):
-        def __init__(self, parent=None):
-            super().__init__(parent)
+    class SetupSession(QtCore.QObject):
+        """Own one interactive setup attempt and reduce results after retirement."""
+
+        changed = QtCore.Signal()
+        run_started = QtCore.Signal(bool)
+        stage = QtCore.Signal(str)
+        log = QtCore.Signal(str)
+        error = QtCore.Signal(str)
+        existing_requested = QtCore.Signal()
+        accepted = QtCore.Signal()
+        dismissed = QtCore.Signal()
+        retired = QtCore.Signal()
+
+        def __init__(self):
+            super().__init__()
             self.backend = None
             self.restart_message = ""
-            self._running = False
+            self.running = False
             self._thread = None
             self._worker = None
+            self._pending_log = _SetupLogTail()
+            self._log_timer = QtCore.QTimer(self)
+            self._log_timer.setInterval(50)
+            self._log_timer.timeout.connect(self._flush_log)
             self._active_mode = ""
             self._terminal_kind = None
             self._terminal_payload = None
             self._cancel_requested_flag = False
-            self._force_setup = bool(force_setup)
+            self.force_setup = bool(force_setup)
+            self.phase = "choices" if self.force_setup else "running"
             config = manager.load_config()
             self._reinstall_requested = bool(
-                self._force_setup
+                self.force_setup
                 and (config.get("last_successful_validation") or config.get("cmtk_package_version"))
             )
             self._resume_auto = bool(
-                config.get("setup_mode") == "auto"
-                and config.get("setup_pending")
+                config.get("setup_mode") == "auto" and config.get("setup_pending")
             )
-
-            self.setWindowTitle("CMTK setup")
-            self.setModal(True)
-            self.setSizeGripEnabled(True)
-            self.resize(680, 500)
-            if parent is not None:
-                try:
-                    self.setPalette(parent.palette())
-                    self.setFont(parent.font())
-                except Exception:
-                    pass
-
-            root = QtWidgets.QVBoxLayout(self)
-            self.stack = QtWidgets.QStackedWidget(self)
-            root.addWidget(self.stack, 1)
-
-            select_page = QtWidgets.QWidget(self)
-            select_layout = QtWidgets.QVBoxLayout(select_page)
-            intro = QtWidgets.QLabel(
-                "Install or repair the CMTK dependency used by MADI3D."
-                if self._force_setup else
-                "This feature needs CMTK. Detection and validation begin only "
-                "after a CMTK action is requested."
+            self.platform_name = manager.platform_name()
+            self.unavailable_reason = (
+                _native_setup_unavailable_reason(manager) if self.platform_name == "linux"
+                else _macos_setup_unavailable_reason(manager) if self.platform_name == "macos"
+                else ""
             )
-            intro.setWordWrap(True)
-            select_layout.addWidget(intro)
+            status = manager.persisted_status() if self.force_setup else manager.last_status
+            self.status_text = status.diagnostic_text()
+            self.default_native_path = {
+                "linux": "/usr/bin/cmtk", "macos": "/usr/local/bin/cmtk"
+            }.get(self.platform_name, "")
 
-            status_group = QtWidgets.QGroupBox("Detected status", select_page)
-            status_layout = QtWidgets.QVBoxLayout(status_group)
-            passive_status = manager.persisted_status() if self._force_setup else manager.last_status
-            self.detected_status = QtWidgets.QLabel(
-                passive_status.diagnostic_text()
-                or "CMTK has not been checked yet."
-            )
-            self.detected_status.setWordWrap(True)
-            self.detected_status.setTextInteractionFlags(
-                QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
-            )
-            status_layout.addWidget(self.detected_status)
-            select_layout.addWidget(status_group)
-
-            mode_group = QtWidgets.QGroupBox("Setup method", select_page)
-            mode_layout = QtWidgets.QVBoxLayout(mode_group)
-            self.auto = QtWidgets.QRadioButton(
-                "Automatic setup (recommended)", mode_group
-            )
-            self.existing = QtWidgets.QRadioButton(
-                "Use an existing CMTK installation", mode_group
-            )
-            self.auto.setChecked(True)
-            mode_layout.addWidget(self.auto)
-            mode_layout.addWidget(self.existing)
-            select_layout.addWidget(mode_group)
-
-            if manager.platform_name() == "windows":
-                note_text = (
-                    "Automatic setup may enable WSL, request Windows administrator "
-                    "approval, download and verify an official Ubuntu environment, "
-                    "and require a restart. CMTK is installed only in a separately "
-                    "named MADI3D-CMTK distribution; personal WSL distributions "
-                    "are not modified. WSL 2 requires hardware virtualization to be "
-                    "enabled in BIOS/UEFI."
+        def existing_distros(self):
+            distros = manager.list_wsl_distros()
+            if not distros:
+                raise CMTKUnavailableError(
+                    "WSL is installed but no Linux distribution exists yet. "
+                    "Choose Automatic setup to install an isolated Ubuntu environment."
                 )
-            elif manager.platform_name() == "linux":
-                unavailable_reason = _native_setup_unavailable_reason(manager)
-                if unavailable_reason:
-                    note_text = (
-                        unavailable_reason
-                        + " Choose an existing CMTK installation."
-                    )
-                    self.auto.setEnabled(False)
-                    self.existing.setChecked(True)
-                else:
-                    note_text = (
-                        "On native Ubuntu/Debian, automatic setup installs the system "
-                        "cmtk package from configured repositories and may request "
-                        "administrator authentication. MADI3D does not enable additional "
-                        "repositories automatically."
-                    )
-            elif manager.platform_name() == "macos":
-                unavailable_reason = _macos_setup_unavailable_reason(manager)
-                if unavailable_reason:
-                    note_text = (
-                        unavailable_reason
-                        + " Choose an existing CMTK installation."
-                    )
-                    self.auto.setEnabled(False)
-                    self.existing.setChecked(True)
-                else:
-                    note_text = (
-                        "Automatic setup downloads the CMTK archive from jefferis/cmtk, "
-                        "verifies its SHA-256 checksum, and extracts it inside MADI3D's "
-                        "own storage. No administrator rights are needed and no system "
-                        "location is modified. Apple Silicon only; Intel Macs should "
-                        "choose an existing CMTK installation."
-                    )
-            else:
-                note_text = (
-                    "Automatic package installation is unavailable on this "
-                    "platform. Choose an existing CMTK installation."
-                )
-                self.auto.setEnabled(False)
-                self.existing.setChecked(True)
-            note = QtWidgets.QLabel(note_text)
-            note.setWordWrap(True)
-            select_layout.addWidget(note)
-            select_layout.addStretch(1)
-            self.stack.addWidget(select_page)
+            return manager.rank_distros(distros)
 
-            progress_page = QtWidgets.QWidget(self)
-            progress_layout = QtWidgets.QVBoxLayout(progress_page)
-            self.stage_label = QtWidgets.QLabel(
-                "Checking CMTK...", progress_page
-            )
-            self.stage_label.setWordWrap(True)
-            progress_layout.addWidget(self.stage_label)
-            self.progress = QtWidgets.QProgressBar(progress_page)
-            self.progress.setRange(0, 0)
-            progress_layout.addWidget(self.progress)
-            self.log_view = QtWidgets.QPlainTextEdit(progress_page)
-            self.log_view.setReadOnly(True)
-            self.log_view.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap)
-            self.log_view.setMinimumHeight(280)
-            progress_layout.addWidget(self.log_view, 1)
-            self.stack.addWidget(progress_page)
-
-            self.buttons = QtWidgets.QDialogButtonBox(self)
-            self.cancel_button = self.buttons.addButton(
-                QtWidgets.QDialogButtonBox.StandardButton.Cancel
-            )
-            self.action_button = self.buttons.addButton(
-                "Continue", QtWidgets.QDialogButtonBox.ButtonRole.AcceptRole
-            )
-            self.cancel_button.clicked.connect(self._cancel_or_reject)
-            self.action_button.clicked.connect(self._action)
-            root.addWidget(self.buttons)
-
-            if self._force_setup:
-                self.stack.setCurrentIndex(0)
-                self.action_button.setText("Install / Reinstall")
-                self.action_button.setEnabled(True)
-            else:
-                self.stack.setCurrentIndex(1)
-                self.action_button.setEnabled(False)
-                QtCore.QTimer.singleShot(0, self._start_detection)
-
-        def _append_log(self, text):
-            text = str(text or "").rstrip()
-            if not text:
+        def select_existing(self, selection):
+            if self.running or not selection:
                 return
-            self.log_view.appendPlainText(text)
-            bar = self.log_view.verticalScrollBar()
-            bar.setValue(bar.maximum())
+            try:
+                if self.platform_name == "windows":
+                    candidate = WSLCMTKBackend(str(selection), runner=manager.runner)
+                else:
+                    candidate = NativeCMTKBackend(runner=manager.runner, cmtk_command=str(selection))
+            except Exception as exc:
+                self.error.emit(str(exc))
+                return
+            self._start_worker("existing", candidate=candidate, clear_log=True)
 
-        def _set_stage(self, text):
-            self.stage_label.setText(str(text))
-            self._append_log("\n== " + str(text) + " ==")
+        def continue_requested(self, mode):
+            if self.running:
+                return
+            if self.restart_message:
+                self.dismissed.emit()
+            elif self.backend is not None:
+                self.accepted.emit()
+            elif self.phase != "choices":
+                self.phase = "choices"
+                self.changed.emit()
+            elif mode == "existing":
+                self.existing_requested.emit()
+            else:
+                self.start_automatic(clear_log=True)
 
-        def _is_cancel_requested(self):
-            return self._cancel_requested_flag
-
-        def _cancel_or_reject(self):
-            if not self._running:
-                self.reject()
+        def dismiss_requested(self):
+            if not self.running:
+                self.dismissed.emit()
+                return
+            if self._cancel_requested_flag:
                 return
             self._cancel_requested_flag = True
-            self.cancel_button.setEnabled(False)
-            if self._active_mode == "automatic" and manager.platform_name() in ("windows", "linux"):
-                self.stage_label.setText("Stopping safely; an installation step may need to finish...")
+            self.changed.emit()
+            if self._active_mode == "automatic" and self.platform_name in ("windows", "linux"):
+                self.stage.emit("Stopping safely; an installation step may need to finish...")
                 message = "MADI3D will let an active system installation step finish safely."
             elif self._active_mode == "automatic":
-                self.stage_label.setText("Stopping CMTK setup safely...")
+                self.stage.emit("Stopping CMTK setup safely...")
                 message = (
                     "MADI3D will finish the current step safely and retain the previous "
                     "installation if setup has not completed."
                 )
             else:
-                self.stage_label.setText("Stopping the CMTK check...")
+                self.stage.emit("Stopping the CMTK check...")
                 message = "MADI3D will stop after the current CMTK check finishes."
-            self._append_log("\nCancellation requested. " + message)
+            self.log.emit("\nCancellation requested. " + message)
 
-        def _action(self):
-            if self._running:
-                return
-            if self.restart_message:
-                self.reject()
-                return
-            if self.backend is not None:
-                self.accept()
-                return
-            if self.stack.currentIndex() == 1:
-                self.stack.setCurrentIndex(0)
-                self.action_button.setText("Continue")
-                self.action_button.setEnabled(True)
-                self.cancel_button.setEnabled(True)
-                return
+        def is_cancel_requested(self):
+            return self._cancel_requested_flag
 
-            if self.existing.isChecked():
-                try:
-                    candidate = _choose_existing_backend(manager, self)
-                except CMTKSetupCancelled:
-                    return
-                except Exception as exc:
-                    QtWidgets.QMessageBox.critical(
-                        self, "CMTK setup", str(exc)
-                    )
-                    return
-                self._start_worker(
-                    "existing", candidate=candidate, clear_log=True
-                )
-                return
-
-            self._start_automatic(clear_log=True)
-
-        def _start_detection(self):
+        def start_detection(self):
             self._start_worker("detect", clear_log=True)
 
-        def _start_automatic(self, clear_log=False):
-            if self._running or self.backend is not None:
+        def start_automatic(self, clear_log=False):
+            if self.running or self.backend is not None:
                 return
             try:
                 manager.update_config(
@@ -1707,36 +1683,28 @@ def _setup_dialog(manager, tools, parent=None, *, force_setup=False):
                     readiness_summary="CMTK setup/repair is in progress or pending.",
                 )
             except Exception as exc:
-                QtWidgets.QMessageBox.critical(
-                    self, "CMTK setup", str(exc)
-                )
-                self.stack.setCurrentIndex(0)
-                self.action_button.setEnabled(True)
-                self.cancel_button.setEnabled(True)
+                self.error.emit(str(exc))
+                self.phase = "choices"
+                self.changed.emit()
                 return
             self._start_worker(
                 "automatic", clear_log=clear_log, reinstall=self._reinstall_requested
             )
 
-        def _start_worker(
-            self, mode, *, candidate=None, clear_log=False, reinstall=False
-        ):
-            if self._running:
+        def _start_worker(self, mode, *, candidate=None, clear_log=False, reinstall=False):
+            if self.running:
                 return
             self.restart_message = ""
             self._terminal_kind = None
             self._terminal_payload = None
             self._cancel_requested_flag = False
-            self._running = True
+            self.running = True
             self._active_mode = str(mode)
-            self.stack.setCurrentIndex(1)
-            if clear_log:
-                self.log_view.clear()
-            self.progress.setRange(0, 0)
-            self.action_button.setEnabled(False)
-            self.cancel_button.setText("Cancel")
-            self.cancel_button.setEnabled(True)
-
+            self.phase = "running"
+            self._pending_log.take()
+            self._log_timer.start()
+            self.run_started.emit(clear_log)
+            self.changed.emit()
             labels = {
                 "detect": "Checking for an existing CMTK installation...",
                 "existing": "Validating the selected CMTK installation...",
@@ -1745,26 +1713,21 @@ def _setup_dialog(manager, tools, parent=None, *, force_setup=False):
                     if reinstall else "Starting automatic CMTK setup..."
                 ),
             }
-            self.stage_label.setText(labels.get(mode, "Working..."))
-
+            self.stage.emit(labels.get(mode, "Working..."))
             thread = QtCore.QThread(self)
             worker = Worker(
-                mode, self._is_cancel_requested, candidate=candidate,
-                reinstall=reinstall,
+                mode, self.is_cancel_requested, self._queue_log,
+                candidate=candidate, reinstall=reinstall
             )
             worker.moveToThread(thread)
             self._thread = thread
             self._worker = worker
-
             thread.started.connect(worker.run)
             worker.stage.connect(self._set_stage)
-            worker.log.connect(self._append_log)
             worker.completed.connect(self._worker_completed)
             worker.not_found.connect(self._worker_not_found)
             worker.failed.connect(self._worker_failed)
-            worker.restart_required.connect(
-                self._worker_restart_required
-            )
+            worker.restart_required.connect(self._worker_restart_required)
             worker.cancelled.connect(self._worker_cancelled)
             worker.completed.connect(thread.quit)
             worker.not_found.connect(thread.quit)
@@ -1773,13 +1736,24 @@ def _setup_dialog(manager, tools, parent=None, *, force_setup=False):
             worker.cancelled.connect(thread.quit)
             thread.finished.connect(worker.deleteLater)
             thread.finished.connect(self._thread_finished)
-            thread.finished.connect(thread.deleteLater)
             thread.start()
+
+        def _queue_log(self, text):
+            self._pending_log.append(str(text).rstrip() + "\n")
+
+        def _flush_log(self):
+            text = self._pending_log.take()
+            if text:
+                self.log.emit(text)
+
+        def _set_stage(self, text):
+            self.stage.emit(text)
+            self.log.emit("\n== " + text + " ==")
 
         def _worker_completed(self, backend):
             self._terminal_kind = self._active_mode + "_complete"
             self._terminal_payload = backend
-            self.stage_label.setText("Finishing CMTK check...")
+            self.stage.emit("Finishing CMTK check...")
 
         def _worker_not_found(self):
             self._terminal_kind = "detect_missing"
@@ -1788,12 +1762,12 @@ def _setup_dialog(manager, tools, parent=None, *, force_setup=False):
         def _worker_failed(self, message):
             self._terminal_kind = "failed"
             self._terminal_payload = str(message)
-            self.stage_label.setText("Finishing failed setup step...")
+            self.stage.emit("Finishing failed setup step...")
 
         def _worker_restart_required(self, message):
             self._terminal_kind = "restart"
             self._terminal_payload = str(message)
-            self.stage_label.setText("Finishing Windows setup step...")
+            self.stage.emit("Finishing Windows setup step...")
 
         def _worker_cancelled(self, message):
             self._terminal_kind = "cancelled"
@@ -1803,17 +1777,21 @@ def _setup_dialog(manager, tools, parent=None, *, force_setup=False):
             if active_mode != "automatic":
                 return
             try:
-                manager.update_config(
-                    setup_pending=None, setup_mode=None
-                )
+                manager.update_config(setup_pending=None, setup_mode=None)
             except Exception as exc:
-                self._append_log(
-                    "\nWARNING: Could not clear pending setup state: "
-                    + str(exc)
-                )
+                self.log.emit("\nWARNING: Could not clear pending setup state: " + str(exc))
 
         def _thread_finished(self):
-            self._running = False
+            thread = self._thread
+            # finished may be delivered while native thread cleanup is still
+            # active. Retain its owner and yield to Qt until the join is ready.
+            if not thread.wait(0):
+                QtCore.QTimer.singleShot(1, self._thread_finished)
+                return
+            thread.deleteLater()
+            self._log_timer.stop()
+            self._flush_log()
+            self.running = False
             kind = self._terminal_kind
             payload = self._terminal_payload
             active_mode = self._active_mode
@@ -1823,98 +1801,71 @@ def _setup_dialog(manager, tools, parent=None, *, force_setup=False):
 
             if kind == "detect_complete":
                 self.backend = payload
-                self.accept()
-                return
-
-            if kind == "detect_missing":
-                self.detected_status.setText(
-                    manager.last_status.diagnostic_text()
-                    or "CMTK is not configured."
-                )
-                if self._resume_auto:
+                self.accepted.emit()
+            elif kind == "detect_missing":
+                self.status_text = manager.last_status.diagnostic_text() or "CMTK is not configured."
+                if self._resume_auto and not self.is_cancel_requested():
                     self._resume_auto = False
-                    QtCore.QTimer.singleShot(
-                        0, lambda: self._start_automatic(clear_log=False)
-                    )
-                    return
-                self.stack.setCurrentIndex(0)
-                self.action_button.setText("Continue")
-                self.action_button.setEnabled(True)
-                self.cancel_button.setEnabled(True)
-                return
-
-            if kind in ("automatic_complete", "existing_complete"):
+                    self.start_automatic(clear_log=False)
+                else:
+                    self.phase = "choices"
+                    self.changed.emit()
+            elif kind in ("automatic_complete", "existing_complete"):
                 self.backend = payload
-                self.progress.setRange(0, 100)
-                self.progress.setValue(100)
-                self.stage_label.setText("CMTK is ready")
-                self._append_log(
-                    "\nSetup and validation completed successfully."
-                )
-                self._append_log(manager.last_status.diagnostic_text())
-                self.action_button.setText("Continue")
-                self.action_button.setEnabled(True)
-                self.cancel_button.setEnabled(False)
-                return
-
-            if kind == "restart":
-                self.restart_message = str(
-                    payload or "Windows restart required."
-                )
-                self.progress.setRange(0, 100)
-                self.progress.setValue(100)
-                self.stage_label.setText("Windows restart required")
-                self._append_log("\n" + self.restart_message)
-                self.action_button.setText("Close")
-                self.action_button.setEnabled(True)
-                self.cancel_button.setEnabled(False)
-                return
-
-            if kind == "cancelled":
+                self.phase = "ready"
+                self.stage.emit("CMTK is ready")
+                self.log.emit("\nSetup and validation completed successfully.")
+                self.log.emit(manager.last_status.diagnostic_text())
+                self.changed.emit()
+            elif kind == "restart":
+                self.restart_message = str(payload or "Windows restart required.")
+                self.phase = "restart"
+                self.stage.emit("Windows restart required")
+                self.log.emit("\n" + self.restart_message)
+                self.changed.emit()
+            else:
                 self._clear_pending_after_stop(active_mode)
-                self.progress.setRange(0, 100)
-                self.progress.setValue(0)
-                self.stage_label.setText("CMTK setup cancelled")
-                self._append_log(
-                    "\n" + str(payload or "CMTK setup was cancelled.")
-                )
-                self.action_button.setText("Back")
-                self.action_button.setEnabled(True)
-                self.cancel_button.setEnabled(True)
-                return
+                self.phase = "stopped"
+                if kind == "cancelled":
+                    self.stage.emit("CMTK setup cancelled")
+                    self.log.emit("\n" + str(payload or "CMTK setup was cancelled."))
+                else:
+                    self.stage.emit("CMTK setup did not complete")
+                    self.log.emit("\nERROR: " + str(payload or "CMTK setup stopped unexpectedly."))
+                self.changed.emit()
+            self.retired.emit()
 
-            message = str(
-                payload or "CMTK setup stopped unexpectedly."
-            )
-            self._clear_pending_after_stop(active_mode)
-            self.progress.setRange(0, 100)
-            self.progress.setValue(0)
-            self.stage_label.setText("CMTK setup did not complete")
-            self._append_log("\nERROR: " + message)
-            self.action_button.setText("Back")
-            self.action_button.setEnabled(True)
-            self.cancel_button.setEnabled(True)
+    return SetupSession()
 
-        def reject(self):
-            if self._running:
-                self._cancel_or_reject()
-                return
-            super().reject()
 
-        def closeEvent(self, event):
-            if self._running:
-                self._cancel_or_reject()
-                event.ignore()
-                return
-            super().closeEvent(event)
+def _setup_dialog(manager, tools, parent=None, *, force_setup=False):
+    """Compose the interactive session/view and translate the existing outcome."""
+    from PySide6 import QtCore, QtWidgets
+    from shiboken6 import isValid
+    from madi3d_app.ui.dialogs.cmtk_setup import CMTKSetupDialog
 
-    dialog = SetupDialog(parent)
-    result = dialog.exec()
-    if dialog.restart_message:
-        raise CMTKSetupPending(dialog.restart_message)
-    if result != QtWidgets.QDialog.DialogCode.Accepted or dialog.backend is None:
+    session = _create_setup_session(manager, tools, force_setup=force_setup)
+    dialog = CMTKSetupDialog(session, parent)
+    try:
+        result = dialog.exec()
+    finally:
+        # Parent destruction or external done() can exit exec while a worker is
+        # active. Keep its independent owner alive and Qt responsive until safe
+        # retirement, just as the ordinary close/reject route does.
+        if session.running:
+            retirement_loop = QtCore.QEventLoop()
+            session.retired.connect(retirement_loop.quit)
+            session.dismiss_requested()
+            while session.running:
+                retirement_loop.exec()
+        if isValid(dialog):
+            dialog.deleteLater()
+        session.deleteLater()
+    if session.restart_message:
+        raise CMTKSetupPending(session.restart_message)
+    if result != QtWidgets.QDialog.DialogCode.Accepted or session.backend is None:
         raise CMTKSetupCancelled()
-    return dialog.backend
+    return session.backend
 
 
 def ensure_cmtk_ready(

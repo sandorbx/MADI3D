@@ -8,7 +8,11 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Mapping, Optional
+
+if TYPE_CHECKING:
+    from .template_recipe import Reflection
 
 import numpy as np
 
@@ -27,6 +31,9 @@ from madi3d_app.volume.geometry import (
     affine_matrix4 as _matrix4,
     direction_matrix3,
     finite_tuple3,
+    canonical_space_units,
+    geometry_values_equivalent,
+    grid_components_from_affine,
     grid_affine_from_components,
     general_grid_affine_from_components,
     invertible_affine4,
@@ -39,11 +46,16 @@ class InvalidRegistrationWorkspaceInputError(ValueError):
 
 REGISTRATION_CHAIN_SCHEMA_VERSION = 9
 REGISTRATION_ALGORITHM_VERSION = "staged-registration-severity-qc-v4"
-REGISTRATION_JOB_SCHEMA_VERSION = "MADI3D_registration_job_v1"
-REGISTRATION_WORKSPACE_SCHEMA_VERSION = "MADI3D_registration_workspace_v2"
+REGISTRATION_JOB_SCHEMA_VERSION = "MADI3D_registration_job_v2"
+REGISTRATION_WORKSPACE_SCHEMA_VERSION = "MADI3D_registration_workspace_v3"
 MAX_REGISTRATION_WORKSPACE_JOBS = 4096
 MAX_REGISTRATION_WORKSPACE_RESULTS = 4096
 MAX_REGISTRATION_WORKSPACE_POSE_CAPTURES = 4096
+MAX_REGISTRATION_WORKSPACE_TRANSFORM_BINDINGS = 4096
+MAX_REGISTRATION_BINDING_BYTES = 64 * 1024
+MAX_REGISTRATION_TRANSFORM_INPUT_BYTES = 1024 * 1024
+MAX_REGISTRATION_NATIVE_ARTIFACT_JSON_BYTES = 180 * 1024 * 1024
+MAX_REGISTRATION_MAPPING_JSON_BYTES = 8 * 1024 * 1024
 
 REGISTRATION_WORKSPACE_RESOURCE_SETTINGS = frozenset({
     "cmtk_linear_threads",
@@ -127,11 +139,238 @@ def _plain_value(value):
         return value.tolist()
     if isinstance(value, np.generic):
         return value.item()
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return {str(key): _plain_value(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [_plain_value(item) for item in value]
     return copy.deepcopy(value)
+
+
+def _registration_json_object(value, label, *, max_bytes):
+    if not isinstance(value, Mapping):
+        raise InvalidRegistrationWorkspaceInputError(f"{label} must be an object.")
+    result = _plain_value(dict(value))
+    try:
+        encoded = json.dumps(
+            result, allow_nan=False, ensure_ascii=False, separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise InvalidRegistrationWorkspaceInputError(
+            f"{label} must contain finite JSON values."
+        ) from exc
+    if len(encoded) > max_bytes:
+        raise InvalidRegistrationWorkspaceInputError(f"{label} exceeds its size limit.")
+    return result
+
+
+def _freeze_registration_value(value):
+    if isinstance(value, Mapping):
+        return MappingProxyType({
+            str(key): _freeze_registration_value(item)
+            for key, item in value.items()
+        })
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_registration_value(item) for item in value)
+    return value
+
+
+def _registration_stable_id(value, label):
+    if not isinstance(value, str) or not value.strip() or len(value) > 512:
+        raise InvalidRegistrationWorkspaceInputError(
+            f"{label} must be a nonblank stable string ID."
+        )
+    return value.strip()
+
+
+def _registration_uuid(value, label):
+    try:
+        return str(uuid.UUID(str(value)))
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise InvalidRegistrationWorkspaceInputError(
+            f"{label} must be a UUID string."
+        ) from exc
+
+
+def _registration_binding_ids(values):
+    if not isinstance(values, (list, tuple)):
+        raise InvalidRegistrationWorkspaceInputError(
+            "Registration transform binding references must be a list."
+        )
+    result = []
+    for value in values:
+        binding_id = _registration_uuid(value, "Registration transform binding reference")
+        if binding_id in result:
+            raise InvalidRegistrationWorkspaceInputError(
+                "Registration transform binding references must be unique."
+            )
+        result.append(binding_id)
+    return result
+
+
+@dataclass(frozen=True)
+class RegistrationTransformInput:
+    """Immutable, detached view of one affine or CMTK transform artifact.
+
+    ``direction`` describes the stored mapping rather than the file it came from.
+    A native CMTK AFFINE file is reference->floating while its imported
+    ``affine_component`` is canonical moving->reference; a retained warp stores no
+    matrix, so its direction remains CMTK's native direction for those bytes.
+    """
+
+    object_id: str
+    content_record_id: str
+    kind: str
+    direction: str
+    frame_description: Mapping[str, Any]
+    affine_component: tuple[tuple[float, float, float, float], ...] | None = None
+    native_artifact: Mapping[str, Any] = field(default_factory=dict)
+    mapping: Mapping[str, Any] = field(default_factory=dict)
+    diagnostics: tuple[str, ...] = ()
+
+    def __post_init__(self):
+        object.__setattr__(self, "object_id", _registration_stable_id(self.object_id, "Transform object ID"))
+        object.__setattr__(self, "content_record_id", _registration_stable_id(self.content_record_id, "Transform content record ID"))
+        if self.kind not in {"affine", "cmtk_warp"}:
+            raise InvalidRegistrationWorkspaceInputError("Transform kind must be affine or cmtk_warp.")
+        if self.direction not in {"moving_to_reference", "reference_to_floating"}:
+            raise InvalidRegistrationWorkspaceInputError("Transform direction is unsupported.")
+        frame = _registration_json_object(
+            self.frame_description, "Transform frame description",
+            max_bytes=MAX_REGISTRATION_TRANSFORM_INPUT_BYTES,
+        )
+        native = _registration_json_object(
+            self.native_artifact, "Transform native artifact",
+            max_bytes=MAX_REGISTRATION_NATIVE_ARTIFACT_JSON_BYTES,
+        )
+        mapping = _registration_json_object(
+            self.mapping, "Transform mapping",
+            max_bytes=MAX_REGISTRATION_MAPPING_JSON_BYTES,
+        )
+        if self.affine_component is None:
+            affine = None
+        else:
+            try:
+                affine = tuple(
+                    tuple(float(item) for item in row)
+                    for row in invertible_affine4(
+                        self.affine_component, "Registration transform affine component"
+                    )
+                )
+            except (TypeError, ValueError) as exc:
+                raise InvalidRegistrationWorkspaceInputError(
+                    "Transform affine component must be a finite invertible 4x4 matrix."
+                ) from exc
+        if not isinstance(self.diagnostics, (list, tuple)) or len(self.diagnostics) > 64:
+            raise InvalidRegistrationWorkspaceInputError("Transform diagnostics must be a bounded list.")
+        diagnostics = tuple(str(item)[:1024] for item in self.diagnostics)
+        object.__setattr__(self, "frame_description", _freeze_registration_value(frame))
+        object.__setattr__(self, "native_artifact", _freeze_registration_value(native))
+        object.__setattr__(self, "mapping", _freeze_registration_value(mapping))
+        object.__setattr__(self, "affine_component", affine)
+        object.__setattr__(self, "diagnostics", diagnostics)
+
+    @property
+    def reference(self):
+        return {"object_id": self.object_id, "record_id": self.content_record_id}
+
+
+def _registration_capture(value, label):
+    capture = _registration_json_object(value, label, max_bytes=MAX_REGISTRATION_BINDING_BYTES)
+    grid = capture.get("grid")
+    if not isinstance(grid, Mapping):
+        raise InvalidRegistrationWorkspaceInputError(f"{label} requires a captured grid.")
+    try:
+        registration_local_grid(grid, f"{label} grid")
+        capture["grid"] = _canonical_local_geometry_payload(grid, f"{label} grid")
+        capture["actor_matrix"] = invertible_affine4(
+            capture.get("actor_matrix"), f"{label} actor matrix"
+        ).tolist()
+    except (TypeError, ValueError) as exc:
+        raise InvalidRegistrationWorkspaceInputError(str(exc)) from exc
+    descriptor = capture.get("descriptor")
+    if not isinstance(descriptor, Mapping):
+        raise InvalidRegistrationWorkspaceInputError(f"{label} requires a captured descriptor.")
+    identities = {
+        key: _registration_stable_id(descriptor[key], f"{label} descriptor {key}")
+        for key in (
+            "dataset_id", "acquisition_id", "source_id", "channel_id",
+            "backing_source_id", "entry_id",
+        )
+        if descriptor.get(key) not in (None, "")
+    }
+    if not identities:
+        raise InvalidRegistrationWorkspaceInputError(
+            f"{label} descriptor must retain a stable source identity."
+        )
+    capture["descriptor"] = {**_plain_value(dict(descriptor)), **identities}
+    return capture
+
+
+@dataclass
+class RegistrationTransformBinding:
+    """Workspace-owned relationship between a transform and captured datasets."""
+
+    binding_id: str
+    content_reference: dict[str, str]
+    moving_dataset_id: str
+    reference_dataset_id: str
+    moving_capture: dict[str, Any]
+    reference_capture: dict[str, Any]
+    moving_to_transform: list[list[float]]
+    reference_to_transform: list[list[float]]
+    evidence: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        self.binding_id = _registration_uuid(self.binding_id, "Transform binding ID")
+        if not isinstance(self.content_reference, Mapping) or set(self.content_reference) != {"object_id", "record_id"}:
+            raise InvalidRegistrationWorkspaceInputError(
+                "Transform binding content reference must contain object_id and record_id."
+            )
+        self.content_reference = {
+            "object_id": _registration_stable_id(self.content_reference["object_id"], "Transform object ID"),
+            "record_id": _registration_stable_id(self.content_reference["record_id"], "Transform content record ID"),
+        }
+        self.moving_dataset_id = _registration_stable_id(self.moving_dataset_id, "Moving dataset ID")
+        self.reference_dataset_id = _registration_stable_id(self.reference_dataset_id, "Reference dataset ID")
+        self.moving_capture = _registration_capture(self.moving_capture, "Moving capture")
+        self.reference_capture = _registration_capture(self.reference_capture, "Reference capture")
+        for name in ("moving_to_transform", "reference_to_transform"):
+            try:
+                setattr(self, name, invertible_affine4(getattr(self, name), name.replace("_", " ")).tolist())
+            except (TypeError, ValueError) as exc:
+                raise InvalidRegistrationWorkspaceInputError(
+                    f"{name.replace('_', ' ').capitalize()} must be a finite invertible 4x4 matrix."
+                ) from exc
+        self.evidence = _registration_json_object(
+            self.evidence, "Transform binding evidence", max_bytes=MAX_REGISTRATION_BINDING_BYTES
+        )
+
+    def to_dict(self):
+        return {
+            "binding_id": self.binding_id,
+            "content_reference": copy.deepcopy(self.content_reference),
+            "moving_dataset_id": self.moving_dataset_id,
+            "reference_dataset_id": self.reference_dataset_id,
+            "moving_capture": copy.deepcopy(self.moving_capture),
+            "reference_capture": copy.deepcopy(self.reference_capture),
+            "moving_to_transform": copy.deepcopy(self.moving_to_transform),
+            "reference_to_transform": copy.deepcopy(self.reference_to_transform),
+            "evidence": copy.deepcopy(self.evidence),
+        }
+
+    @classmethod
+    def from_dict(cls, payload):
+        if isinstance(payload, cls):
+            payload = payload.to_dict()
+        if not isinstance(payload, Mapping):
+            raise InvalidRegistrationWorkspaceInputError("Transform binding must be an object.")
+        try:
+            return cls(**dict(payload))
+        except TypeError as exc:
+            raise InvalidRegistrationWorkspaceInputError(
+                "Transform binding fields are incomplete or unsupported."
+            ) from exc
 
 
 def _canonical_local_geometry_payload(payload, label="registration local geometry"):
@@ -177,6 +416,67 @@ def _canonical_local_geometry_records(records, label):
             )
         normalized.append(record)
     return normalized
+
+
+@dataclass(frozen=True)
+class RegistrationLocalGrid:
+    """Numerical voxel lattice; physical calibration is optional evidence."""
+
+    dimensions: tuple[int, int, int]
+    origin: tuple[float, float, float]
+    spacing: tuple[float, float, float]
+    direction: tuple[tuple[float, float, float], ...]
+    space_units: tuple[str, str, str] | None
+    coordinate_space_id: str
+
+
+def registration_local_grid(geometry, label="registration grid"):
+    """Validate a captured local lattice without claiming physical calibration."""
+    geometry = _canonical_local_geometry_payload(geometry, label)
+    dims = finite_tuple3(
+        geometry.get("dims_xyz"), f"{label} dimensions", positive=True, integer=True
+    )
+    affine = general_grid_affine_from_components(
+        geometry.get("origin"), geometry.get("spacing"), geometry.get("direction")
+    )
+    components = grid_components_from_affine(affine)
+    try:
+        units = canonical_space_units(geometry.get("space_units"))
+    except (TypeError, ValueError):
+        units = None
+    return RegistrationLocalGrid(
+        dimensions=dims,
+        origin=components["origin"],
+        spacing=components["spacing"],
+        direction=tuple(
+            tuple(float(value) for value in row)
+            for row in np.asarray(components["direction"], dtype=float)
+        ),
+        space_units=units,
+        coordinate_space_id=str(geometry.get("coordinate_space_id") or ""),
+    )
+
+
+def registration_grid_mismatches(reference, candidate):
+    """Compare voxel lattices, including units/space identity and excluding pose."""
+    mismatches = []
+    for field, label in (
+        ("dimensions", "dimensions"),
+        ("space_units", "spatial units"),
+        ("coordinate_space_id", "coordinate-space identity"),
+    ):
+        if getattr(reference, field) != getattr(candidate, field):
+            mismatches.append(label)
+    for field, label in (
+        ("origin", "origin"),
+        ("spacing", "spacing"),
+        ("direction", "direction"),
+    ):
+        if not geometry_values_equivalent(
+            getattr(reference, field), getattr(candidate, field)
+        ):
+            mismatches.append(label)
+    return tuple(mismatches)
 
 
 @dataclass(frozen=True)
@@ -251,6 +551,9 @@ class RegistrationSettings(dict):
                 "Registration settings must be an object."
             )
         super().__init__(_plain_value(dict(values or {})))
+        if self.get("mode") == "template":
+            self["mode"] = "groupwise"
+        self.setdefault("linear_enabled", True)
         self["qc_thresholds"] = registration_qc_thresholds(self.get("qc_thresholds"))
 
     @classmethod
@@ -333,9 +636,10 @@ def _registration_operation_ids(values):
     operation_ids = []
     for value in values or ():
         operation_id = str(value or "").strip()
-        if not operation_id.startswith("registration:") or not operation_id[13:]:
+        if not any(operation_id.startswith(prefix) and operation_id[len(prefix):]
+                   for prefix in ("registration:", "template-round:")):
             raise InvalidRegistrationWorkspaceInputError(
-                "Registration workspace result references must be stable registration operation IDs."
+                "Registration workspace result references must be stable completed operation IDs."
             )
         if operation_id not in operation_ids:
             operation_ids.append(operation_id)
@@ -831,6 +1135,15 @@ class RegistrationTransformChain:
         json_path = Path(json_path)
         json_path.parent.mkdir(parents=True, exist_ok=True)
         payload = self.to_dict(include_field_metadata=True)
+        # Workspace initializer selection belongs to the job. Export only its
+        # consumed frame evidence, using the scientific result projection.
+        payload["settings"].pop("initial_affine_binding_id", None)
+        payload["settings"].pop("initial_affine_binding", None)
+        from .evidence import material_imported_affine_evidence
+        for stage in payload["stages"]:
+            details = stage.get("details") or {}
+            if details.get("imported_affine"):
+                details["imported_affine"] = material_imported_affine_evidence(details["imported_affine"])
         model_type = str((self.deformation_model or {}).get("type") or "").lower()
         if model_type == "cmtk_warp":
             model = dict(self.deformation_model or {})
@@ -900,6 +1213,21 @@ class RegistrationTransformChain:
             raise RuntimeError(
                 f"Unsupported registration transform schema {schema}; "
                 f"expected {REGISTRATION_CHAIN_SCHEMA_VERSION}."
+            )
+        format_version = payload.get("format_version")
+        if format_version is not None:
+            try:
+                format_version = int(format_version)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("Registration transform format version is invalid.") from exc
+            if format_version != schema:
+                raise RuntimeError(
+                    "Registration transform format version does not match its schema version."
+                )
+        direction = payload.get("direction")
+        if direction is not None and direction != "moving_to_reference":
+            raise RuntimeError(
+                "Registration transform direction must be moving_to_reference."
             )
         stages = [TransformStageResult.from_dict(raw) for raw in payload.get("stages") or []]
         deformation = payload.get("deformation") or {}
@@ -996,12 +1324,30 @@ class RegistrationDataset:
     reference: bool = False  # compatibility mirror of a child volume with role=reference
     captured_actor_matrix: Optional[list[list[float]]] = field(default=None, repr=False)
     captured_actor_matrices: dict[str, list[list[float]]] = field(default_factory=dict, repr=False)
+    groupwise_reflection: Reflection | None = None
+
+    def __post_init__(self):
+        if self.groupwise_reflection is not None:
+            from .template_recipe import Reflection
+            if not isinstance(self.groupwise_reflection, Reflection):
+                self.groupwise_reflection = Reflection(**self.groupwise_reflection)
 
     def physical_grid_input_references(self) -> tuple[dict[str, Any], ...]:
         return tuple(
             physical_grid_input_reference(descriptor)
             for descriptor in self.channel_descriptors.values()
         )
+
+
+@dataclass(frozen=True)
+class TemplateCompletedResult:
+    """Materialized reference to a canonical round, without a copied payload."""
+
+    operation_id: str
+    round_index: int
+    channel_ids: tuple[str, ...]
+    mapping_references: tuple[dict[str, str], ...]
+    output_references: tuple[dict[str, str], ...] = ()
 
 
 @dataclass
@@ -1018,7 +1364,7 @@ class RegistrationJob:
     results: list[RegistrationTransformChain] = field(default_factory=list)
     output_directory: str = ""
     result_operation_ids: list[str] = field(default_factory=list)
-
+    transform_binding_ids: list[str] = field(default_factory=list)
     def __post_init__(self):
         self.execution_status = validate_execution_status(self.execution_status)
         self.qc_status = validate_qc_status(self.qc_status)
@@ -1030,6 +1376,9 @@ class RegistrationJob:
                 *self.result_operation_ids,
                 *("registration:" + str(result.registration_id) for result in self.results),
             ]
+        )
+        self.transform_binding_ids = _registration_binding_ids(
+            self.transform_binding_ids
         )
 
     def physical_grid_dependency_record(self) -> dict[str, Any]:
@@ -1054,7 +1403,7 @@ class RegistrationJob:
             raise InvalidRegistrationWorkspaceInputError(
                 "A completed registration job must reference its result operation."
             )
-        return {
+        payload = {
             "schema": REGISTRATION_JOB_SCHEMA_VERSION,
             "job_id": str(self.job_id),
             "name": str(self.name),
@@ -1064,6 +1413,9 @@ class RegistrationJob:
             "error": str(self.error)[-4000:],
             "result_operation_ids": result_operation_ids,
         }
+        if self.transform_binding_ids:
+            payload["transform_binding_ids"] = list(self.transform_binding_ids)
+        return payload
 
     @classmethod
     def from_dict(cls, payload, *, results=None):
@@ -1074,7 +1426,7 @@ class RegistrationJob:
         payload = dict(payload)
         schema_value = payload.get("schema")
         schema = str(REGISTRATION_JOB_SCHEMA_VERSION if schema_value is None else schema_value)
-        if schema != REGISTRATION_JOB_SCHEMA_VERSION:
+        if schema not in {REGISTRATION_JOB_SCHEMA_VERSION, "MADI3D_registration_job_v1"}:
             raise InvalidRegistrationWorkspaceInputError(f"Unsupported registration job schema: {schema}")
         job_id = payload.get("job_id")
         if not isinstance(job_id, str) or not job_id.strip():
@@ -1084,6 +1436,7 @@ class RegistrationJob:
         project_state = payload.get("project_state", {})
         settings = payload.get("settings", {})
         result_ids = payload.get("result_operation_ids", [])
+        transform_binding_ids = payload.get("transform_binding_ids", [])
         if not isinstance(project_state, Mapping):
             raise InvalidRegistrationWorkspaceInputError(
                 "Registration job project state must be an object."
@@ -1095,6 +1448,10 @@ class RegistrationJob:
         if not isinstance(result_ids, (list, tuple)):
             raise InvalidRegistrationWorkspaceInputError(
                 "Registration job result references must be a list."
+            )
+        if not isinstance(transform_binding_ids, (list, tuple)):
+            raise InvalidRegistrationWorkspaceInputError(
+                "Registration job transform binding references must be a list."
             )
         execution = _persisted_queue_status(payload.get("execution_status"))
         restored_results = list(results or ())
@@ -1124,6 +1481,7 @@ class RegistrationJob:
             result_operation_ids=copy.deepcopy(
                 result_ids
             ),
+            transform_binding_ids=copy.deepcopy(transform_binding_ids),
         )
 
 
@@ -1186,6 +1544,16 @@ class RegistrationProjectState:
         )
 
 
+def _groupwise_configuration_payload(value):
+    if value is None:
+        return None
+    from .template_recipe import GroupwiseConfiguration
+    try:
+        return GroupwiseConfiguration.from_dict(value).to_dict()
+    except (TypeError, ValueError, KeyError) as exc:
+        raise InvalidRegistrationWorkspaceInputError("Invalid Groupwise settings.") from exc
+
+
 @dataclass
 class RegistrationWorkspaceState:
     """One schema shared by embedded and explicit registration workspaces."""
@@ -1194,8 +1562,25 @@ class RegistrationWorkspaceState:
     jobs: list[RegistrationJob] = field(default_factory=list)
     result_operation_ids: list[str] = field(default_factory=list)
     result_reviews: dict[str, dict[str, Any]] = field(default_factory=dict)
+    transform_bindings: list[RegistrationTransformBinding] = field(default_factory=list)
+    grid_reference: dict | None = None
+    groupwise_configuration: dict | None = None
+    template_results: list[TemplateCompletedResult] = field(default_factory=list, repr=False)
+    release_temporary_inputs: bool = True
 
     def __post_init__(self):
+        if not isinstance(self.release_temporary_inputs, bool):
+            raise InvalidRegistrationWorkspaceInputError(
+                "Registration temporary-input policy must be a boolean."
+            )
+        if self.grid_reference is not None:
+            from dataclasses import asdict
+            from .template_recipe import TemplateChannelRef
+            try:
+                self.grid_reference = asdict(TemplateChannelRef(**self.grid_reference))
+            except (TypeError, ValueError) as exc:
+                raise InvalidRegistrationWorkspaceInputError("Invalid Grid-reference channel.") from exc
+        self.groupwise_configuration = _groupwise_configuration_payload(self.groupwise_configuration)
         self.active_project = (
             self.active_project
             if isinstance(self.active_project, RegistrationProjectState)
@@ -1207,11 +1592,30 @@ class RegistrationWorkspaceState:
             job if isinstance(job, RegistrationJob) else RegistrationJob.from_dict(job)
             for job in self.jobs
         ]
+        self.transform_bindings = [
+            binding if isinstance(binding, RegistrationTransformBinding)
+            else RegistrationTransformBinding.from_dict(binding)
+            for binding in self.transform_bindings
+        ]
         if len(self.jobs) > MAX_REGISTRATION_WORKSPACE_JOBS:
             raise InvalidRegistrationWorkspaceInputError("Registration workspace contains too many queued jobs.")
+        if len(self.transform_bindings) > MAX_REGISTRATION_WORKSPACE_TRANSFORM_BINDINGS:
+            raise InvalidRegistrationWorkspaceInputError("Registration workspace contains too many transform bindings.")
         job_ids = [job.job_id for job in self.jobs]
         if len(job_ids) != len(set(job_ids)):
             raise InvalidRegistrationWorkspaceInputError("Registration workspace job IDs must be unique.")
+        binding_ids = [binding.binding_id for binding in self.transform_bindings]
+        if len(binding_ids) != len(set(binding_ids)):
+            raise InvalidRegistrationWorkspaceInputError("Registration workspace transform binding IDs must be unique.")
+        listed_bindings = set(binding_ids)
+        for job in self.jobs:
+            unavailable_bindings = set(job.transform_binding_ids) - listed_bindings
+            if unavailable_bindings:
+                raise InvalidRegistrationWorkspaceInputError(
+                    "Registration jobs refer to unlisted transform bindings: "
+                    + ", ".join(sorted(unavailable_bindings))
+                    + "."
+                )
         self.result_operation_ids = _registration_operation_ids(
             self.result_operation_ids
         )
@@ -1238,12 +1642,16 @@ class RegistrationWorkspaceState:
             and not self.jobs
             and not self.result_operation_ids
             and not self.result_reviews
+            and not self.transform_bindings
+            and self.grid_reference is None
+            and self.groupwise_configuration is None
+            and self.release_temporary_inputs
         )
 
     def to_dict(self):
         if self.is_empty:
             return {}
-        return {
+        payload = {
             "schema": REGISTRATION_WORKSPACE_SCHEMA_VERSION,
             "active_project": (
                 self.active_project.to_dict()
@@ -1252,7 +1660,16 @@ class RegistrationWorkspaceState:
             "jobs": [job.to_dict() for job in self.jobs],
             "result_operation_ids": list(self.result_operation_ids),
             "result_reviews": copy.deepcopy(self.result_reviews),
+            "release_temporary_inputs": self.release_temporary_inputs,
+            "grid_reference": copy.deepcopy(self.grid_reference),
         }
+        if self.transform_bindings:
+            payload["transform_bindings"] = [
+                binding.to_dict() for binding in self.transform_bindings
+            ]
+        if self.groupwise_configuration is not None:
+            payload["groupwise_configuration"] = copy.deepcopy(self.groupwise_configuration)
+        return payload
 
     @classmethod
     def from_dict(cls, payload):
@@ -1317,11 +1734,12 @@ class RegistrationWorkspaceState:
             )
         schema_value = payload.get("schema")
         schema = "" if schema_value is None else str(schema_value)
-        if schema != REGISTRATION_WORKSPACE_SCHEMA_VERSION:
+        if schema not in {REGISTRATION_WORKSPACE_SCHEMA_VERSION, "MADI3D_registration_workspace_v2"}:
             raise InvalidRegistrationWorkspaceInputError(f"Unsupported registration workspace schema: {schema}")
         unknown = set(payload) - {
             "schema", "active_project", "jobs", "result_operation_ids",
-            "result_reviews",
+            "result_reviews", "transform_bindings", "groupwise_configuration",
+            "release_temporary_inputs", "grid_reference",
         }
         if unknown:
             raise InvalidRegistrationWorkspaceInputError(
@@ -1333,6 +1751,7 @@ class RegistrationWorkspaceState:
         jobs_payload = payload.get("jobs", [])
         result_ids = payload.get("result_operation_ids", [])
         reviews = payload.get("result_reviews", {})
+        bindings_payload = payload.get("transform_bindings", [])
         if active_payload is not None and not isinstance(active_payload, Mapping):
             raise InvalidRegistrationWorkspaceInputError(
                 "Registration active project must be an object or null."
@@ -1349,6 +1768,10 @@ class RegistrationWorkspaceState:
             raise InvalidRegistrationWorkspaceInputError(
                 "Registration workspace reviews must be an object."
             )
+        if not isinstance(bindings_payload, (list, tuple)):
+            raise InvalidRegistrationWorkspaceInputError(
+                "Registration workspace transform bindings must be a list."
+            )
         return cls(
             active_project=(
                 RegistrationProjectState.from_dict(active_payload)
@@ -1357,6 +1780,13 @@ class RegistrationWorkspaceState:
             jobs=[RegistrationJob.from_dict(job) for job in jobs_payload],
             result_operation_ids=copy.deepcopy(result_ids),
             result_reviews=copy.deepcopy(dict(reviews)),
+            transform_bindings=[
+                RegistrationTransformBinding.from_dict(binding)
+                for binding in bindings_payload
+            ],
+            grid_reference=copy.deepcopy(payload.get("grid_reference")),
+            groupwise_configuration=copy.deepcopy(payload.get("groupwise_configuration")),
+            release_temporary_inputs=payload.get("release_temporary_inputs", True),
         )
 
     def write(self, path):
@@ -1399,7 +1829,7 @@ def stage_registration_project_state(raw, *, report_loss):
             return {}
 
     schema = raw.get("schema")
-    if schema != REGISTRATION_WORKSPACE_SCHEMA_VERSION:
+    if schema not in {REGISTRATION_WORKSPACE_SCHEMA_VERSION, "MADI3D_registration_workspace_v2"}:
         report_loss(
             "invalid-registration-schema", "registration_workspace.schema",
             "The registration workspace was omitted; completed scientific results remain available.",
@@ -1416,8 +1846,11 @@ def stage_registration_project_state(raw, *, report_loss):
         **dict(raw),
         "active_project": None,
         "jobs": [],
+        "transform_bindings": [],
         "result_operation_ids": [],
         "result_reviews": {},
+        "groupwise_configuration": None,
+        "grid_reference": None,
     }
     try:
         RegistrationWorkspaceState.from_dict(root_candidate)
@@ -1427,6 +1860,25 @@ def stage_registration_project_state(raw, *, report_loss):
             "The registration workspace was omitted because it contains unsupported fields.",
         )
         return {}
+
+    groupwise_configuration = None
+    try:
+        groupwise_configuration = _groupwise_configuration_payload(raw.get("groupwise_configuration"))
+    except InvalidRegistrationWorkspaceInputError:
+        report_loss(
+            "invalid-groupwise-configuration", "registration_workspace.groupwise_configuration",
+            "The Groupwise settings were omitted; valid queued jobs and completed results were retained.",
+        )
+
+    grid_reference = raw.get("grid_reference")
+    try:
+        grid_reference = RegistrationWorkspaceState(grid_reference=grid_reference).grid_reference
+    except InvalidRegistrationWorkspaceInputError:
+        grid_reference = None
+        report_loss(
+            "invalid-grid-reference", "registration_workspace.grid_reference",
+            "The Grid-reference selection was omitted; choose a channel in the Registration Grid column.",
+        )
 
     active = None
     if raw.get("active_project") is not None:
@@ -1469,6 +1921,10 @@ def stage_registration_project_state(raw, *, report_loss):
         "jobs": jobs,
         "result_operation_ids": copy.deepcopy(raw.get("result_operation_ids", ())),
         "result_reviews": copy.deepcopy(raw.get("result_reviews", {})),
+        "transform_bindings": copy.deepcopy(raw.get("transform_bindings", ())),
+        "groupwise_configuration": groupwise_configuration,
+        "grid_reference": grid_reference,
+        "release_temporary_inputs": raw.get("release_temporary_inputs", True),
     }
     try:
         return RegistrationWorkspaceState.from_dict(candidate).to_dict()

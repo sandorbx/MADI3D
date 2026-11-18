@@ -1,15 +1,52 @@
 {
   "schema_version": 1,
   "ffmpeg": {
-    "release": "n8.1.2-1",
-    "version": "n8.1.2",
-    "build_commit": "88caac417541f3bb678fa6670cb73f2d74c7aaf9",
-    "x265": "4.2",
+    "release": "9.0.2-h5j12-2",
+    "version": "9.0.2",
+    "x265": "multibit (8/10/12-bit)",
+    "providers": {
+      "windows_linux": {
+        "project": "BtbN/FFmpeg-Builds",
+        "release": "autobuild-2026-09-30-13-08",
+        "source": "https://github.com/BtbN/FFmpeg-Builds/tree/autobuild-2026-09-30-13-08"
+      },
+      "macos": {
+        "project": "Martin Riedl FFmpeg builds",
+        "release": "9.0.2",
+        "source": "https://git.martin-riedl.de/ffmpeg/build-script"
+      }
+    },
     "assets": {
-      "ffmpeg-win-x64.exe": "4044b3924c977ad31229d504c5d5b8685f9553124fbaff6e9c99048b42830341",
-      "ffmpeg-linux-x64": "9eac5b2b5076db5ff853a6fa0dcd6b8de7d0cac8481eadda6c47cd935825f1ee",
-      "ffmpeg-osx-x64": "62c87854d851f202fc4a29bdda0fe7b6ebcddd37b863482ce1bdc81151b03fe4",
-      "ffmpeg-osx-arm64": "e7b9fcd97f95f333512d6e8b8ac24d9dbc08f189f36047695499bd7b57214b22"
+      "ffmpeg-windows-x86_64.zip": "513368c81583572ce1d09d5c7ff827feed1a63db352412a5001f4da3a1583d98",
+      "ffmpeg-linux-x86_64.tar.xz": "0d709a0bed1a43f24cd2c420878c63afea4580671b6949ad19ed124572f3bc3d",
+      "ffmpeg-macos-x86_64.zip": "b25689cf2211c0582d317e849912769a1f1c93904fe102c485b5364a425633d1",
+      "ffmpeg-macos-arm64.zip": "2e11c6f90993cdb79fff84d3f90044d28316b310e75b3e030cfc9a54f2c9d384"
+    },
+    "archives": {
+      "ffmpeg-windows-x86_64.zip": {
+        "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/ffmpeg-n9.0.2-17-g2a571b6068-win64-gpl-9.0.zip",
+        "sha256": "a0e45723c72141975f51d8666302e614711745f3102b704ca3f82c897a58d278",
+        "format": "zip",
+        "member": "ffmpeg-n9.0.2-17-g2a571b6068-win64-gpl-9.0/bin/ffmpeg.exe"
+      },
+      "ffmpeg-linux-x86_64.tar.xz": {
+        "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/ffmpeg-n9.0.2-17-g2a571b6068-linux64-gpl-9.0.tar.xz",
+        "sha256": "68ee646831adaae2495618346f3bba94ff207ff83bbd34d643e7004730d66269",
+        "format": "tar.xz",
+        "member": "ffmpeg-n9.0.2-17-g2a571b6068-linux64-gpl-9.0/bin/ffmpeg"
+      },
+      "ffmpeg-macos-x86_64.zip": {
+        "url": "https://ffmpeg.martin-riedl.de/download/macos/amd64/1789931006_9.0.2/ffmpeg.zip",
+        "sha256": "7c6b4125b191cbf773832dc51f424cf2b6bb7da43007d1e066f95909e47cacd4",
+        "format": "zip",
+        "member": "ffmpeg"
+      },
+      "ffmpeg-macos-arm64.zip": {
+        "url": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffmpeg.zip",
+        "sha256": "c8ed4c4e6978a03c485edbfe4e0a5dc2380f8a30bba5150531b31b094492d924",
+        "format": "zip",
+        "member": "ffmpeg"
+      }
     }
   },
   "cmtk": {

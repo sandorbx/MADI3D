@@ -1,0 +1,2134 @@
+{
+  "evidence" : "observed original Java execution",
+  "java_version" : "21.0.10+1-b1163.108",
+  "java_vendor" : "JetBrains s.r.o.",
+  "os" : "Windows 11",
+  "arch" : "amd64",
+  "assets" : {
+    "ems/12191_JRC2018U.tif" : {
+      "file_sha256" : "c13b49f301d70f8778edad50096c24548458c7fb44323c26c6c6c3225cb6d090",
+      "decoded_sha256" : "bbd5f02530313583ec3d2d4ed71797289346a7a889541ca2db58fd6aa0c25dba",
+      "shape" : [ 566, 1210, 3 ],
+      "dtype" : "|u1",
+      "pixel_encoding" : "RGB uint8, row-major"
+    },
+    "lms/VT033614_127B01_AE_01-20171124_64_H6-f-CH2_01.tif" : {
+      "file_sha256" : "efbe116e00df51337e1b927ab0907454d3c19b2b4d7d1ab2ff4e2460f11fc8b3",
+      "decoded_sha256" : "13a139ed00f2cad3cec35560c7cadefc2052d606b1f85fadc14882fc05d6841c",
+      "shape" : [ 566, 1210, 3 ],
+      "dtype" : "|u1",
+      "pixel_encoding" : "RGB uint8, row-major"
+    },
+    "grad/VT033614_127B01_AE_01-20171124_64_H6-f-CH2_01.png" : {
+      "file_sha256" : "9c3c0add658adf76f8f1a3760f9e0f3e162df089121e571c2cdbd3e5adc9b6f5",
+      "decoded_sha256" : "cb7ab26643754a9846a4d367f38c931424f59c7548342f2cf0c0acc76c14ed76",
+      "shape" : [ 566, 1210 ],
+      "dtype" : "<u2",
+      "pixel_encoding" : "unsigned uint16 little endian, row-major"
+    },
+    "lms/BJD_127B01_AE_01-20171124_64_H6-40x-Brain-JRC2018_Unisex_20x_HR-2483089192251293794-CH2-01_CDM.tif" : {
+      "file_sha256" : "e35a5361a1b28ca113e4b842aaedd0ff977027ceda880f73d7e5008c6c3a3c66",
+      "decoded_sha256" : "0977a5d2f4df1ae83fe8b4f759b1db53978d31d8018f6750231d46197886454c",
+      "shape" : [ 566, 1210, 3 ],
+      "dtype" : "|u1",
+      "pixel_encoding" : "RGB uint8, row-major"
+    },
+    "grad/BJD_127B01_AE_01-20171124_64_H6-40x-Brain-JRC2018_Unisex_20x_HR-2483089192251293794-CH2-01_CDM.png" : {
+      "file_sha256" : "561e54d8a823bbbec73b9a35e25edf6930d3eb156523a8c8fe328a834ef35bf7",
+      "decoded_sha256" : "9f11c9a0471ac7db75b2ffff99bfb6706d01f4d3d4413ba21c9af4749c76e8b3",
+      "shape" : [ 566, 1210 ],
+      "dtype" : "<u2",
+      "pixel_encoding" : "unsigned uint16 little endian, row-major"
+    },
+    "lms/VT016795_115C08_AE_01-20200221_61_I2-m-CH1_01.tif" : {
+      "file_sha256" : "ab480291acfad67960e35885cdf622967a6b369a5445ed8257bcf031daaddfae",
+      "decoded_sha256" : "6bc97bea858e29cf5d5255f9181f6148ae7237eed965663658fbb63715450706",
+      "shape" : [ 566, 1210, 3 ],
+      "dtype" : "|u1",
+      "pixel_encoding" : "RGB uint8, row-major"
+    },
+    "grad/VT016795_115C08_AE_01-20200221_61_I2-m-CH1_01.png" : {
+      "file_sha256" : "5d0ceb25bd34580b690081e8dbfa4e32351da97797002db28698c05363f06fa4",
+      "decoded_sha256" : "7571b1e44cb46d86d74d5428d1219d1e606497b8e20e5373d623157eacac1390",
+      "shape" : [ 566, 1210 ],
+      "dtype" : "<u2",
+      "pixel_encoding" : "unsigned uint16 little endian, row-major"
+    },
+    "ems/12191_JRC2018U_FL.tif" : {
+      "file_sha256" : "075040afe325e75fd26e2b5cf307d7ac32e7d9d3ae2abd9f5e0f286002f91699",
+      "decoded_sha256" : "3a62c0f04950749327dc18513c464ebc448a6af97dde44b859474b7287ff2bfe",
+      "shape" : [ 566, 1210, 3 ],
+      "dtype" : "|u1",
+      "pixel_encoding" : "RGB uint8, row-major"
+    },
+    "zgap/BJD_127B01_AE_01-20171124_64_H6-40x-Brain-JRC2018_Unisex_20x_HR-2483089192251293794-CH2-01_CDM.tif" : {
+      "file_sha256" : "7d971bb24c7a2ec98ce164c5f2b3d2fa99a096d03bf3d060724158840d70f8b8",
+      "decoded_sha256" : "96ac3741f4645dbe684f0defa0cb5cf4ccae952a063317d3ce802a77ddce37f4",
+      "shape" : [ 566, 1210, 3 ],
+      "dtype" : "|u1",
+      "pixel_encoding" : "RGB uint8, row-major"
+    }
+  },
+  "real_cases" : [ {
+    "case" : "provider-em-vt033614",
+    "combination" : "em-vt033614",
+    "route" : "provider",
+    "gradient_area_gap" : 21365,
+    "high_expression_area" : 731,
+    "combined_long" : 21608,
+    "score_int" : 21608,
+    "mirrored" : false,
+    "zgap_mode" : "test-derived",
+    "zgap_rgb_sha256" : "74804909c6d914c6ce801e4e20267b0e18ca32873f000d78b2bcac16ab3d2e9a"
+  }, {
+    "case" : "provider-em-bjd-derived",
+    "combination" : "em-bjd-derived",
+    "route" : "provider",
+    "gradient_area_gap" : 23359,
+    "high_expression_area" : 523,
+    "combined_long" : 23533,
+    "score_int" : 23533,
+    "mirrored" : false,
+    "zgap_mode" : "test-derived",
+    "zgap_rgb_sha256" : "87a435e032020687fe54a5afef83a41121caff50f8a710f28294e0655f879201"
+  }, {
+    "case" : "provider-em-vt016795",
+    "combination" : "em-vt016795",
+    "route" : "provider",
+    "gradient_area_gap" : 40696,
+    "high_expression_area" : 17253,
+    "combined_long" : 46447,
+    "score_int" : 46447,
+    "mirrored" : true,
+    "zgap_mode" : "test-derived",
+    "zgap_rgb_sha256" : "4b5a6a663aa23838b8d28ebd21ae89be042f59ab605128756a81b9b88e9f6194"
+  }, {
+    "case" : "provider-fl-vt033614",
+    "combination" : "fl-vt033614",
+    "route" : "provider",
+    "gradient_area_gap" : 65381,
+    "high_expression_area" : 677,
+    "combined_long" : 65606,
+    "score_int" : 65606,
+    "mirrored" : false,
+    "zgap_mode" : "test-derived",
+    "zgap_rgb_sha256" : "74804909c6d914c6ce801e4e20267b0e18ca32873f000d78b2bcac16ab3d2e9a"
+  }, {
+    "case" : "provider-fl-vt016795",
+    "combination" : "fl-vt016795",
+    "route" : "provider",
+    "gradient_area_gap" : 104449,
+    "high_expression_area" : 16803,
+    "combined_long" : 110050,
+    "score_int" : 110050,
+    "mirrored" : true,
+    "zgap_mode" : "test-derived",
+    "zgap_rgb_sha256" : "4b5a6a663aa23838b8d28ebd21ae89be042f59ab605128756a81b9b88e9f6194"
+  }, {
+    "case" : "direct-em-vt033614",
+    "combination" : "em-vt033614",
+    "route" : "direct",
+    "gradient_area_gap" : 21365,
+    "high_expression_area" : 731,
+    "combined_long" : 21608,
+    "score_int" : 21608,
+    "mirrored" : false,
+    "zgap_mode" : "test-derived",
+    "zgap_rgb_sha256" : "74804909c6d914c6ce801e4e20267b0e18ca32873f000d78b2bcac16ab3d2e9a"
+  }, {
+    "case" : "direct-em-bjd-supplied",
+    "combination" : "em-bjd-supplied",
+    "route" : "direct",
+    "gradient_area_gap" : 33884,
+    "high_expression_area" : 523,
+    "combined_long" : 34058,
+    "score_int" : 34058,
+    "mirrored" : false,
+    "zgap_mode" : "supplied",
+    "zgap_rgb_sha256" : "96ac3741f4645dbe684f0defa0cb5cf4ccae952a063317d3ce802a77ddce37f4"
+  }, {
+    "case" : "direct-em-bjd-mismatched",
+    "combination" : "em-bjd-mismatched",
+    "route" : "direct",
+    "gradient_area_gap" : 23367,
+    "high_expression_area" : 523,
+    "combined_long" : 23541,
+    "score_int" : 23541,
+    "mirrored" : false,
+    "zgap_mode" : "test-derived",
+    "zgap_rgb_sha256" : "87a435e032020687fe54a5afef83a41121caff50f8a710f28294e0655f879201"
+  }, {
+    "case" : "direct-em-vt016795",
+    "combination" : "em-vt016795",
+    "route" : "direct",
+    "gradient_area_gap" : 40696,
+    "high_expression_area" : 17253,
+    "combined_long" : 46447,
+    "score_int" : 46447,
+    "mirrored" : true,
+    "zgap_mode" : "test-derived",
+    "zgap_rgb_sha256" : "4b5a6a663aa23838b8d28ebd21ae89be042f59ab605128756a81b9b88e9f6194"
+  }, {
+    "case" : "direct-fl-vt033614",
+    "combination" : "fl-vt033614",
+    "route" : "direct",
+    "gradient_area_gap" : 65381,
+    "high_expression_area" : 677,
+    "combined_long" : 65606,
+    "score_int" : 65606,
+    "mirrored" : false,
+    "zgap_mode" : "test-derived",
+    "zgap_rgb_sha256" : "74804909c6d914c6ce801e4e20267b0e18ca32873f000d78b2bcac16ab3d2e9a"
+  }, {
+    "case" : "direct-fl-vt016795",
+    "combination" : "fl-vt016795",
+    "route" : "direct",
+    "gradient_area_gap" : 104449,
+    "high_expression_area" : 16803,
+    "combined_long" : 110050,
+    "score_int" : 110050,
+    "mirrored" : true,
+    "zgap_mode" : "test-derived",
+    "zgap_rgb_sha256" : "4b5a6a663aa23838b8d28ebd21ae89be042f59ab605128756a81b9b88e9f6194"
+  } ],
+  "probes" : {
+    "sliceGapColorPairs" : [ {
+      "rgbA" : 0,
+      "rgbB" : 0,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 0,
+      "rgbB" : 16711680,
+      "sliceGap" : 213
+    }, {
+      "rgbA" : 0,
+      "rgbB" : 65280,
+      "sliceGap" : 129
+    }, {
+      "rgbA" : 0,
+      "rgbB" : 255,
+      "sliceGap" : 30
+    }, {
+      "rgbA" : 0,
+      "rgbB" : 16776960,
+      "sliceGap" : 172
+    }, {
+      "rgbA" : 0,
+      "rgbB" : 16711935,
+      "sliceGap" : 256
+    }, {
+      "rgbA" : 0,
+      "rgbB" : 65535,
+      "sliceGap" : 87
+    }, {
+      "rgbA" : 0,
+      "rgbB" : 8355711,
+      "sliceGap" : 172
+    }, {
+      "rgbA" : 0,
+      "rgbB" : 8421504,
+      "sliceGap" : 172
+    }, {
+      "rgbA" : 0,
+      "rgbB" : 16711422,
+      "sliceGap" : 172
+    }, {
+      "rgbA" : 0,
+      "rgbB" : 16777215,
+      "sliceGap" : 172
+    }, {
+      "rgbA" : 0,
+      "rgbB" : 8323327,
+      "sliceGap" : 1
+    }, {
+      "rgbA" : 0,
+      "rgbB" : 65279,
+      "sliceGap" : 86
+    }, {
+      "rgbA" : 0,
+      "rgbB" : 16776195,
+      "sliceGap" : 172
+    }, {
+      "rgbA" : 0,
+      "rgbB" : 16711880,
+      "sliceGap" : 256
+    }, {
+      "rgbA" : 16711680,
+      "rgbB" : 0,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16711680,
+      "rgbB" : 16711680,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16711680,
+      "rgbB" : 65280,
+      "sliceGap" : 84
+    }, {
+      "rgbA" : 16711680,
+      "rgbB" : 255,
+      "sliceGap" : 183
+    }, {
+      "rgbA" : 16711680,
+      "rgbB" : 16776960,
+      "sliceGap" : 41
+    }, {
+      "rgbA" : 16711680,
+      "rgbB" : 16711935,
+      "sliceGap" : 43
+    }, {
+      "rgbA" : 16711680,
+      "rgbB" : 65535,
+      "sliceGap" : 126
+    }, {
+      "rgbA" : 16711680,
+      "rgbB" : 8355711,
+      "sliceGap" : 41
+    }, {
+      "rgbA" : 16711680,
+      "rgbB" : 8421504,
+      "sliceGap" : 41
+    }, {
+      "rgbA" : 16711680,
+      "rgbB" : 16711422,
+      "sliceGap" : 41
+    }, {
+      "rgbA" : 16711680,
+      "rgbB" : 16777215,
+      "sliceGap" : 41
+    }, {
+      "rgbA" : 16711680,
+      "rgbB" : 8323327,
+      "sliceGap" : 212
+    }, {
+      "rgbA" : 16711680,
+      "rgbB" : 65279,
+      "sliceGap" : 127
+    }, {
+      "rgbA" : 16711680,
+      "rgbB" : 16776195,
+      "sliceGap" : 41
+    }, {
+      "rgbA" : 16711680,
+      "rgbB" : 16711880,
+      "sliceGap" : 43
+    }, {
+      "rgbA" : 65280,
+      "rgbB" : 0,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 65280,
+      "rgbB" : 16711680,
+      "sliceGap" : 84
+    }, {
+      "rgbA" : 65280,
+      "rgbB" : 65280,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 65280,
+      "rgbB" : 255,
+      "sliceGap" : 99
+    }, {
+      "rgbA" : 65280,
+      "rgbB" : 16776960,
+      "sliceGap" : 43
+    }, {
+      "rgbA" : 65280,
+      "rgbB" : 16711935,
+      "sliceGap" : 127
+    }, {
+      "rgbA" : 65280,
+      "rgbB" : 65535,
+      "sliceGap" : 42
+    }, {
+      "rgbA" : 65280,
+      "rgbB" : 8355711,
+      "sliceGap" : 43
+    }, {
+      "rgbA" : 65280,
+      "rgbB" : 8421504,
+      "sliceGap" : 43
+    }, {
+      "rgbA" : 65280,
+      "rgbB" : 16711422,
+      "sliceGap" : 43
+    }, {
+      "rgbA" : 65280,
+      "rgbB" : 16777215,
+      "sliceGap" : 43
+    }, {
+      "rgbA" : 65280,
+      "rgbB" : 8323327,
+      "sliceGap" : 128
+    }, {
+      "rgbA" : 65280,
+      "rgbB" : 65279,
+      "sliceGap" : 43
+    }, {
+      "rgbA" : 65280,
+      "rgbB" : 16776195,
+      "sliceGap" : 43
+    }, {
+      "rgbA" : 65280,
+      "rgbB" : 16711880,
+      "sliceGap" : 127
+    }, {
+      "rgbA" : 255,
+      "rgbB" : 0,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 255,
+      "rgbB" : 16711680,
+      "sliceGap" : 183
+    }, {
+      "rgbA" : 255,
+      "rgbB" : 65280,
+      "sliceGap" : 99
+    }, {
+      "rgbA" : 255,
+      "rgbB" : 255,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 255,
+      "rgbB" : 16776960,
+      "sliceGap" : 142
+    }, {
+      "rgbA" : 255,
+      "rgbB" : 16711935,
+      "sliceGap" : 226
+    }, {
+      "rgbA" : 255,
+      "rgbB" : 65535,
+      "sliceGap" : 57
+    }, {
+      "rgbA" : 255,
+      "rgbB" : 8355711,
+      "sliceGap" : 142
+    }, {
+      "rgbA" : 255,
+      "rgbB" : 8421504,
+      "sliceGap" : 142
+    }, {
+      "rgbA" : 255,
+      "rgbB" : 16711422,
+      "sliceGap" : 142
+    }, {
+      "rgbA" : 255,
+      "rgbB" : 16777215,
+      "sliceGap" : 142
+    }, {
+      "rgbA" : 255,
+      "rgbB" : 8323327,
+      "sliceGap" : 29
+    }, {
+      "rgbA" : 255,
+      "rgbB" : 65279,
+      "sliceGap" : 56
+    }, {
+      "rgbA" : 255,
+      "rgbB" : 16776195,
+      "sliceGap" : 142
+    }, {
+      "rgbA" : 255,
+      "rgbB" : 16711880,
+      "sliceGap" : 226
+    }, {
+      "rgbA" : 16776960,
+      "rgbB" : 0,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16776960,
+      "rgbB" : 16711680,
+      "sliceGap" : 41
+    }, {
+      "rgbA" : 16776960,
+      "rgbB" : 65280,
+      "sliceGap" : 43
+    }, {
+      "rgbA" : 16776960,
+      "rgbB" : 255,
+      "sliceGap" : 142
+    }, {
+      "rgbA" : 16776960,
+      "rgbB" : 16776960,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16776960,
+      "rgbB" : 16711935,
+      "sliceGap" : 84
+    }, {
+      "rgbA" : 16776960,
+      "rgbB" : 65535,
+      "sliceGap" : 85
+    }, {
+      "rgbA" : 16776960,
+      "rgbB" : 8355711,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16776960,
+      "rgbB" : 8421504,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16776960,
+      "rgbB" : 16711422,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16776960,
+      "rgbB" : 16777215,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16776960,
+      "rgbB" : 8323327,
+      "sliceGap" : 171
+    }, {
+      "rgbA" : 16776960,
+      "rgbB" : 65279,
+      "sliceGap" : 86
+    }, {
+      "rgbA" : 16776960,
+      "rgbB" : 16776195,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16776960,
+      "rgbB" : 16711880,
+      "sliceGap" : 84
+    }, {
+      "rgbA" : 16711935,
+      "rgbB" : 0,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16711935,
+      "rgbB" : 16711680,
+      "sliceGap" : 43
+    }, {
+      "rgbA" : 16711935,
+      "rgbB" : 65280,
+      "sliceGap" : 127
+    }, {
+      "rgbA" : 16711935,
+      "rgbB" : 255,
+      "sliceGap" : 226
+    }, {
+      "rgbA" : 16711935,
+      "rgbB" : 16776960,
+      "sliceGap" : 84
+    }, {
+      "rgbA" : 16711935,
+      "rgbB" : 16711935,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16711935,
+      "rgbB" : 65535,
+      "sliceGap" : 169
+    }, {
+      "rgbA" : 16711935,
+      "rgbB" : 8355711,
+      "sliceGap" : 84
+    }, {
+      "rgbA" : 16711935,
+      "rgbB" : 8421504,
+      "sliceGap" : 84
+    }, {
+      "rgbA" : 16711935,
+      "rgbB" : 16711422,
+      "sliceGap" : 84
+    }, {
+      "rgbA" : 16711935,
+      "rgbB" : 16777215,
+      "sliceGap" : 84
+    }, {
+      "rgbA" : 16711935,
+      "rgbB" : 8323327,
+      "sliceGap" : 255
+    }, {
+      "rgbA" : 16711935,
+      "rgbB" : 65279,
+      "sliceGap" : 170
+    }, {
+      "rgbA" : 16711935,
+      "rgbB" : 16776195,
+      "sliceGap" : 84
+    }, {
+      "rgbA" : 16711935,
+      "rgbB" : 16711880,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 65535,
+      "rgbB" : 0,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 65535,
+      "rgbB" : 16711680,
+      "sliceGap" : 126
+    }, {
+      "rgbA" : 65535,
+      "rgbB" : 65280,
+      "sliceGap" : 42
+    }, {
+      "rgbA" : 65535,
+      "rgbB" : 255,
+      "sliceGap" : 57
+    }, {
+      "rgbA" : 65535,
+      "rgbB" : 16776960,
+      "sliceGap" : 85
+    }, {
+      "rgbA" : 65535,
+      "rgbB" : 16711935,
+      "sliceGap" : 169
+    }, {
+      "rgbA" : 65535,
+      "rgbB" : 65535,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 65535,
+      "rgbB" : 8355711,
+      "sliceGap" : 85
+    }, {
+      "rgbA" : 65535,
+      "rgbB" : 8421504,
+      "sliceGap" : 85
+    }, {
+      "rgbA" : 65535,
+      "rgbB" : 16711422,
+      "sliceGap" : 85
+    }, {
+      "rgbA" : 65535,
+      "rgbB" : 16777215,
+      "sliceGap" : 85
+    }, {
+      "rgbA" : 65535,
+      "rgbB" : 8323327,
+      "sliceGap" : 86
+    }, {
+      "rgbA" : 65535,
+      "rgbB" : 65279,
+      "sliceGap" : 1
+    }, {
+      "rgbA" : 65535,
+      "rgbB" : 16776195,
+      "sliceGap" : 85
+    }, {
+      "rgbA" : 65535,
+      "rgbB" : 16711880,
+      "sliceGap" : 169
+    }, {
+      "rgbA" : 8355711,
+      "rgbB" : 0,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 8355711,
+      "rgbB" : 16711680,
+      "sliceGap" : 41
+    }, {
+      "rgbA" : 8355711,
+      "rgbB" : 65280,
+      "sliceGap" : 43
+    }, {
+      "rgbA" : 8355711,
+      "rgbB" : 255,
+      "sliceGap" : 142
+    }, {
+      "rgbA" : 8355711,
+      "rgbB" : 16776960,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 8355711,
+      "rgbB" : 16711935,
+      "sliceGap" : 84
+    }, {
+      "rgbA" : 8355711,
+      "rgbB" : 65535,
+      "sliceGap" : 85
+    }, {
+      "rgbA" : 8355711,
+      "rgbB" : 8355711,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 8355711,
+      "rgbB" : 8421504,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 8355711,
+      "rgbB" : 16711422,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 8355711,
+      "rgbB" : 16777215,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 8355711,
+      "rgbB" : 8323327,
+      "sliceGap" : 171
+    }, {
+      "rgbA" : 8355711,
+      "rgbB" : 65279,
+      "sliceGap" : 86
+    }, {
+      "rgbA" : 8355711,
+      "rgbB" : 16776195,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 8355711,
+      "rgbB" : 16711880,
+      "sliceGap" : 84
+    }, {
+      "rgbA" : 8421504,
+      "rgbB" : 0,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 8421504,
+      "rgbB" : 16711680,
+      "sliceGap" : 41
+    }, {
+      "rgbA" : 8421504,
+      "rgbB" : 65280,
+      "sliceGap" : 43
+    }, {
+      "rgbA" : 8421504,
+      "rgbB" : 255,
+      "sliceGap" : 142
+    }, {
+      "rgbA" : 8421504,
+      "rgbB" : 16776960,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 8421504,
+      "rgbB" : 16711935,
+      "sliceGap" : 84
+    }, {
+      "rgbA" : 8421504,
+      "rgbB" : 65535,
+      "sliceGap" : 85
+    }, {
+      "rgbA" : 8421504,
+      "rgbB" : 8355711,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 8421504,
+      "rgbB" : 8421504,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 8421504,
+      "rgbB" : 16711422,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 8421504,
+      "rgbB" : 16777215,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 8421504,
+      "rgbB" : 8323327,
+      "sliceGap" : 171
+    }, {
+      "rgbA" : 8421504,
+      "rgbB" : 65279,
+      "sliceGap" : 86
+    }, {
+      "rgbA" : 8421504,
+      "rgbB" : 16776195,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 8421504,
+      "rgbB" : 16711880,
+      "sliceGap" : 84
+    }, {
+      "rgbA" : 16711422,
+      "rgbB" : 0,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16711422,
+      "rgbB" : 16711680,
+      "sliceGap" : 41
+    }, {
+      "rgbA" : 16711422,
+      "rgbB" : 65280,
+      "sliceGap" : 43
+    }, {
+      "rgbA" : 16711422,
+      "rgbB" : 255,
+      "sliceGap" : 142
+    }, {
+      "rgbA" : 16711422,
+      "rgbB" : 16776960,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16711422,
+      "rgbB" : 16711935,
+      "sliceGap" : 84
+    }, {
+      "rgbA" : 16711422,
+      "rgbB" : 65535,
+      "sliceGap" : 85
+    }, {
+      "rgbA" : 16711422,
+      "rgbB" : 8355711,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16711422,
+      "rgbB" : 8421504,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16711422,
+      "rgbB" : 16711422,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16711422,
+      "rgbB" : 16777215,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16711422,
+      "rgbB" : 8323327,
+      "sliceGap" : 171
+    }, {
+      "rgbA" : 16711422,
+      "rgbB" : 65279,
+      "sliceGap" : 86
+    }, {
+      "rgbA" : 16711422,
+      "rgbB" : 16776195,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16711422,
+      "rgbB" : 16711880,
+      "sliceGap" : 84
+    }, {
+      "rgbA" : 16777215,
+      "rgbB" : 0,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16777215,
+      "rgbB" : 16711680,
+      "sliceGap" : 41
+    }, {
+      "rgbA" : 16777215,
+      "rgbB" : 65280,
+      "sliceGap" : 43
+    }, {
+      "rgbA" : 16777215,
+      "rgbB" : 255,
+      "sliceGap" : 142
+    }, {
+      "rgbA" : 16777215,
+      "rgbB" : 16776960,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16777215,
+      "rgbB" : 16711935,
+      "sliceGap" : 84
+    }, {
+      "rgbA" : 16777215,
+      "rgbB" : 65535,
+      "sliceGap" : 85
+    }, {
+      "rgbA" : 16777215,
+      "rgbB" : 8355711,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16777215,
+      "rgbB" : 8421504,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16777215,
+      "rgbB" : 16711422,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16777215,
+      "rgbB" : 16777215,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16777215,
+      "rgbB" : 8323327,
+      "sliceGap" : 171
+    }, {
+      "rgbA" : 16777215,
+      "rgbB" : 65279,
+      "sliceGap" : 86
+    }, {
+      "rgbA" : 16777215,
+      "rgbB" : 16776195,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16777215,
+      "rgbB" : 16711880,
+      "sliceGap" : 84
+    }, {
+      "rgbA" : 8323327,
+      "rgbB" : 0,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 8323327,
+      "rgbB" : 16711680,
+      "sliceGap" : 212
+    }, {
+      "rgbA" : 8323327,
+      "rgbB" : 65280,
+      "sliceGap" : 128
+    }, {
+      "rgbA" : 8323327,
+      "rgbB" : 255,
+      "sliceGap" : 29
+    }, {
+      "rgbA" : 8323327,
+      "rgbB" : 16776960,
+      "sliceGap" : 171
+    }, {
+      "rgbA" : 8323327,
+      "rgbB" : 16711935,
+      "sliceGap" : 255
+    }, {
+      "rgbA" : 8323327,
+      "rgbB" : 65535,
+      "sliceGap" : 86
+    }, {
+      "rgbA" : 8323327,
+      "rgbB" : 8355711,
+      "sliceGap" : 171
+    }, {
+      "rgbA" : 8323327,
+      "rgbB" : 8421504,
+      "sliceGap" : 171
+    }, {
+      "rgbA" : 8323327,
+      "rgbB" : 16711422,
+      "sliceGap" : 171
+    }, {
+      "rgbA" : 8323327,
+      "rgbB" : 16777215,
+      "sliceGap" : 171
+    }, {
+      "rgbA" : 8323327,
+      "rgbB" : 8323327,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 8323327,
+      "rgbB" : 65279,
+      "sliceGap" : 85
+    }, {
+      "rgbA" : 8323327,
+      "rgbB" : 16776195,
+      "sliceGap" : 171
+    }, {
+      "rgbA" : 8323327,
+      "rgbB" : 16711880,
+      "sliceGap" : 255
+    }, {
+      "rgbA" : 65279,
+      "rgbB" : 0,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 65279,
+      "rgbB" : 16711680,
+      "sliceGap" : 127
+    }, {
+      "rgbA" : 65279,
+      "rgbB" : 65280,
+      "sliceGap" : 43
+    }, {
+      "rgbA" : 65279,
+      "rgbB" : 255,
+      "sliceGap" : 56
+    }, {
+      "rgbA" : 65279,
+      "rgbB" : 16776960,
+      "sliceGap" : 86
+    }, {
+      "rgbA" : 65279,
+      "rgbB" : 16711935,
+      "sliceGap" : 170
+    }, {
+      "rgbA" : 65279,
+      "rgbB" : 65535,
+      "sliceGap" : 1
+    }, {
+      "rgbA" : 65279,
+      "rgbB" : 8355711,
+      "sliceGap" : 86
+    }, {
+      "rgbA" : 65279,
+      "rgbB" : 8421504,
+      "sliceGap" : 86
+    }, {
+      "rgbA" : 65279,
+      "rgbB" : 16711422,
+      "sliceGap" : 86
+    }, {
+      "rgbA" : 65279,
+      "rgbB" : 16777215,
+      "sliceGap" : 86
+    }, {
+      "rgbA" : 65279,
+      "rgbB" : 8323327,
+      "sliceGap" : 85
+    }, {
+      "rgbA" : 65279,
+      "rgbB" : 65279,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 65279,
+      "rgbB" : 16776195,
+      "sliceGap" : 86
+    }, {
+      "rgbA" : 65279,
+      "rgbB" : 16711880,
+      "sliceGap" : 170
+    }, {
+      "rgbA" : 16776195,
+      "rgbB" : 0,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16776195,
+      "rgbB" : 16711680,
+      "sliceGap" : 41
+    }, {
+      "rgbA" : 16776195,
+      "rgbB" : 65280,
+      "sliceGap" : 43
+    }, {
+      "rgbA" : 16776195,
+      "rgbB" : 255,
+      "sliceGap" : 142
+    }, {
+      "rgbA" : 16776195,
+      "rgbB" : 16776960,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16776195,
+      "rgbB" : 16711935,
+      "sliceGap" : 84
+    }, {
+      "rgbA" : 16776195,
+      "rgbB" : 65535,
+      "sliceGap" : 85
+    }, {
+      "rgbA" : 16776195,
+      "rgbB" : 8355711,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16776195,
+      "rgbB" : 8421504,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16776195,
+      "rgbB" : 16711422,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16776195,
+      "rgbB" : 16777215,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16776195,
+      "rgbB" : 8323327,
+      "sliceGap" : 171
+    }, {
+      "rgbA" : 16776195,
+      "rgbB" : 65279,
+      "sliceGap" : 86
+    }, {
+      "rgbA" : 16776195,
+      "rgbB" : 16776195,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16776195,
+      "rgbB" : 16711880,
+      "sliceGap" : 84
+    }, {
+      "rgbA" : 16711880,
+      "rgbB" : 0,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16711880,
+      "rgbB" : 16711680,
+      "sliceGap" : 43
+    }, {
+      "rgbA" : 16711880,
+      "rgbB" : 65280,
+      "sliceGap" : 127
+    }, {
+      "rgbA" : 16711880,
+      "rgbB" : 255,
+      "sliceGap" : 226
+    }, {
+      "rgbA" : 16711880,
+      "rgbB" : 16776960,
+      "sliceGap" : 84
+    }, {
+      "rgbA" : 16711880,
+      "rgbB" : 16711935,
+      "sliceGap" : 0
+    }, {
+      "rgbA" : 16711880,
+      "rgbB" : 65535,
+      "sliceGap" : 169
+    }, {
+      "rgbA" : 16711880,
+      "rgbB" : 8355711,
+      "sliceGap" : 84
+    }, {
+      "rgbA" : 16711880,
+      "rgbB" : 8421504,
+      "sliceGap" : 84
+    }, {
+      "rgbA" : 16711880,
+      "rgbB" : 16711422,
+      "sliceGap" : 84
+    }, {
+      "rgbA" : 16711880,
+      "rgbB" : 16777215,
+      "sliceGap" : 84
+    }, {
+      "rgbA" : 16711880,
+      "rgbB" : 8323327,
+      "sliceGap" : 255
+    }, {
+      "rgbA" : 16711880,
+      "rgbB" : 65279,
+      "sliceGap" : 170
+    }, {
+      "rgbA" : 16711880,
+      "rgbB" : 16776195,
+      "sliceGap" : 84
+    }, {
+      "rgbA" : 16711880,
+      "rgbB" : 16711880,
+      "sliceGap" : 0
+    } ],
+    "sectorLutProbes" : [ {
+      "maximumChannel" : "RED",
+      "secondChannel" : "GREEN",
+      "ratio" : 0.0,
+      "sliceNumber" : 213
+    }, {
+      "maximumChannel" : "RED",
+      "secondChannel" : "GREEN",
+      "ratio" : 0.00392156862745098,
+      "sliceNumber" : 213
+    }, {
+      "maximumChannel" : "RED",
+      "secondChannel" : "GREEN",
+      "ratio" : 0.5,
+      "sliceNumber" : 213
+    }, {
+      "maximumChannel" : "RED",
+      "secondChannel" : "GREEN",
+      "ratio" : 0.996078431372549,
+      "sliceNumber" : 172
+    }, {
+      "maximumChannel" : "RED",
+      "secondChannel" : "GREEN",
+      "ratio" : 1.0,
+      "sliceNumber" : 172
+    }, {
+      "maximumChannel" : "RED",
+      "secondChannel" : "BLUE",
+      "ratio" : 0.0,
+      "sliceNumber" : 214
+    }, {
+      "maximumChannel" : "RED",
+      "secondChannel" : "BLUE",
+      "ratio" : 0.00392156862745098,
+      "sliceNumber" : 214
+    }, {
+      "maximumChannel" : "RED",
+      "secondChannel" : "BLUE",
+      "ratio" : 0.5,
+      "sliceNumber" : 214
+    }, {
+      "maximumChannel" : "RED",
+      "secondChannel" : "BLUE",
+      "ratio" : 0.996078431372549,
+      "sliceNumber" : 256
+    }, {
+      "maximumChannel" : "RED",
+      "secondChannel" : "BLUE",
+      "ratio" : 1.0,
+      "sliceNumber" : 256
+    }, {
+      "maximumChannel" : "GREEN",
+      "secondChannel" : "RED",
+      "ratio" : 0.0,
+      "sliceNumber" : 129
+    }, {
+      "maximumChannel" : "GREEN",
+      "secondChannel" : "RED",
+      "ratio" : 0.00392156862745098,
+      "sliceNumber" : 129
+    }, {
+      "maximumChannel" : "GREEN",
+      "secondChannel" : "RED",
+      "ratio" : 0.5,
+      "sliceNumber" : 129
+    }, {
+      "maximumChannel" : "GREEN",
+      "secondChannel" : "RED",
+      "ratio" : 0.996078431372549,
+      "sliceNumber" : 171
+    }, {
+      "maximumChannel" : "GREEN",
+      "secondChannel" : "RED",
+      "ratio" : 1.0,
+      "sliceNumber" : 171
+    }, {
+      "maximumChannel" : "GREEN",
+      "secondChannel" : "BLUE",
+      "ratio" : 0.0,
+      "sliceNumber" : 128
+    }, {
+      "maximumChannel" : "GREEN",
+      "secondChannel" : "BLUE",
+      "ratio" : 0.00392156862745098,
+      "sliceNumber" : 128
+    }, {
+      "maximumChannel" : "GREEN",
+      "secondChannel" : "BLUE",
+      "ratio" : 0.5,
+      "sliceNumber" : 128
+    }, {
+      "maximumChannel" : "GREEN",
+      "secondChannel" : "BLUE",
+      "ratio" : 0.996078431372549,
+      "sliceNumber" : 87
+    }, {
+      "maximumChannel" : "GREEN",
+      "secondChannel" : "BLUE",
+      "ratio" : 1.0,
+      "sliceNumber" : 87
+    }, {
+      "maximumChannel" : "BLUE",
+      "secondChannel" : "RED",
+      "ratio" : 0.0,
+      "sliceNumber" : 30
+    }, {
+      "maximumChannel" : "BLUE",
+      "secondChannel" : "RED",
+      "ratio" : 0.00392156862745098,
+      "sliceNumber" : 30
+    }, {
+      "maximumChannel" : "BLUE",
+      "secondChannel" : "RED",
+      "ratio" : 0.5,
+      "sliceNumber" : 1
+    }, {
+      "maximumChannel" : "BLUE",
+      "secondChannel" : "RED",
+      "ratio" : 0.996078431372549,
+      "sliceNumber" : 1
+    }, {
+      "maximumChannel" : "BLUE",
+      "secondChannel" : "RED",
+      "ratio" : 1.0,
+      "sliceNumber" : 1
+    }, {
+      "maximumChannel" : "BLUE",
+      "secondChannel" : "GREEN",
+      "ratio" : 0.0,
+      "sliceNumber" : 31
+    }, {
+      "maximumChannel" : "BLUE",
+      "secondChannel" : "GREEN",
+      "ratio" : 0.00392156862745098,
+      "sliceNumber" : 31
+    }, {
+      "maximumChannel" : "BLUE",
+      "secondChannel" : "GREEN",
+      "ratio" : 0.5,
+      "sliceNumber" : 43
+    }, {
+      "maximumChannel" : "BLUE",
+      "secondChannel" : "GREEN",
+      "ratio" : 0.996078431372549,
+      "sliceNumber" : 86
+    }, {
+      "maximumChannel" : "BLUE",
+      "secondChannel" : "GREEN",
+      "ratio" : 1.0,
+      "sliceNumber" : 86
+    }, {
+      "sector" : "BLUE_GREEN",
+      "lutRangeStart" : 30,
+      "lutRangeEnd" : 85,
+      "midpointRatio" : 0.3588235294117647,
+      "observedSliceNumber" : 31
+    } ],
+    "sliceGap79to81" : [ {
+      "queryRgb" : 16711680,
+      "targetDilatedRgb" : 9436928,
+      "observedSliceGap" : 79,
+      "scorerObservation" : {
+        "case" : "slice-gap-79",
+        "queryPixels" : [ 16711680 ],
+        "gradientPixels" : [ 4 ],
+        "zGapPixels" : [ 9436928 ],
+        "mirrorQuery" : false,
+        "queryInputTransform" : "identity",
+        "gradientAreaGap" : 4,
+        "highExpressionArea" : 0,
+        "combinedScore" : 4,
+        "mirrored" : false
+      }
+    }, {
+      "queryRgb" : 16711680,
+      "targetDilatedRgb" : 9240320,
+      "observedSliceGap" : 80,
+      "scorerObservation" : {
+        "case" : "slice-gap-80",
+        "queryPixels" : [ 16711680 ],
+        "gradientPixels" : [ 0 ],
+        "zGapPixels" : [ 9240320 ],
+        "mirrorQuery" : false,
+        "queryInputTransform" : "identity",
+        "gradientAreaGap" : 40,
+        "highExpressionArea" : 0,
+        "combinedScore" : 40,
+        "mirrored" : false
+      }
+    }, {
+      "queryRgb" : 16711680,
+      "targetDilatedRgb" : 9043712,
+      "observedSliceGap" : 81,
+      "scorerObservation" : {
+        "case" : "slice-gap-81",
+        "queryPixels" : [ 16711680 ],
+        "gradientPixels" : [ 0 ],
+        "zGapPixels" : [ 9043712 ],
+        "mirrorQuery" : false,
+        "queryInputTransform" : "identity",
+        "gradientAreaGap" : 41,
+        "highExpressionArea" : 0,
+        "combinedScore" : 41,
+        "mirrored" : false
+      }
+    } ],
+    "combinedLong" : [ {
+      "gap" : 79,
+      "highExpression" : 0,
+      "combinedLong" : 79,
+      "combinedInt" : 79
+    }, {
+      "gap" : 80,
+      "highExpression" : 0,
+      "combinedLong" : 80,
+      "combinedInt" : 80
+    }, {
+      "gap" : 81,
+      "highExpression" : 0,
+      "combinedLong" : 81,
+      "combinedInt" : 81
+    }, {
+      "gap" : 0,
+      "highExpression" : 2,
+      "combinedLong" : 0,
+      "combinedInt" : 0
+    }, {
+      "gap" : 0,
+      "highExpression" : 3,
+      "combinedLong" : 1,
+      "combinedInt" : 1
+    }, {
+      "gap" : 0,
+      "highExpression" : 4,
+      "combinedLong" : 1,
+      "combinedInt" : 1
+    }, {
+      "gap" : 2147483647,
+      "highExpression" : 0,
+      "combinedLong" : 2147483647,
+      "combinedInt" : 2147483647
+    }, {
+      "gap" : 2147483648,
+      "highExpression" : 0,
+      "combinedLong" : 2147483648,
+      "combinedInt" : -2147483648
+    }, {
+      "gap" : 9223372036854775807,
+      "highExpression" : 1,
+      "combinedLong" : 9223372036854775807,
+      "combinedInt" : -1
+    }, {
+      "gap" : 9223372036854775807,
+      "highExpression" : 3,
+      "combinedLong" : -9223372036854775808,
+      "combinedInt" : 0
+    }, {
+      "gap" : 0,
+      "highExpression" : 9223372036854775807,
+      "combinedLong" : 3074457345618258602,
+      "combinedInt" : -1431655766
+    }, {
+      "gap" : null,
+      "highExpression" : 0,
+      "combinedLong" : -1
+    }, {
+      "gap" : 0,
+      "highExpression" : null,
+      "combinedLong" : -1
+    }, {
+      "gap" : -1,
+      "highExpression" : 0,
+      "combinedLong" : -1
+    }, {
+      "gap" : 0,
+      "highExpression" : -1,
+      "combinedLong" : -1
+    } ],
+    "shapeScoreIntNarrowing" : {
+      "sourceLong" : 2147483648,
+      "combinedLong" : 2147483648,
+      "scoreInt" : -2147483648
+    },
+    "normalization" : [ {
+      "pixelMatch" : 0,
+      "shapeScore" : 0,
+      "maxPixelMatch" : 0,
+      "maxShapeScore" : 0,
+      "normalizedDouble" : 0.0,
+      "storedFloat32" : 0.0,
+      "storedFloat32Bits" : 0,
+      "storedFloat32Exact" : 0.0
+    }, {
+      "pixelMatch" : 0,
+      "shapeScore" : 1,
+      "maxPixelMatch" : 5,
+      "maxShapeScore" : 10,
+      "normalizedDouble" : 0.0,
+      "storedFloat32" : 0.0,
+      "storedFloat32Bits" : 0,
+      "storedFloat32Exact" : 0.0
+    }, {
+      "pixelMatch" : 5,
+      "shapeScore" : 0,
+      "maxPixelMatch" : 9,
+      "maxShapeScore" : 0,
+      "normalizedDouble" : 5.0,
+      "storedFloat32" : 5.0,
+      "storedFloat32Bits" : 1084227584,
+      "storedFloat32Exact" : 5.0
+    }, {
+      "pixelMatch" : 1,
+      "shapeScore" : 1,
+      "maxPixelMatch" : 0,
+      "maxShapeScore" : 1,
+      "normalizedDouble" : 1.0,
+      "storedFloat32" : 1.0,
+      "storedFloat32Bits" : 1065353216,
+      "storedFloat32Exact" : 1.0
+    }, {
+      "pixelMatch" : 1,
+      "shapeScore" : 1,
+      "maxPixelMatch" : 1,
+      "maxShapeScore" : 0,
+      "normalizedDouble" : 1.0,
+      "storedFloat32" : 1.0,
+      "storedFloat32Bits" : 1065353216,
+      "storedFloat32Exact" : 1.0
+    }, {
+      "pixelMatch" : 1,
+      "shapeScore" : 0,
+      "maxPixelMatch" : 1,
+      "maxShapeScore" : 1,
+      "normalizedDouble" : 50000.0,
+      "storedFloat32" : 50000.0,
+      "storedFloat32Bits" : 1195593728,
+      "storedFloat32Exact" : 50000.0
+    }, {
+      "pixelMatch" : 1,
+      "shapeScore" : 100,
+      "maxPixelMatch" : 1,
+      "maxShapeScore" : 100,
+      "normalizedDouble" : 100.0,
+      "storedFloat32" : 100.0,
+      "storedFloat32Bits" : 1120403456,
+      "storedFloat32Exact" : 100.0
+    }, {
+      "pixelMatch" : 1,
+      "shapeScore" : 1,
+      "maxPixelMatch" : 1,
+      "maxShapeScore" : 1,
+      "normalizedDouble" : 100.0,
+      "storedFloat32" : 100.0,
+      "storedFloat32Bits" : 1120403456,
+      "storedFloat32Exact" : 100.0
+    }, {
+      "pixelMatch" : 100,
+      "shapeScore" : 1,
+      "maxPixelMatch" : 1,
+      "maxShapeScore" : 1,
+      "normalizedDouble" : 10000.0,
+      "storedFloat32" : 10000.0,
+      "storedFloat32Bits" : 1176256512,
+      "storedFloat32Exact" : 10000.0
+    }, {
+      "pixelMatch" : -1,
+      "shapeScore" : 1,
+      "maxPixelMatch" : 1,
+      "maxShapeScore" : 1,
+      "normalizedDouble" : -100.0,
+      "storedFloat32" : -100.0,
+      "storedFloat32Bits" : -1027080192,
+      "storedFloat32Exact" : -100.0
+    }, {
+      "pixelMatch" : 1,
+      "shapeScore" : 9223372036854775807,
+      "maxPixelMatch" : 1,
+      "maxShapeScore" : 1,
+      "normalizedDouble" : 100.0,
+      "storedFloat32" : 100.0,
+      "storedFloat32Bits" : 1120403456,
+      "storedFloat32Exact" : 100.0
+    } ],
+    "upstreamNormalizationRows" : [ {
+      "pixelMatch" : 636,
+      "gap" : 156,
+      "highExpression" : 1897,
+      "maxPixelMatch" : 679,
+      "maxShapeScore" : 1114361,
+      "shapeScore" : 788,
+      "normalizedDouble" : 46833.57879234168,
+      "storedFloat32" : 46833.58,
+      "storedFloat32Bits" : 1194783124,
+      "storedFloat32Exact" : 46833.578125
+    }, {
+      "pixelMatch" : 636,
+      "gap" : 233,
+      "highExpression" : 1644,
+      "maxPixelMatch" : 679,
+      "maxShapeScore" : 1107088,
+      "shapeScore" : 781,
+      "normalizedDouble" : 46833.57879234168,
+      "storedFloat32" : 46833.58,
+      "storedFloat32Bits" : 1194783124,
+      "storedFloat32Exact" : 46833.578125
+    }, {
+      "pixelMatch" : 636,
+      "gap" : 0,
+      "highExpression" : 1644,
+      "maxPixelMatch" : 679,
+      "maxShapeScore" : 1114361,
+      "shapeScore" : 548,
+      "normalizedDouble" : 46833.57879234168,
+      "storedFloat32" : 46833.58,
+      "storedFloat32Bits" : 1194783124,
+      "storedFloat32Exact" : 46833.578125
+    }, {
+      "pixelMatch" : 795,
+      "gap" : 123,
+      "highExpression" : 93,
+      "maxPixelMatch" : 875,
+      "maxShapeScore" : 1606182,
+      "shapeScore" : 154,
+      "normalizedDouble" : 45428.57142857143,
+      "storedFloat32" : 45428.57,
+      "storedFloat32Bits" : 1194423442,
+      "storedFloat32Exact" : 45428.5703125
+    }, {
+      "pixelMatch" : 636,
+      "shapeScore" : -1,
+      "maxPixelMatch" : 679,
+      "maxShapeScore" : 1114361,
+      "normalizedDouble" : 636.0
+    } ],
+    "normalizationCandidates" : [ {
+      "candidatePixelScores" : [ 9, 2 ],
+      "candidateShapeScores" : [ 4, 13 ],
+      "independentMaximumPixel" : 9,
+      "independentMaximumShape" : 13,
+      "candidateA" : [ 9, 4 ],
+      "candidateB" : [ 2, 13 ],
+      "candidateANormalized" : 129.99999999999997,
+      "candidateBNormalized" : 22.22222222222222
+    }, {
+      "inputsA" : [ 1, 100000000, 1, 1000000000 ],
+      "inputsB" : [ 1, 100000001, 1, 1000000000 ],
+      "utilityDoubleA" : 400.0,
+      "utilityDoubleB" : 399.99999600000007,
+      "storedFloatA" : 400.0,
+      "storedFloatB" : 400.0,
+      "storedFloatBitsA" : 1137180672,
+      "storedFloatBitsB" : 1137180672
+    } ],
+    "grayRounding" : [ {
+      "rgb" : 0,
+      "gray16NoGamma" : 0
+    }, {
+      "rgb" : 1,
+      "gray16NoGamma" : 0
+    }, {
+      "rgb" : 257,
+      "gray16NoGamma" : 1
+    }, {
+      "rgb" : 513,
+      "gray16NoGamma" : 1
+    }, {
+      "rgb" : 65536,
+      "gray16NoGamma" : 0
+    }, {
+      "rgb" : 65793,
+      "gray16NoGamma" : 1
+    }, {
+      "rgb" : 8323072,
+      "gray16NoGamma" : 42
+    }, {
+      "rgb" : 8355711,
+      "gray16NoGamma" : 127
+    }, {
+      "rgb" : 8421504,
+      "gray16NoGamma" : 128
+    }, {
+      "rgb" : 16711422,
+      "gray16NoGamma" : 254
+    }, {
+      "rgb" : 16777215,
+      "gray16NoGamma" : 255
+    }, {
+      "rgb" : 66051,
+      "gray16NoGamma" : 2
+    } ],
+    "unsafeMaxFilter" : [ {
+      "location" : "corner",
+      "width" : 5,
+      "height" : 5,
+      "borderPixels" : 0,
+      "radius" : 1.0,
+      "inputPixels" : [ 16777215, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 ],
+      "materializedPixels" : [ -1, -1, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "mirroredPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "materializedSum" : -352321540,
+      "firstTraversalSum" : -419430400,
+      "secondTraversalSum" : -419430400,
+      "reusedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "reducedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "reducedRepeatedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "freshPixels" : [ -1, -1, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "freshMirroredPixels" : [ -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "evaluationOrder" : [ "materialize lazy", "mirror reused lazy", "fold reused lazy", "fold reused lazy again", "materialize reused lazy", "reduce reused lazy", "materialize reduced twice", "materialize fresh lazy", "mirror fresh lazy" ]
+    }, {
+      "location" : "corner",
+      "width" : 5,
+      "height" : 5,
+      "borderPixels" : 0,
+      "radius" : 1.5,
+      "inputPixels" : [ 16777215, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 ],
+      "materializedPixels" : [ -1, -1, -1, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "mirroredPixels" : [ -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "materializedSum" : -318767110,
+      "firstTraversalSum" : -318767110,
+      "secondTraversalSum" : -318767110,
+      "reusedPixels" : [ -1, -1, -1, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "reducedPixels" : [ -1, -1, -1, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "reducedRepeatedPixels" : [ -1, -1, -1, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "freshPixels" : [ -1, -1, -1, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "freshMirroredPixels" : [ -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "evaluationOrder" : [ "materialize lazy", "mirror reused lazy", "fold reused lazy", "fold reused lazy again", "materialize reused lazy", "reduce reused lazy", "materialize reduced twice", "materialize fresh lazy", "mirror fresh lazy" ]
+    }, {
+      "location" : "corner",
+      "width" : 5,
+      "height" : 5,
+      "borderPixels" : 0,
+      "radius" : 1.75,
+      "inputPixels" : [ 16777215, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 ],
+      "materializedPixels" : [ -1, -1, -1, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "mirroredPixels" : [ -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "materializedSum" : -318767110,
+      "firstTraversalSum" : -318767110,
+      "secondTraversalSum" : -318767110,
+      "reusedPixels" : [ -1, -1, -1, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "reducedPixels" : [ -1, -1, -1, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "reducedRepeatedPixels" : [ -1, -1, -1, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "freshPixels" : [ -1, -1, -1, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "freshMirroredPixels" : [ -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "evaluationOrder" : [ "materialize lazy", "mirror reused lazy", "fold reused lazy", "fold reused lazy again", "materialize reused lazy", "reduce reused lazy", "materialize reduced twice", "materialize fresh lazy", "mirror fresh lazy" ]
+    }, {
+      "location" : "corner",
+      "width" : 5,
+      "height" : 5,
+      "borderPixels" : 0,
+      "radius" : 2.5,
+      "inputPixels" : [ 16777215, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 ],
+      "materializedPixels" : [ -1, -1, -1, -1, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "mirroredPixels" : [ -16777216, -1, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "materializedSum" : -234881035,
+      "firstTraversalSum" : -234881035,
+      "secondTraversalSum" : -234881035,
+      "reusedPixels" : [ -1, -1, -1, -1, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "reducedPixels" : [ -1, -1, -1, -1, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "reducedRepeatedPixels" : [ -1, -1, -1, -1, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "freshPixels" : [ -1, -1, -1, -1, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "freshMirroredPixels" : [ -16777216, -1, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "evaluationOrder" : [ "materialize lazy", "mirror reused lazy", "fold reused lazy", "fold reused lazy again", "materialize reused lazy", "reduce reused lazy", "materialize reduced twice", "materialize fresh lazy", "mirror fresh lazy" ]
+    }, {
+      "location" : "corner",
+      "width" : 5,
+      "height" : 5,
+      "borderPixels" : 0,
+      "radius" : 2.85,
+      "inputPixels" : [ 16777215, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 ],
+      "materializedPixels" : [ -1, -1, -1, -1, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "mirroredPixels" : [ -16777216, -1, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "materializedSum" : -234881035,
+      "firstTraversalSum" : -234881035,
+      "secondTraversalSum" : -234881035,
+      "reusedPixels" : [ -1, -1, -1, -1, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "reducedPixels" : [ -1, -1, -1, -1, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "reducedRepeatedPixels" : [ -1, -1, -1, -1, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "freshPixels" : [ -1, -1, -1, -1, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "freshMirroredPixels" : [ -16777216, -1, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "evaluationOrder" : [ "materialize lazy", "mirror reused lazy", "fold reused lazy", "fold reused lazy again", "materialize reused lazy", "reduce reused lazy", "materialize reduced twice", "materialize fresh lazy", "mirror fresh lazy" ]
+    }, {
+      "location" : "corner",
+      "width" : 5,
+      "height" : 5,
+      "borderPixels" : 1,
+      "radius" : 1.0,
+      "inputPixels" : [ 16777215, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 ],
+      "materializedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "mirroredPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "materializedSum" : -402653185,
+      "firstTraversalSum" : -150994944,
+      "secondTraversalSum" : -150994944,
+      "reusedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "reducedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "reducedRepeatedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "freshPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "freshMirroredPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "evaluationOrder" : [ "materialize lazy", "mirror reused lazy", "fold reused lazy", "fold reused lazy again", "materialize reused lazy", "reduce reused lazy", "materialize reduced twice", "materialize fresh lazy", "mirror fresh lazy" ]
+    }, {
+      "location" : "corner",
+      "width" : 5,
+      "height" : 5,
+      "borderPixels" : 1,
+      "radius" : 1.5,
+      "inputPixels" : [ 16777215, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 ],
+      "materializedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "mirroredPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "materializedSum" : -402653185,
+      "firstTraversalSum" : -134217729,
+      "secondTraversalSum" : -134217729,
+      "reusedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "reducedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "reducedRepeatedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "freshPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "freshMirroredPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "evaluationOrder" : [ "materialize lazy", "mirror reused lazy", "fold reused lazy", "fold reused lazy again", "materialize reused lazy", "reduce reused lazy", "materialize reduced twice", "materialize fresh lazy", "mirror fresh lazy" ]
+    }, {
+      "location" : "corner",
+      "width" : 5,
+      "height" : 5,
+      "borderPixels" : 1,
+      "radius" : 1.75,
+      "inputPixels" : [ 16777215, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 ],
+      "materializedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "mirroredPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "materializedSum" : -402653185,
+      "firstTraversalSum" : -134217729,
+      "secondTraversalSum" : -134217729,
+      "reusedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "reducedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "reducedRepeatedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "freshPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "freshMirroredPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "evaluationOrder" : [ "materialize lazy", "mirror reused lazy", "fold reused lazy", "fold reused lazy again", "materialize reused lazy", "reduce reused lazy", "materialize reduced twice", "materialize fresh lazy", "mirror fresh lazy" ]
+    }, {
+      "location" : "corner",
+      "width" : 5,
+      "height" : 5,
+      "borderPixels" : 1,
+      "radius" : 2.5,
+      "inputPixels" : [ 16777215, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 ],
+      "materializedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "mirroredPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "materializedSum" : -352321540,
+      "firstTraversalSum" : -83886084,
+      "secondTraversalSum" : -83886084,
+      "reusedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "reducedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "reducedRepeatedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "freshPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "freshMirroredPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "evaluationOrder" : [ "materialize lazy", "mirror reused lazy", "fold reused lazy", "fold reused lazy again", "materialize reused lazy", "reduce reused lazy", "materialize reduced twice", "materialize fresh lazy", "mirror fresh lazy" ]
+    }, {
+      "location" : "corner",
+      "width" : 5,
+      "height" : 5,
+      "borderPixels" : 1,
+      "radius" : 2.85,
+      "inputPixels" : [ 16777215, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 ],
+      "materializedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "mirroredPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "materializedSum" : -352321540,
+      "firstTraversalSum" : -83886084,
+      "secondTraversalSum" : -83886084,
+      "reusedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "reducedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "reducedRepeatedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "freshPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "freshMirroredPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "evaluationOrder" : [ "materialize lazy", "mirror reused lazy", "fold reused lazy", "fold reused lazy again", "materialize reused lazy", "reduce reused lazy", "materialize reduced twice", "materialize fresh lazy", "mirror fresh lazy" ]
+    }, {
+      "location" : "center-multichannel",
+      "width" : 5,
+      "height" : 5,
+      "borderPixels" : 0,
+      "radius" : 1.0,
+      "inputPixels" : [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16711680, 65280, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0 ],
+      "materializedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -65536, -256, -256, -16711936, -16777216, -65281, -1, -1, -16711936, -16777216, -65281, -1, -1, -16711936, -16777216, -16776961, -16776961, -16776961, -16777216 ],
+      "mirroredPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16711936, -256, -256, -65536, -16777216, -16711936, -1, -1, -65281, -16777216, -16711936, -1, -1, -65281, -16777216, -16777216, -16776961, -16776961, -16776961, -16777216 ],
+      "materializedSum" : -268435465,
+      "firstTraversalSum" : -268435465,
+      "secondTraversalSum" : -268435465,
+      "reusedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -65536, -256, -256, -16711936, -16777216, -65281, -1, -1, -16711936, -16777216, -65281, -1, -1, -16711936, -16777216, -16776961, -16776961, -16776961, -16777216 ],
+      "reducedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -65536, -256, -256, -16711936, -16777216, -65281, -1, -1, -16711936, -16777216, -65281, -1, -1, -16711936, -16777216, -16776961, -16776961, -16776961, -16777216 ],
+      "reducedRepeatedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -65536, -256, -256, -16711936, -16777216, -65281, -1, -1, -16711936, -16777216, -65281, -1, -1, -16711936, -16777216, -16776961, -16776961, -16776961, -16777216 ],
+      "freshPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -65536, -256, -256, -16711936, -16777216, -65281, -1, -1, -16711936, -16777216, -65281, -1, -1, -16711936, -16777216, -16776961, -16776961, -16776961, -16777216 ],
+      "freshMirroredPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16711936, -256, -256, -65536, -16777216, -16711936, -1, -1, -65281, -16777216, -16711936, -1, -1, -65281, -16777216, -16777216, -16776961, -16776961, -16776961, -16777216 ],
+      "evaluationOrder" : [ "materialize lazy", "mirror reused lazy", "fold reused lazy", "fold reused lazy again", "materialize reused lazy", "reduce reused lazy", "materialize reduced twice", "materialize fresh lazy", "mirror fresh lazy" ]
+    }, {
+      "location" : "center-multichannel",
+      "width" : 5,
+      "height" : 5,
+      "borderPixels" : 0,
+      "radius" : 1.5,
+      "inputPixels" : [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16711680, 65280, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0 ],
+      "materializedPixels" : [ -16777216, -16777216, -65536, -16711936, -16777216, -16777216, -65536, -1, -256, -16711936, -65536, -1, -1, -1, -256, -16776961, -65281, -1, -1, -16711681, -16777216, -16776961, -65281, -16711681, -16777216 ],
+      "mirroredPixels" : [ -16777216, -16711936, -65536, -16777216, -16777216, -16711936, -256, -1, -65536, -16777216, -256, -1, -1, -1, -65536, -16711681, -1, -1, -65281, -16776961, -16777216, -16711681, -65281, -16776961, -16777216 ],
+      "materializedSum" : -201392140,
+      "firstTraversalSum" : -201392140,
+      "secondTraversalSum" : -201392140,
+      "reusedPixels" : [ -16777216, -16777216, -65536, -16711936, -16777216, -16777216, -65536, -1, -256, -16711936, -65536, -1, -1, -1, -256, -16776961, -65281, -1, -1, -16711681, -16777216, -16776961, -65281, -16711681, -16777216 ],
+      "reducedPixels" : [ -16777216, -16777216, -65536, -16711936, -16777216, -16777216, -65536, -1, -256, -16711936, -65536, -1, -1, -1, -256, -16776961, -65281, -1, -1, -16711681, -16777216, -16776961, -65281, -16711681, -16777216 ],
+      "reducedRepeatedPixels" : [ -16777216, -16777216, -65536, -16711936, -16777216, -16777216, -65536, -1, -256, -16711936, -65536, -1, -1, -1, -256, -16776961, -65281, -1, -1, -16711681, -16777216, -16776961, -65281, -16711681, -16777216 ],
+      "freshPixels" : [ -16777216, -16777216, -65536, -16711936, -16777216, -16777216, -65536, -1, -256, -16711936, -65536, -1, -1, -1, -256, -16776961, -65281, -1, -1, -16711681, -16777216, -16776961, -65281, -16711681, -16777216 ],
+      "freshMirroredPixels" : [ -16777216, -16711936, -65536, -16777216, -16777216, -16711936, -256, -1, -65536, -16777216, -256, -1, -1, -1, -65536, -16711681, -1, -1, -65281, -16776961, -16777216, -16711681, -65281, -16776961, -16777216 ],
+      "evaluationOrder" : [ "materialize lazy", "mirror reused lazy", "fold reused lazy", "fold reused lazy again", "materialize reused lazy", "reduce reused lazy", "materialize reduced twice", "materialize fresh lazy", "mirror fresh lazy" ]
+    }, {
+      "location" : "center-multichannel",
+      "width" : 5,
+      "height" : 5,
+      "borderPixels" : 0,
+      "radius" : 1.75,
+      "inputPixels" : [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16711680, 65280, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0 ],
+      "materializedPixels" : [ -16777216, -16777216, -65536, -16711936, -16777216, -16777216, -65536, -1, -256, -16711936, -65536, -1, -1, -1, -256, -16776961, -65281, -1, -1, -16711681, -16777216, -16776961, -65281, -16711681, -16777216 ],
+      "mirroredPixels" : [ -16777216, -16711936, -65536, -16777216, -16777216, -16711936, -256, -1, -65536, -16777216, -256, -1, -1, -1, -65536, -16711681, -1, -1, -65281, -16776961, -16777216, -16711681, -65281, -16776961, -16777216 ],
+      "materializedSum" : -201392140,
+      "firstTraversalSum" : -201392140,
+      "secondTraversalSum" : -201392140,
+      "reusedPixels" : [ -16777216, -16777216, -65536, -16711936, -16777216, -16777216, -65536, -1, -256, -16711936, -65536, -1, -1, -1, -256, -16776961, -65281, -1, -1, -16711681, -16777216, -16776961, -65281, -16711681, -16777216 ],
+      "reducedPixels" : [ -16777216, -16777216, -65536, -16711936, -16777216, -16777216, -65536, -1, -256, -16711936, -65536, -1, -1, -1, -256, -16776961, -65281, -1, -1, -16711681, -16777216, -16776961, -65281, -16711681, -16777216 ],
+      "reducedRepeatedPixels" : [ -16777216, -16777216, -65536, -16711936, -16777216, -16777216, -65536, -1, -256, -16711936, -65536, -1, -1, -1, -256, -16776961, -65281, -1, -1, -16711681, -16777216, -16776961, -65281, -16711681, -16777216 ],
+      "freshPixels" : [ -16777216, -16777216, -65536, -16711936, -16777216, -16777216, -65536, -1, -256, -16711936, -65536, -1, -1, -1, -256, -16776961, -65281, -1, -1, -16711681, -16777216, -16776961, -65281, -16711681, -16777216 ],
+      "freshMirroredPixels" : [ -16777216, -16711936, -65536, -16777216, -16777216, -16711936, -256, -1, -65536, -16777216, -256, -1, -1, -1, -65536, -16711681, -1, -1, -65281, -16776961, -16777216, -16711681, -65281, -16776961, -16777216 ],
+      "evaluationOrder" : [ "materialize lazy", "mirror reused lazy", "fold reused lazy", "fold reused lazy again", "materialize reused lazy", "reduce reused lazy", "materialize reduced twice", "materialize fresh lazy", "mirror fresh lazy" ]
+    }, {
+      "location" : "center-multichannel",
+      "width" : 5,
+      "height" : 5,
+      "borderPixels" : 0,
+      "radius" : 2.5,
+      "inputPixels" : [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16711680, 65280, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0 ],
+      "materializedPixels" : [ -65536, -256, -1, -256, -256, -65281, -1, -1, -1, -1, -1, -1, -1, -1, -1, -65281, -1, -1, -1, -1, -65281, -1, -1, -1, -1 ],
+      "mirroredPixels" : [ -256, -256, -1, -256, -65536, -1, -1, -1, -1, -65281, -1, -1, -1, -1, -1, -1, -1, -1, -1, -65281, -1, -1, -1, -1, -65281 ],
+      "materializedSum" : -262165,
+      "firstTraversalSum" : -262165,
+      "secondTraversalSum" : -262165,
+      "reusedPixels" : [ -65536, -256, -1, -256, -256, -65281, -1, -1, -1, -1, -1, -1, -1, -1, -1, -65281, -1, -1, -1, -1, -65281, -1, -1, -1, -1 ],
+      "reducedPixels" : [ -65536, -256, -1, -256, -256, -65281, -1, -1, -1, -1, -1, -1, -1, -1, -1, -65281, -1, -1, -1, -1, -65281, -1, -1, -1, -1 ],
+      "reducedRepeatedPixels" : [ -65536, -256, -1, -256, -256, -65281, -1, -1, -1, -1, -1, -1, -1, -1, -1, -65281, -1, -1, -1, -1, -65281, -1, -1, -1, -1 ],
+      "freshPixels" : [ -65536, -256, -1, -256, -256, -65281, -1, -1, -1, -1, -1, -1, -1, -1, -1, -65281, -1, -1, -1, -1, -65281, -1, -1, -1, -1 ],
+      "freshMirroredPixels" : [ -256, -256, -1, -256, -65536, -1, -1, -1, -1, -65281, -1, -1, -1, -1, -1, -1, -1, -1, -1, -65281, -1, -1, -1, -1, -65281 ],
+      "evaluationOrder" : [ "materialize lazy", "mirror reused lazy", "fold reused lazy", "fold reused lazy again", "materialize reused lazy", "reduce reused lazy", "materialize reduced twice", "materialize fresh lazy", "mirror fresh lazy" ]
+    }, {
+      "location" : "center-multichannel",
+      "width" : 5,
+      "height" : 5,
+      "borderPixels" : 0,
+      "radius" : 2.85,
+      "inputPixels" : [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16711680, 65280, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0 ],
+      "materializedPixels" : [ -65536, -256, -1, -256, -256, -65281, -1, -1, -1, -1, -1, -1, -1, -1, -1, -65281, -1, -1, -1, -1, -65281, -1, -1, -1, -1 ],
+      "mirroredPixels" : [ -256, -256, -1, -256, -65536, -1, -1, -1, -1, -65281, -1, -1, -1, -1, -1, -1, -1, -1, -1, -65281, -1, -1, -1, -1, -65281 ],
+      "materializedSum" : -262165,
+      "firstTraversalSum" : -262165,
+      "secondTraversalSum" : -262165,
+      "reusedPixels" : [ -65536, -256, -1, -256, -256, -65281, -1, -1, -1, -1, -1, -1, -1, -1, -1, -65281, -1, -1, -1, -1, -65281, -1, -1, -1, -1 ],
+      "reducedPixels" : [ -65536, -256, -1, -256, -256, -65281, -1, -1, -1, -1, -1, -1, -1, -1, -1, -65281, -1, -1, -1, -1, -65281, -1, -1, -1, -1 ],
+      "reducedRepeatedPixels" : [ -65536, -256, -1, -256, -256, -65281, -1, -1, -1, -1, -1, -1, -1, -1, -1, -65281, -1, -1, -1, -1, -65281, -1, -1, -1, -1 ],
+      "freshPixels" : [ -65536, -256, -1, -256, -256, -65281, -1, -1, -1, -1, -1, -1, -1, -1, -1, -65281, -1, -1, -1, -1, -65281, -1, -1, -1, -1 ],
+      "freshMirroredPixels" : [ -256, -256, -1, -256, -65536, -1, -1, -1, -1, -65281, -1, -1, -1, -1, -1, -1, -1, -1, -1, -65281, -1, -1, -1, -1, -65281 ],
+      "evaluationOrder" : [ "materialize lazy", "mirror reused lazy", "fold reused lazy", "fold reused lazy again", "materialize reused lazy", "reduce reused lazy", "materialize reduced twice", "materialize fresh lazy", "mirror fresh lazy" ]
+    }, {
+      "location" : "center-multichannel",
+      "width" : 5,
+      "height" : 5,
+      "borderPixels" : 1,
+      "radius" : 1.0,
+      "inputPixels" : [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16711680, 65280, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0 ],
+      "materializedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -65536, -256, -256, -16777216, -16777216, -65281, -1, -1, -16777216, -16777216, -65281, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "mirroredPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -256, -256, -65536, -16777216, -16777216, -1, -1, -65281, -16777216, -16777216, -1, -1, -65281, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "materializedSum" : -268632070,
+      "firstTraversalSum" : -196614,
+      "secondTraversalSum" : -196614,
+      "reusedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -65536, -256, -256, -16777216, -16777216, -65281, -1, -1, -16777216, -16777216, -65281, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "reducedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -65536, -256, -256, -16777216, -16777216, -65281, -1, -1, -16777216, -16777216, -65281, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "reducedRepeatedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -65536, -256, -256, -16777216, -16777216, -65281, -1, -1, -16777216, -16777216, -65281, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "freshPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -65536, -256, -256, -16777216, -16777216, -65281, -1, -1, -16777216, -16777216, -65281, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "freshMirroredPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -256, -256, -65536, -16777216, -16777216, -1, -1, -65281, -16777216, -16777216, -1, -1, -65281, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "evaluationOrder" : [ "materialize lazy", "mirror reused lazy", "fold reused lazy", "fold reused lazy again", "materialize reused lazy", "reduce reused lazy", "materialize reduced twice", "materialize fresh lazy", "mirror fresh lazy" ]
+    }, {
+      "location" : "center-multichannel",
+      "width" : 5,
+      "height" : 5,
+      "borderPixels" : 1,
+      "radius" : 1.5,
+      "inputPixels" : [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16711680, 65280, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0 ],
+      "materializedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -65536, -1, -256, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -65281, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "mirroredPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -256, -1, -65536, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -65281, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "materializedSum" : -268566535,
+      "firstTraversalSum" : -131079,
+      "secondTraversalSum" : -131079,
+      "reusedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -65536, -1, -256, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -65281, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "reducedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -65536, -1, -256, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -65281, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "reducedRepeatedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -65536, -1, -256, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -65281, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "freshPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -65536, -1, -256, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -65281, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "freshMirroredPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -256, -1, -65536, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -65281, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "evaluationOrder" : [ "materialize lazy", "mirror reused lazy", "fold reused lazy", "fold reused lazy again", "materialize reused lazy", "reduce reused lazy", "materialize reduced twice", "materialize fresh lazy", "mirror fresh lazy" ]
+    }, {
+      "location" : "center-multichannel",
+      "width" : 5,
+      "height" : 5,
+      "borderPixels" : 1,
+      "radius" : 1.75,
+      "inputPixels" : [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16711680, 65280, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0 ],
+      "materializedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -65536, -1, -256, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -65281, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "mirroredPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -256, -1, -65536, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -65281, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "materializedSum" : -268566535,
+      "firstTraversalSum" : -131079,
+      "secondTraversalSum" : -131079,
+      "reusedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -65536, -1, -256, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -65281, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "reducedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -65536, -1, -256, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -65281, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "reducedRepeatedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -65536, -1, -256, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -65281, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "freshPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -65536, -1, -256, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -65281, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "freshMirroredPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -256, -1, -65536, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -65281, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "evaluationOrder" : [ "materialize lazy", "mirror reused lazy", "fold reused lazy", "fold reused lazy again", "materialize reused lazy", "reduce reused lazy", "materialize reduced twice", "materialize fresh lazy", "mirror fresh lazy" ]
+    }, {
+      "location" : "center-multichannel",
+      "width" : 5,
+      "height" : 5,
+      "borderPixels" : 1,
+      "radius" : 2.5,
+      "inputPixels" : [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16711680, 65280, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0 ],
+      "materializedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "mirroredPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "materializedSum" : -268435465,
+      "firstTraversalSum" : -9,
+      "secondTraversalSum" : -9,
+      "reusedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "reducedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "reducedRepeatedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "freshPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "freshMirroredPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "evaluationOrder" : [ "materialize lazy", "mirror reused lazy", "fold reused lazy", "fold reused lazy again", "materialize reused lazy", "reduce reused lazy", "materialize reduced twice", "materialize fresh lazy", "mirror fresh lazy" ]
+    }, {
+      "location" : "center-multichannel",
+      "width" : 5,
+      "height" : 5,
+      "borderPixels" : 1,
+      "radius" : 2.85,
+      "inputPixels" : [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16711680, 65280, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0 ],
+      "materializedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "mirroredPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "materializedSum" : -268435465,
+      "firstTraversalSum" : -9,
+      "secondTraversalSum" : -9,
+      "reusedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "reducedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "reducedRepeatedPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "freshPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "freshMirroredPixels" : [ -16777216, -16777216, -16777216, -16777216, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -1, -1, -1, -16777216, -16777216, -16777216, -16777216, -16777216, -16777216 ],
+      "evaluationOrder" : [ "materialize lazy", "mirror reused lazy", "fold reused lazy", "fold reused lazy again", "materialize reused lazy", "reduce reused lazy", "materialize reduced twice", "materialize fresh lazy", "mirror fresh lazy" ]
+    } ],
+    "excludedRegion" : {
+      "270" : {
+        "0,0" : true,
+        "329,99" : true,
+        "330,0" : false,
+        "330,89" : false,
+        "330,90" : false,
+        "329,100" : false,
+        "-1,89" : true,
+        "0,89" : true,
+        "269,89" : true,
+        "269,90" : true
+      },
+      "271" : {
+        "0,0" : true,
+        "329,99" : true,
+        "330,0" : true,
+        "330,89" : true,
+        "330,90" : false,
+        "329,100" : false,
+        "0,89" : true,
+        "1,89" : true,
+        "270,89" : true,
+        "270,90" : true
+      },
+      "600" : {
+        "0,0" : true,
+        "329,99" : true,
+        "330,0" : true,
+        "330,89" : true,
+        "330,90" : false,
+        "329,100" : false,
+        "329,89" : true,
+        "599,89" : true,
+        "599,90" : false
+      },
+      "601" : {
+        "0,0" : true,
+        "329,99" : true,
+        "330,0" : false,
+        "330,89" : false,
+        "330,90" : false,
+        "329,100" : false,
+        "331,89" : true,
+        "600,89" : true,
+        "600,90" : false
+      }
+    },
+    "syntheticScorer" : [ {
+      "case" : "single-pixel-contribution-3",
+      "queryPixels" : [ 16711680 ],
+      "gradientPixels" : [ 3 ],
+      "zGapPixels" : [ 0 ],
+      "mirrorQuery" : false,
+      "queryInputTransform" : "identity",
+      "gradientAreaGap" : 0,
+      "highExpressionArea" : 0,
+      "combinedScore" : 0,
+      "mirrored" : false
+    }, {
+      "case" : "single-pixel-contribution-4",
+      "queryPixels" : [ 16711680 ],
+      "gradientPixels" : [ 4 ],
+      "zGapPixels" : [ 0 ],
+      "mirrorQuery" : false,
+      "queryInputTransform" : "identity",
+      "gradientAreaGap" : 4,
+      "highExpressionArea" : 0,
+      "combinedScore" : 4,
+      "mirrored" : false
+    }, {
+      "case" : "unmirrored-tie",
+      "queryPixels" : [ 16711680 ],
+      "gradientPixels" : [ 0 ],
+      "zGapPixels" : [ 0 ],
+      "mirrorQuery" : true,
+      "queryInputTransform" : "identity",
+      "gradientAreaGap" : 0,
+      "highExpressionArea" : 0,
+      "combinedScore" : 0,
+      "mirrored" : false
+    }, {
+      "case" : "fixed-coordinate-roi",
+      "queryPixels" : [ 16711680, 65280 ],
+      "roiPixels" : [ 16777215, 0 ],
+      "gradientPixels" : [ 4, 8 ],
+      "unmirroredOnly" : {
+        "gradientAreaGap" : 4,
+        "highExpressionArea" : 0,
+        "combinedScore" : 4,
+        "mirrored" : false
+      },
+      "mirrorEnabled" : {
+        "gradientAreaGap" : 4,
+        "highExpressionArea" : 0,
+        "combinedScore" : 4,
+        "mirrored" : false
+      },
+      "individualTrials" : {
+        "unmirroredTrial" : {
+          "mirroredInput" : false,
+          "gradientAreaGap" : 4,
+          "highExpressionArea" : 0,
+          "combinedScore" : 4,
+          "mirrored" : false
+        },
+        "mirroredTrial" : {
+          "mirroredInput" : true,
+          "gradientAreaGap" : 4,
+          "highExpressionArea" : 0,
+          "combinedScore" : 4,
+          "mirrored" : true
+        }
+      }
+    }, {
+      "case" : "asymmetric-mirrored-z-gap-trials",
+      "queryPixels" : [ 16711680, 65280, 255 ],
+      "gradientPixels" : [ 4, 8, 16 ],
+      "zGapPixels" : [ 65535, 16711680, 0 ],
+      "trials" : {
+        "unmirroredTrial" : {
+          "mirroredInput" : false,
+          "gradientAreaGap" : 146,
+          "highExpressionArea" : 0,
+          "combinedScore" : 146,
+          "mirrored" : false
+        },
+        "mirroredTrial" : {
+          "mirroredInput" : true,
+          "gradientAreaGap" : 134,
+          "highExpressionArea" : 0,
+          "combinedScore" : 134,
+          "mirrored" : true
+        }
+      },
+      "supplierMirroredZGapPixels" : [ 0, 16711680, 65535 ],
+      "supplierMirroredTrials" : {
+        "unmirroredTrial" : {
+          "mirroredInput" : false,
+          "gradientAreaGap" : 64,
+          "highExpressionArea" : 0,
+          "combinedScore" : 64,
+          "mirrored" : false
+        },
+        "mirroredTrial" : {
+          "mirroredInput" : true,
+          "gradientAreaGap" : 64,
+          "highExpressionArea" : 0,
+          "combinedScore" : 64,
+          "mirrored" : true
+        }
+      }
+    }, {
+      "case" : "no-positive-shift-search",
+      "queryPixels" : [ 0, 16711680, 0 ],
+      "queryMask" : [ 0, 1, 0 ],
+      "alignedGradient" : [ 0, 4, 0 ],
+      "onePixelShiftedGradient" : [ 0, 0, 4 ],
+      "queryInputTransform" : "identity",
+      "alignedOutput" : {
+        "gradientAreaGap" : 4,
+        "highExpressionArea" : 0,
+        "combinedScore" : 4,
+        "mirrored" : false
+      },
+      "shiftedOutput" : {
+        "gradientAreaGap" : 0,
+        "highExpressionArea" : 0,
+        "combinedScore" : 0,
+        "mirrored" : false
+      }
+    }, {
+      "case" : "missing-variant-sentinel",
+      "withoutGradientImage" : {
+        "omittedSupplier" : "GradientImage",
+        "gradientAreaGap" : -1,
+        "highExpressionArea" : -1,
+        "combinedScore" : -1
+      },
+      "withoutZGapImage" : {
+        "omittedSupplier" : "ZGapImage",
+        "gradientAreaGap" : -1,
+        "highExpressionArea" : -1,
+        "combinedScore" : -1
+      }
+    } ]
+  }
+}

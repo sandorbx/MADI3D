@@ -6,7 +6,11 @@
 
 **Morphometric Anatomical Data Investigator in Stereographic 3D**
 
-MADI3D is a cross-platform scientific 3D microscopy workbench for **visualization, segmentation, Color-Depth MIP generation and search, stitching, registration, time-series exploration, and reproducible scientific figure preparation**.
+MADI3D brings experimental microscopy data into the anatomical context of the connectome. It is a cross-platform desktop application for organizing, visualizing, annotating, and analyzing microscopy volumes, meshes, and SWC neuronal reconstructions in one 3D workspace.
+
+Combine different data types in a single scene, explore multichannel volumes and 4D time series, and inspect spatial relationships with stereoscopic rendering. Stitch acquisitions, register volumes, segment structures, generate Color-Depth MIPs, and search for matching neurons to compare experimental data with connectome reconstructions.
+
+Explore connectome neurons through the **FlyWire Catalog Search** panel: search available annotations, paste neuron IDs copied directly from **FlyWire Codex**, or drag and drop Codex results CSV files for review. Load selected neurons as meshes or SWC skeletons where available, with their source identities retained in the project. Right-click supported neurons in the scene to copy their IDs, show them in the FlyWire panel, open them in Codex, or search for upstream and downstream partners in the browser.
 
 Built with **VTK, PySide6, and Qt 6**, MADI3D was developed primarily for neuroscience and fluorescence microscopy, with particular emphasis on high-quality volumetric rendering, neuromorphology, light-microscopy to electron-microscopy comparison, and interactive work with complex 3D datasets.
 
@@ -204,7 +208,45 @@ Local search uses positive Color-Depth matching. Its scores are not interchangea
 
 **Example:** register microscopy to the appropriate template → segment the neuronal signal → generate and save its Color-Depth MIP → search a compatible installed library → load selected candidates → compare their full 3D morphology and save the project.
 
-Method reference: [Clements et al., *NeuronBridge: an intuitive web application for neuronal morphology search across large data sets*](https://doi.org/10.1186/s12859-024-05732-7).
+**Original method and software:** [Fiji ColorMIP Mask Search](https://github.com/JaneliaSciComp/ColorMIP_Mask_Search) (algorithm by Hideo Otsuna; Fiji plugin by Hideo Otsuna and Takashi Kawase), [Janelia ColorMIPSearch](https://github.com/JaneliaSciComp/colormipsearch) (large-scale precomputed search tools), and [NeuronBridge](https://neuronbridge.janelia.org/) (web search and results).
+
+**Primary papers:** Otsuna H, Ito M, Kawase T (2018), [*Color depth MIP mask search: a new tool to expedite Split-GAL4 creation*](https://doi.org/10.1101/318006) (bioRxiv preprint); Meissner GW et al. (2023), [*A searchable image resource of Drosophila GAL4 driver expression patterns with single neuron resolution*](https://doi.org/10.7554/eLife.80660) (*eLife*); and Clements J et al. (2024), [*NeuronBridge: an intuitive web application for neuronal morphology search across large data sets*](https://doi.org/10.1186/s12859-024-05732-7) (*BMC Bioinformatics*).
+
+---
+
+# FlyWire FAFB import
+
+The **FlyWire** panel supports **FAFB public release 783**. Paste exact root IDs,
+import a root-ID text file, or open a Codex results CSV through the import menu,
+ordinary Open, or file drop. Dropping a CSV on a scene folder proposes that folder
+as the destination. Review metadata and choose **Mesh** or **Skeleton (SWC)**.
+**Add N to scene** adds all unique reviewed neurons: checked neurons load geometry
+immediately; unchecked neurons remain unloaded references. Retrieval is bounded
+and serial, and missing geometry can be retried later.
+
+CSV/ID review, public geometry and installed local catalogs need no credentials.
+Downloading current Codex annotation products uses a session-only Codex download
+token; CAVE credentials are separate and unused by this import. Local catalog
+search supports the stated fields and filters, rather than every Codex operator.
+
+Native projects retain source identity, annotations, geometry choice and pose.
+Embedded geometry opens offline; remote-only references need available cached
+geometry or a new download. Losing the cache does not erase annotations or authored
+work. Coordinates and SWC radii are converted from nm to µm once. Correct physical
+size does **not** establish alignment to a microscopy template or another brain space.
+
+Select a neuron to inspect its FlyWire source in **Object Info**. Right-click eligible
+rows for **FlyWire** actions: copy exact root IDs, show IDs in the panel, open Codex,
+or discover upstream/downstream partners in the browser. Derived geometry identifies
+its recorded sources; renamed objects retain their identity. Browser sign-in stays
+in the browser. These navigation actions do not import another scene object.
+
+See the [standalone FlyWire source guide](OpenSource/flywire/README.md),
+the [Codex FAQ](https://codex.flywire.ai/faq), and
+[FlyWire data terms and citation guidance](https://home.flywire.ai/guidelines).
+Public-release data carries separate attribution and noncommercial terms; application
+source licensing does not replace those obligations. Packaged release qualification
+is still pending the four-platform checks described in the integration details.
 
 ---
 
@@ -234,6 +276,8 @@ Rather than simply aligning tiles sequentially, MADI3D can determine a globally 
 Solved tile geometry can also be applied consistently across related microscopy channels.
 
 Successful alignment updates the scene, and apply/restore controls let you review the placement before fusion. If alignment at the current positions fails, an automatic-placement retry keeps your selected registration model. Failed or cancelled attempts leave tile poses intact.
+
+Registration and Stitching queues load required inputs on demand. **Release temporary inputs** returns inputs loaded only for an operation to their previous unloaded state after their last consumer; displayed, pinned or actively edited inputs stay available. Queued Stitching saves all output channels and leaves results unloaded by default. Enable **Load completed outputs** to display each finished result.
 
 The global translation workflow follows the same core principles described in:
 
@@ -619,6 +663,30 @@ Use the Registration panel for rigid, affine, or deformable registration.
 Landmarks can be added where anatomical guidance is useful.
 
 Registered transforms can subsequently be used to reformat related data.
+
+Choose **Template generation** in Registration to build a population template.
+In **Inputs**, add the source volumes, explicitly include each specimen, choose
+its registration channel and frame, and associate corresponding output stains.
+Optional mirrored observations use an explicit reflection plane; they augment
+symmetry without increasing the biological specimen count. Choose a reference,
+custom or union grid and, when needed, an existing starting template.
+
+In **Register**, edit preparation separately for registration contrast and output
+intensities, choose construction stages, and add or repeat refinement rounds.
+The source-sequence recipe is an editable starting point, with independent NMI
+defaults for linear and spline registration; NCC is also available. Preparation
+numbers and repeated rounds are implementation choices, not recovered historical
+experiment settings. Set the destination, intermediate-image policy, scene
+adoption and execution resources in **Reformat/Output**, then generate directly or add
+the setup to the existing **Queue**.
+
+**Transforms/Review** keeps completed rounds after a later failure or cancellation. Inspect
+channel contribution counts, member QC, symmetry and final mappings before
+accepting a round. Exclude a specimen by revising the cohort and computing a new
+result; continuation from a selected completed round is an explicit new run.
+**Retry retained result finalization** finishes the retained output without
+repeating registration. Adding channels to the scene and requesting their load
+are separate choices; a queued load does not mean rendering has completed.
 
 ---
 

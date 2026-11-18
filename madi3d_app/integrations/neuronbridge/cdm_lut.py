@@ -1,6 +1,8 @@
 """Pinned PsychedelicRainBow2 palette; original LF bytes embedded for packaging.
 Source: JaneliaSciComp/neuronbridge-aligners ba883d845edba801f2560f8aa9b772c4caec1f76.
 brain-aligner/aligner/fiji_luts/PsychedelicRainBow2.lut (NB-02 reference lock).
+Copyright (c) 2022, Howard Hughes Medical Institute. BSD-3-Clause.
+See LICENSES/neuronbridge-aligners-LICENSE.txt.
 """
 LUT_BYTES = b"""127	0	255
 125	3	255

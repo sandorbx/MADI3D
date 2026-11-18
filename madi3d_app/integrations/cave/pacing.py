@@ -46,6 +46,12 @@ class CaveColorQueue:
         self._ready_at = max(self._ready_at, now + delay / 1000.0)
         return delay
 
+    def load_written(self, count):
+        """Keep the estimated settling interval after a delayed local write."""
+        delay = cave_load_settle_ms(max(int(count), self._loading_count))
+        self._ready_at = max(self._ready_at, self._clock() + delay / 1000.0)
+        return delay
+
     def enqueue(self, groups):
         for visual, names in groups.items():
             for name in names:

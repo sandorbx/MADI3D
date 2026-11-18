@@ -1,0 +1,6 @@
+# Exact fixture/source-evidence bytes are hash-addressed, including JSON headers.
+* -text
+# Preserve hash-bound CRLF and the NRRD header's terminating blank line.
+manifest.json whitespace=cr-at-eol
+template-provenance.json whitespace=cr-at-eol
+template-header.txt whitespace=-blank-at-eof

@@ -4,10 +4,55 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+import copy
 import math
 
 import numpy as np
 import vtk
+
+
+def configure_surface_contour(contour, image, iso_value, cutoff_range=None):
+    """Bind a FlyingEdges contour to the original image or a binary cutoff mask.
+
+    The default path remains the historical direct scalar contour. Cutoff mode
+    contours the 0/1 voxel-membership boundary at 0.5. A one-voxel zero halo
+    closes foreground regions at the image edge. VTK releases each mask stage
+    after its downstream filter consumes it.
+    """
+    if cutoff_range is None:
+        contour.SetInputData(image)
+        contour.SetValue(0, float(iso_value))
+        return ()
+
+    lower, upper = (float(value) for value in cutoff_range)
+    if not (math.isfinite(lower) and math.isfinite(upper)) or upper < lower:
+        raise ValueError("Surface cutoffs must be finite and ordered.")
+    threshold = vtk.vtkImageThreshold()
+    threshold.SetInputData(image)
+    threshold.ThresholdBetween(lower, upper)
+    threshold.SetInValue(1)
+    threshold.SetOutValue(0)
+    threshold.SetOutputScalarTypeToUnsignedChar()
+    threshold.ReplaceInOn()
+    threshold.ReplaceOutOn()
+    threshold.ReleaseDataFlagOn()
+    xmin, xmax, ymin, ymax, zmin, zmax = image.GetExtent()
+    padding = vtk.vtkImageConstantPad()
+    padding.SetInputConnection(threshold.GetOutputPort())
+    padding.SetOutputWholeExtent(
+        xmin - 1, xmax + 1, ymin - 1, ymax + 1, zmin - 1, zmax + 1
+    )
+    padding.SetConstant(0)
+    padding.ReleaseDataFlagOn()
+    contour.SetInputConnection(padding.GetOutputPort())
+    contour.SetValue(0, 0.5)
+    return threshold, padding
+
+
+def surface_cutoff_mask_peak_bytes(dimensions):
+    """Exact peak for the overlapping UInt8 threshold and padded-mask stages."""
+    x, y, z = (int(value) for value in dimensions)
+    return x * y * z + (x + 2) * (y + 2) * (z + 2)
 
 
 # Volume color lookup tables. The stop positions are normalized to 0..1 and
@@ -586,7 +631,15 @@ def rebase_saved_volume_scalar_metadata(metadata, actual_min, actual_max):
     return md
 
 
+def normalize_surface_smoothing(value):
+    """Normalize the persisted opt-in flag, including common CSV strings."""
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes", "y", "on"}
+    return bool(value)
+
+
 VOLUME_RENDERING_METADATA_KEYS = (
+    "clipping",
     "data_min",
     "data_max",
     "lower_threshold",
@@ -608,6 +661,8 @@ VOLUME_RENDERING_METADATA_KEYS = (
     "color_lut",
     "global_opacity",
     "iso_value",
+    "surface_mode",
+    "surface_smoothing",
     "representation",
     "time_index",
 )
@@ -641,6 +696,8 @@ def default_volume_rendering_metadata(data_min, data_max):
         "color_lut": "solid",
         "global_opacity": 1.0,
         "iso_value": 0.2 * (lo + hi),
+        "surface_mode": "iso",
+        "surface_smoothing": False,
         "representation": "volume",
         "time_index": 0,
     }
@@ -654,6 +711,8 @@ def serialize_volume_rendering_metadata(metadata):
         for key in VOLUME_RENDERING_METADATA_KEYS
         if key in md
     }
+    if "clipping" in serialized:
+        serialized["clipping"] = copy.deepcopy(serialized["clipping"])
     if "color" in serialized:
         serialized["color"] = tuple(float(value) for value in serialized["color"][:3])
     serialized["color_lut"] = normalize_volume_lut_name(
@@ -662,6 +721,13 @@ def serialize_volume_rendering_metadata(metadata):
     representation = str(serialized.get("representation", "volume")).strip().lower()
     serialized["representation"] = (
         representation if representation in {"volume", "surface"} else "volume"
+    )
+    surface_mode = str(serialized.get("surface_mode", "iso")).strip().lower()
+    serialized["surface_mode"] = (
+        surface_mode if surface_mode in {"iso", "cutoff_band"} else "iso"
+    )
+    serialized["surface_smoothing"] = normalize_surface_smoothing(
+        serialized.get("surface_smoothing", False)
     )
     return serialized
 
@@ -988,6 +1054,42 @@ class VolumeTransferFunctionModel:
         transfer_function.Modified()
         return transfer_function
 
+    @staticmethod
+    def build_categorical_transfer_functions(
+        labels, color_target, opacity_target, global_opacity=1.0
+    ):
+        """Build discrete VTK transfer functions for runtime label meanings."""
+        color_target.RemoveAllPoints()
+        opacity_target.RemoveAllPoints()
+        opacity_scale = float(global_opacity)
+        if not np.isfinite(opacity_scale):
+            opacity_scale = 1.0
+        opacity_scale = min(1.0, max(0.0, opacity_scale))
+        by_value = {}
+        for label in labels or ():
+            try:
+                raw_value = label["value"]
+                value = int(raw_value)
+                if isinstance(raw_value, (bool, np.bool_)) or float(raw_value) != value:
+                    continue
+                color = tuple(float(channel) for channel in label["color"])
+            except (KeyError, TypeError, ValueError, OverflowError):
+                continue
+            if len(color) != 3 or not all(np.isfinite(channel) for channel in color):
+                continue
+            if value == 0 or value in by_value:
+                continue
+            by_value[value] = tuple(min(1.0, max(0.0, c)) for c in color)
+
+        for value, color in sorted(by_value.items()):
+            color_target.AddRGBPoint(value, *color, 0.5, 1.0)
+            opacity_target.AddPoint(value - 0.5, 0.0)
+            opacity_target.AddPoint(value, opacity_scale, 0.5, 1.0)
+            opacity_target.AddPoint(value + 0.5, 0.0)
+        color_target.Modified()
+        opacity_target.Modified()
+        return color_target, opacity_target
+
     def rebuild(
         self,
         metadata,
@@ -1064,12 +1166,18 @@ class VolumeTransferFunctionModel:
         if lut_name == "solid":
             rgb = sample_volume_lut("solid", 1.0, base_rgb)
         else:
+            if str(metadata.get("surface_mode", "iso")).strip().lower() == "cutoff_band":
+                scalar_value = (
+                    float(metadata["lower_threshold"]) * 0.5
+                    + float(metadata["upper_threshold"]) * 0.5
+                )
+            else:
+                scalar_value = metadata.get(
+                    "iso_value", metadata.get("saturation_point", 0.0)
+                )
             rgb = sample_volume_lut(
                 lut_name,
-                self.scalar_response(
-                    metadata,
-                    metadata.get("iso_value", metadata.get("saturation_point", 0.0)),
-                ),
+                self.scalar_response(metadata, scalar_value),
                 base_rgb,
             )
         return tuple(

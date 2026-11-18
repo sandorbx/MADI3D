@@ -28,6 +28,11 @@
       "license": "BSD-3-Clause",
       "source": "https://pypi.org/project/click/"
     },
+    "cloud-volume": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://github.com/seung-lab/cloud-volume/tree/8ba64a2caca8c73985a8bafdbf6f1f278e4b1b5a"
+    },
     "cloudpickle": {
       "status": "bundled when collected",
       "license": "BSD-3-Clause",
@@ -119,7 +124,7 @@
       "source": "https://pypi.org/project/nd2/"
     },
     "neuronbridge-python": {
-      "status": "bundled when collected",
+      "status": "protocol reference",
       "license": "BSD-3-Clause",
       "source": "https://github.com/JaneliaSciComp/neuronbridge-python/tree/15a268c68a33983cbff6243fd99aa2efbed371ab",
       "commit": "15a268c68a33983cbff6243fd99aa2efbed371ab",
@@ -213,6 +218,11 @@
       "license": "BSD-3-Clause",
       "source": "https://pypi.org/project/psutil/"
     },
+    "pyarrow": {
+      "status": "bundled when collected",
+      "license": "Apache-2.0 with bundled third-party notices",
+      "source": "https://github.com/apache/arrow/tree/apache-arrow-26.0.0"
+    },
     "pydantic": {
       "status": "bundled when collected",
       "license": "MIT",
@@ -239,9 +249,9 @@
       "source": "https://pypi.org/project/pyinstaller/"
     },
     "pyinstaller-hooks-contrib": {
-      "status": "build-only",
-      "license": "GPL-2.0-or-later AND Apache-2.0",
-      "source": "https://pypi.org/project/pyinstaller-hooks-contrib/"
+      "status": "bundled when collected",
+      "license": "Apache-2.0",
+      "source": "https://pypi.org/project/pyinstaller-hooks-contrib/2026.6/"
     },
     "pynrrd": {
       "status": "bundled when collected",
@@ -315,6 +325,16 @@
       "status": "bundled when collected",
       "license": "BSD-3-Clause",
       "source": "https://pypi.org/project/scipy/"
+    },
+    "scikit-image": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause AND BSD-2-Clause AND MIT",
+      "source": "https://github.com/scikit-image/scikit-image/tree/v0.26.0"
+    },
+    "lazy-loader": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://github.com/scientific-python/lazy-loader"
     },
     "setuptools": {
       "status": "bundled when collected",
@@ -408,6 +428,327 @@
       "status": "bundled when collected",
       "license": "MIT",
       "source": "https://pypi.org/project/zipp/"
+    },
+    "markdown": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/Markdown/3.11.1/"
+    },
+    "pygments": {
+      "status": "bundled when collected",
+      "license": "BSD-2-Clause",
+      "source": "https://pypi.org/project/Pygments/2.21.0/"
+    },
+    "attrs": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/attrs/26.1.0/"
+    },
+    "boto3": {
+      "status": "bundled when collected",
+      "license": "Apache-2.0",
+      "source": "https://pypi.org/project/boto3/1.43.114/"
+    },
+    "botocore": {
+      "status": "bundled when collected",
+      "license": "Apache-2.0",
+      "source": "https://pypi.org/project/botocore/1.43.114/"
+    },
+    "brotli": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/Brotli/1.2.0/"
+    },
+    "cffi": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/cffi/2.1.1/"
+    },
+    "chardet": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/chardet/7.6.0/"
+    },
+    "cloud-files": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/cloud-files/6.4.3/"
+    },
+    "compressed-segmentation": {
+      "status": "bundled when collected",
+      "license": "Apache-2.0 AND BSD-3-Clause",
+      "source": "https://pypi.org/project/compressed-segmentation/2.3.3/"
+    },
+    "crc32c": {
+      "status": "bundled when collected",
+      "license": "LGPL-2.1-or-later",
+      "source": "https://pypi.org/project/crc32c/2.9.post0/"
+    },
+    "cryptography": {
+      "status": "bundled when collected",
+      "license": "Apache-2.0 OR BSD-3-Clause",
+      "source": "https://pypi.org/project/cryptography/50.0.2/"
+    },
+    "deflate": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/deflate/0.9.0/"
+    },
+    "dill": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/dill/0.4.1/"
+    },
+    "fasteners": {
+      "status": "bundled when collected",
+      "license": "Apache-2.0",
+      "source": "https://pypi.org/project/fasteners/0.20/"
+    },
+    "fastremap": {
+      "status": "bundled when collected",
+      "license": "LGPL-3.0-or-later",
+      "source": "https://pypi.org/project/fastremap/1.20.0/",
+      "retained_notices": {
+        "version": "1.20.0",
+        "files": [
+          {
+            "filename": "fastremap-LICENSE.txt",
+            "text_sha256": "7d3a95e5e06978064ed3f8e2b7c8f845e7fd8a405294727cc708f94cb83b8059"
+          }
+        ]
+      }
+    },
+    "gevent": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/gevent/26.9.0/"
+    },
+    "google-api-core": {
+      "status": "bundled when collected",
+      "license": "Apache-2.0",
+      "source": "https://pypi.org/project/google-api-core/2.42.0/"
+    },
+    "google-auth": {
+      "status": "bundled when collected",
+      "license": "Apache-2.0",
+      "source": "https://pypi.org/project/google-auth/2.62.0/"
+    },
+    "google-cloud-core": {
+      "status": "bundled when collected",
+      "license": "Apache-2.0",
+      "source": "https://pypi.org/project/google-cloud-core/2.8.0/"
+    },
+    "google-cloud-storage": {
+      "status": "bundled when collected",
+      "license": "Apache-2.0",
+      "source": "https://pypi.org/project/google-cloud-storage/3.17.1/"
+    },
+    "google-crc32c": {
+      "status": "bundled when collected",
+      "license": "Apache-2.0",
+      "source": "https://pypi.org/project/google-crc32c/1.9.0/"
+    },
+    "google-resumable-media": {
+      "status": "bundled when collected",
+      "license": "Apache-2.0",
+      "source": "https://pypi.org/project/google-resumable-media/2.11.0/"
+    },
+    "googleapis-common-protos": {
+      "status": "bundled when collected",
+      "license": "Apache-2.0",
+      "source": "https://pypi.org/project/googleapis-common-protos/1.75.5/"
+    },
+    "greenlet": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/greenlet/3.5.6/"
+    },
+    "inflection": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/inflection/0.5.1/"
+    },
+    "intervaltree": {
+      "status": "bundled when collected",
+      "license": "Apache-2.0",
+      "source": "https://pypi.org/project/intervaltree/3.2.1/"
+    },
+    "jmespath": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/jmespath/1.1.0/"
+    },
+    "json5": {
+      "status": "bundled when collected",
+      "license": "Apache-2.0",
+      "source": "https://pypi.org/project/json5/0.17.3/"
+    },
+    "jsonschema": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/jsonschema/4.26.0/"
+    },
+    "jsonschema-specifications": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/jsonschema-specifications/2025.9.1/"
+    },
+    "microviewer": {
+      "status": "bundled when collected",
+      "license": "LGPL-2.0-or-later",
+      "source": "https://pypi.org/project/microviewer/1.21.0/",
+      "retained_notices": {
+        "version": "1.21.0",
+        "files": [
+          {
+            "filename": "microviewer-LICENSE.txt",
+            "text_sha256": "20c17d8b8c48a600800dfd14f95d5cb9ff47066a9641ddeab48dc54aec96e331"
+          }
+        ]
+      }
+    },
+    "multiprocess": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/multiprocess/0.70.19/"
+    },
+    "networkx": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/networkx/3.6.1/"
+    },
+    "opentelemetry-api": {
+      "status": "bundled when collected",
+      "license": "Apache-2.0",
+      "source": "https://pypi.org/project/opentelemetry-api/1.45.1/"
+    },
+    "orjson": {
+      "status": "bundled when collected",
+      "license": "MPL-2.0 AND (Apache-2.0 OR MIT)",
+      "source": "https://pypi.org/project/orjson/3.13.0/",
+      "retained_notices": {
+        "version": "3.13.0",
+        "files": [
+          {
+            "filename": "orjson-native-NOTICES.txt",
+            "text_sha256": "78cadd1adb3e4d25779fbcc76a84bbe1950882bace96955bddcfd989ec8dbfe5"
+          }
+        ]
+      }
+    },
+    "osteoid": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/osteoid/0.7.4/"
+    },
+    "pathos": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/pathos/0.3.5/"
+    },
+    "posix-ipc": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/posix-ipc/1.3.2/"
+    },
+    "ppft": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/ppft/1.7.8/"
+    },
+    "protobuf": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/protobuf/7.36.2/"
+    },
+    "pyasn1": {
+      "status": "bundled when collected",
+      "license": "BSD-2-Clause",
+      "source": "https://pypi.org/project/pyasn1/0.6.4/"
+    },
+    "pyasn1-modules": {
+      "status": "bundled when collected",
+      "license": "BSD-2-Clause",
+      "source": "https://pypi.org/project/pyasn1-modules/0.4.2/"
+    },
+    "pycparser": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/pycparser/3.11/"
+    },
+    "python-jsonschema-objects": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/python-jsonschema-objects/0.5.7/"
+    },
+    "referencing": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/referencing/0.37.0/"
+    },
+    "rpds-py": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/rpds-py/2026.9.1/"
+    },
+    "rsa": {
+      "status": "bundled when collected",
+      "license": "Apache-2.0",
+      "source": "https://pypi.org/project/rsa/4.9.1/"
+    },
+    "s3transfer": {
+      "status": "bundled when collected",
+      "license": "Apache-2.0",
+      "source": "https://pypi.org/project/s3transfer/0.19.2/"
+    },
+    "simplejpeg": {
+      "status": "bundled when collected",
+      "license": "MIT",
+      "source": "https://pypi.org/project/simplejpeg/1.9.0/"
+    },
+    "sortedcontainers": {
+      "status": "bundled when collected",
+      "license": "Apache-2.0",
+      "source": "https://pypi.org/project/sortedcontainers/2.4.0/"
+    },
+    "tenacity": {
+      "status": "bundled when collected",
+      "license": "Apache-2.0",
+      "source": "https://pypi.org/project/tenacity/9.2.1/"
+    },
+    "zstandard": {
+      "status": "bundled when collected",
+      "license": "BSD-3-Clause",
+      "source": "https://pypi.org/project/zstandard/0.25.0/"
+    },
+    "dracopy": {
+      "status": "bundled when collected",
+      "license": "Apache-2.0",
+      "source": "https://pypi.org/project/dracopy/2.2.0/"
+    },
+    "pysimdjson": {
+      "status": "bundled when collected",
+      "license": "MIT AND Apache-2.0 AND BSD-3-Clause",
+      "source": "https://pypi.org/project/pysimdjson/7.0.2/",
+      "retained_notices": {
+        "version": "7.0.2",
+        "files": [
+          {
+            "filename": "pysimdjson-native-NOTICES.txt",
+            "text_sha256": "a714da0b0d9fcd2c3df0fbd81caabd7f402120626e4ba0bde5a7574b56f24840"
+          }
+        ]
+      }
+    },
+    "zope-event": {
+      "status": "bundled when collected",
+      "license": "ZPL-2.1",
+      "source": "https://pypi.org/project/zope.event/6.2/"
+    },
+    "zope-interface": {
+      "status": "bundled when collected",
+      "license": "ZPL-2.1",
+      "source": "https://pypi.org/project/zope.interface/8.7/"
     }
   }
 }

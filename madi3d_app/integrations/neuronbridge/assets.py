@@ -3,13 +3,20 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import threading
+from contextlib import contextmanager
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from urllib.parse import urlsplit
 
-from .cache import asset_cache_filename, cached_file_ready, neuronbridge_cache_root, stream_download
+from madi3d_app.io_utils import file_revision, filename_unit_budget
+
+from .cache import (
+    asset_cache_filename, cached_file_ready, compact_asset_cache_path,
+    neuronbridge_cache_root, stream_download,
+)
+from .local_geometry import AMBIGUOUS, GEOMETRY_SUFFIXES, MATCHED, UNAVAILABLE
 from .records import AssetIdentity
 
 
@@ -17,6 +24,20 @@ ASSET_SUFFIXES = {
     "AlignedBodyOBJ": ".obj", "AlignedBodySWC": ".swc",
     "VisuallyLosslessStack": ".h5j",
 }
+
+_RETRIEVAL_SLOT = threading.BoundedSemaphore(1)
+
+
+@contextmanager
+def _retrieval_slot(cancel_check):
+    """Serialize acceptance/download so queued duplicates reuse complete bytes."""
+    while not _RETRIEVAL_SLOT.acquire(timeout=0.05):
+        _check_cancel(cancel_check)
+    try:
+        _check_cancel(cancel_check)
+        yield
+    finally:
+        _RETRIEVAL_SLOT.release()
 
 
 class ResolutionError(ValueError):
@@ -45,8 +66,6 @@ def compact_candidate(data):
 
 
 def _resolved_asset(remote, asset, version, api):
-    if urlsplit(asset.url).scheme.lower() not in {"http", "https"}:
-        raise ResolutionError("A NeuronBridge download requires an HTTP(S) asset URL.")
     source = remote.source
     filename = asset_cache_filename(
         library=source.library, release=source.library_release,
@@ -113,7 +132,9 @@ def _same_selected_asset(expected, actual):
         if expected.checksum_sha256 != actual.checksum_sha256:
             return False
     else:
-        return False
+        # Representation-only evidence (for example a local-acquisition
+        # descriptor) asserts no locator to compare; the type must agree.
+        return bool(expected.asset_type) and expected.asset_type == actual.asset_type
     return not (
         expected.checksum_sha256 and actual.checksum_sha256
         and expected.checksum_sha256 != actual.checksum_sha256
@@ -239,8 +260,17 @@ def identity_normalizations(source, data):
             and _identity_equal(source, key, expected, data.get(key), data)}
 
 
-def _matches(source, data):
-    return not image_mismatches(source, data)
+def _geometry_mismatches(source, data):
+    from .archive_catalog import VERIFIED_LIBRARIES
+
+    result = image_mismatches(source, data)
+    # The pinned catalog independently binds these geometry libraries to releases.
+    # Public image metadata may omit the release; an explicit conflict still fails.
+    catalog = VERIFIED_LIBRARIES.get(source.library)
+    if (source.kind == "em" and source.provider == "NeuronBridge" and catalog
+            and source.library_release == catalog[0] and data.get("libraryRelease") is None):
+        result.pop("libraryRelease", None)
+    return result
 
 
 def _check_cancel(cancel_check):
@@ -293,9 +323,9 @@ def resolve_source(remote, nb, *, cancel_check=None):
         images = nb.get_em_images(lookup) if source.kind == "em" else nb.get_lm_images(lookup)
         _check_cancel(cancel_check)
         pairs = [(image, _json_metadata(image)) for image in images]
-        matches = [(image, data) for image, data in pairs if _matches(source, data)]
+        matches = [(image, data) for image, data in pairs if not _geometry_mismatches(source, data)]
         if len(matches) != 1:
-            candidates = [dict(data, mismatches=image_mismatches(source, data),
+            candidates = [dict(data, mismatches=_geometry_mismatches(source, data),
                                data_version=getattr(nb, "version", remote.data_version),
                                asset_urls={key: nb._get_files_url(data.get("files", {}), key)
                                            for key in ASSET_SUFFIXES if data.get("files", {}).get(key)})
@@ -364,7 +394,7 @@ def resolve_source(remote, nb, *, cancel_check=None):
 
 def candidate_options(remote, candidate):
     """Resolve an explicitly selected, compatible image from retained evidence."""
-    if image_mismatches(remote.source, candidate):
+    if _geometry_mismatches(remote.source, candidate):
         raise ResolutionError("This candidate conflicts with the recorded source. Review the rejected fields before importing a corrected result.")
     version = candidate.get("data_version")
     if remote.data_version is not None and version != remote.data_version:
@@ -392,82 +422,259 @@ def candidate_options(remote, candidate):
     return tuple(options)
 
 
+LOCAL_GEOMETRY_TYPES = ("AlignedBodyOBJ", "AlignedBodySWC")
+
+
+def _local_geometry_hit(remote, batch, cancel_check):
+    """Resolve a typed EM neuron ID inside the user-configured local folder.
+
+    The typed neuron ID remains authoritative; the filename only locates a
+    candidate file for that ID. A hit records local-acquisition evidence and
+    an observed checksum only — never a NeuronBridge asset URL, asset ID,
+    published checksum or download claim. A miss, an ambiguity, an unavailable
+    folder, an unconfigured library and a descriptor without a typed ID return
+    None; a Local-mode batch reports those as unresolved instead of retrieving
+    them from NeuronBridge.
+    """
+    if batch is None or remote.problems or remote.source.kind != "em":
+        return None
+    identifier = remote.source.biological.neuron_id
+    # Published representation availability is not an explicit selection.
+    asset_type = remote.resolution.get("asset_type")
+    if not identifier:
+        return None
+    if asset_type is None:
+        available = [kind for kind in LOCAL_GEOMETRY_TYPES
+                     if batch.lookup(remote.source.library, identifier, kind).status in {MATCHED, AMBIGUOUS}]
+        if len(available) == 2:
+            _choose_asset([replace(remote, resolution={
+                "asset_type": kind, "selected_asset": {"asset_type": kind},
+            }) for kind in available])
+        asset_type = available[0] if len(available) == 1 else None
+    if asset_type not in LOCAL_GEOMETRY_TYPES:
+        return None
+    result = batch.lookup(remote.source.library, identifier, asset_type)
+    if result.status != MATCHED:
+        return None
+    path = result.path
+    _check_cancel(cancel_check)
+    before = file_revision(path)
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            _check_cancel(cancel_check)
+            digest.update(chunk)
+    if file_revision(path) != before:
+        raise ResolutionError("The local geometry file changed during verification. Retry loading it.")
+    acquisition = remote.resolution.get("local_acquisition")
+    if acquisition:
+        if digest.hexdigest() != acquisition["checksum_sha256"]:
+            raise ResolutionError("The local geometry no longer matches its accepted checksum. "
+                                  "Restore the file or import the changed source separately.")
+        _check_cancel(cancel_check)
+        return replace(remote, local_path=str(path), local_revision=before)
+    resolution = {key: copy.deepcopy(value) for key, value in remote.resolution.items()
+                  if key in {"api_metadata", "data_version", "identity_normalizations",
+                             "metadata_discrepancies", "user_resolution", "prior_source_decision"}}
+    resolution.update({
+        "asset_type": asset_type,
+        "selected_asset": {"asset_type": asset_type},
+        "local_acquisition": {
+            "origin": "user-supplied-local-source",
+            "file_name": path.name,
+            "acquired_at": datetime.now(timezone.utc).isoformat(),
+            "checksum_sha256": digest.hexdigest(),
+            "verification": "locally-observed",
+        },
+    })
+    _check_cancel(cancel_check)
+    return replace(remote, resolution=resolution, local_path=str(path), local_revision=before)
+
+
+def local_geometry_shortfall(remote, batch):
+    """Explain EM geometry that this batch's local folders cannot supply.
+
+    The message names the neuron, its library and the requested representation
+    but never a machine-local folder path: an unresolved retrieval is retained
+    as a project source decision, while the folder association belongs to this
+    computer only and must not become portable project state.
+    """
+    source = remote.source
+    library = source.library or "this library"
+    identifier = source.biological.neuron_id
+    if not identifier:
+        return ("Local geometry is on, but this result has no neuron/body ID, so no local file can "
+                "be selected for it. Switch the NeuronBridge geometry source to Online to retrieve it.")
+    kinds = ((remote.resolution.get("asset_type"),)
+             if remote.resolution.get("asset_type") in LOCAL_GEOMETRY_TYPES else LOCAL_GEOMETRY_TYPES)
+    representation = (" / ".join(GEOMETRY_SUFFIXES[kind] for kind in kinds))
+    if not batch.configured(source.library):
+        return (f"Local geometry is on, but no local neuron folder is configured for {library}, so no "
+                f"{representation} file for neuron {identifier} can be found. Choose a local folder for "
+                f"{library}, or switch the NeuronBridge geometry source to Online.")
+    results = [batch.lookup(source.library, identifier, kind) for kind in kinds]
+    if any(result.status == UNAVAILABLE for result in results):
+        return (f"Local geometry is on, but the local neuron folder configured for {library} cannot be "
+                f"read, so neuron {identifier} stays unresolved. Reconnect that folder or choose another "
+                "one, or switch the NeuronBridge geometry source to Online.")
+    ambiguous = [result for result in results if result.status == AMBIGUOUS]
+    if ambiguous:
+        names = ambiguous[0].candidates
+        listed = ", ".join(names[:3]) + (", …" if len(names) > 3 else "")
+        return (f"Local geometry is on, but {len(names)} files in the local {library} folder match neuron "
+                f"{identifier} ({listed}). Keep exactly one {representation} file for this neuron, "
+                "or switch the NeuronBridge geometry source to Online.")
+    return (f"Local geometry is on, but the local {library} folder has no {representation} file for "
+            f"neuron {identifier}. Add it to the configured folder, choose another folder, or switch the "
+            "NeuronBridge geometry source to Online to retrieve it from NeuronBridge.")
+
+
 def fetch_source(remote, client_factory, *, cancel_check=None, cache_root=None,
-                 download=stream_download, on_resolved=None):
-    """Retrieve one exact asset, reusing a verified cache before any network access."""
+                 download=stream_download, on_resolved=None, geometry_source=None):
+    """Retrieve one exact asset under this batch's captured EM geometry source.
+
+    ``geometry_source`` is the transient ``GeometrySourceBatch`` captured when
+    the load batch started. An Online batch (the default) never enumerates a
+    local folder and keeps the existing verified-cache-first
+    metadata/download route. A Local batch makes no request, constructs no
+    metadata client and never falls through to the hosted NeuronBridge cache:
+    EM geometry comes from the configured local folders only, and geometry
+    those folders cannot supply stays unresolved with a practical message
+    instead of being downloaded. A descriptor whose own accepted evidence is a
+    user-supplied local file keeps its verified local-bytes route in either
+    mode, because those bytes are the accepted source and not a hosted cache.
+    """
     _check_cancel(cancel_check)
     root = (Path(cache_root).expanduser() if cache_root is not None
             else neuronbridge_cache_root())
+    local_only = (geometry_source is not None and geometry_source.local
+                  and remote.source.kind == "em")
 
-    checksum = remote.expected_sha256
-    existing = (remote.cached_path(cache_root=root)
-                if remote.resolution else None)
-    if existing and cached_file_ready(
-            existing, expected_sha256=checksum, cancel_check=cancel_check):
-        _check_cancel(cancel_check)
-        return _record_retrieval(remote, existing, checksum, cancel_check)
+    with _retrieval_slot(cancel_check):
+        checksum = remote.expected_sha256
+        accepted_local = bool(remote.resolution.get("local_acquisition"))
+        existing = (remote.cached_path(cache_root=root)
+                    if remote.resolution and (not local_only or accepted_local) else None)
+        before = file_revision(existing) if existing is not None else None
+        if existing and cached_file_ready(
+                existing, expected_sha256=checksum, cancel_check=cancel_check):
+            _check_cancel(cancel_check)
+            if accepted_local:
+                if file_revision(existing) != before:
+                    raise ResolutionError("The local geometry file changed during verification. Retry loading it.")
+                return replace(remote, local_path=str(existing), local_revision=before)
+            return _record_retrieval(remote, existing, checksum, cancel_check, source_revision=before)
+        if existing and checksum:
+            raise ResolutionError("The local source does not match its saved checksum. "
+                                  "The file was preserved; restore it or import the changed source separately.")
 
-    if not remote.resolution.get("url"):
-        retained = dict(remote.resolution)
-        retained_selection = remote.selected_asset
-        validate_resolution_request(remote)
-        supplied = [
-            asset for asset in remote.source.assets
-            if asset.url and asset.asset_type in ASSET_SUFFIXES
-            and _asset_matches_selection(retained_selection, asset)
-        ]
-        nb = None if supplied else client_factory(remote.data_version)
+        if local_only:
+            # Contradictory recorded evidence is still reported, but the online
+            # resolution prerequisites (alignment space, lookup name) are not
+            # imposed: a configured folder plus the typed ID defines this lookup.
+            if remote.problems:
+                raise ResolutionError("\n".join(remote.problems), status="ambiguous")
+            hit = _local_geometry_hit(remote, geometry_source, cancel_check)
+            if hit is None:
+                raise ResolutionError(local_geometry_shortfall(remote, geometry_source))
+            if on_resolved is not None:
+                on_resolved(hit)
+            return hit
+
+        if not remote.resolution.get("url"):
+            retained = dict(remote.resolution)
+            retained_selection = remote.selected_asset
+            validate_resolution_request(remote)
+            supplied = [
+                asset for asset in remote.source.assets
+                if asset.url and asset.asset_type in ASSET_SUFFIXES
+                and _asset_matches_selection(retained_selection, asset)
+            ]
+            nb = None if supplied else client_factory(remote.data_version)
+            _check_cancel(cancel_check)
+            resolved = resolve_source(remote, nb, cancel_check=cancel_check)
+            if retained_selection is not None and not _same_selected_asset(
+                    retained_selection, resolved.selected_asset):
+                raise ResolutionError(
+                    "Resolved asset identity differs from the recorded selection; "
+                    "the cached or remote source was not loaded."
+                )
+            if retained:
+                resolution = dict(resolved.resolution)
+                # Locally observed bytes for a user-supplied file must never
+                # become the verification expectation for a hosted asset.
+                carried = ("user_resolution",) if retained.get("local_acquisition") else (
+                    "retrieved_sha256", "retrieved_at", "provider_verification", "user_resolution")
+                for key in carried:
+                    if key in retained:
+                        resolution[key] = copy.deepcopy(retained[key])
+                resolved = replace(resolved, resolution=resolution)
+            remote = resolved
+
+        if on_resolved is not None:
+            on_resolved(remote)
+
+        checksum = remote.expected_sha256
+        existing = remote.cached_path(cache_root=root)
+        before = file_revision(existing) if existing is not None else None
+        if existing and cached_file_ready(
+                existing, expected_sha256=checksum, cancel_check=cancel_check):
+            _check_cancel(cancel_check)
+            return _record_retrieval(remote, existing, checksum, cancel_check, source_revision=before)
+        if existing and checksum:
+            raise ResolutionError("The local source does not match its saved checksum. "
+                                  "The file was preserved; restore it or import the changed source separately.")
+
+        filename = remote.resolution["cache_filename"]
+        destination = root / filename
+        if len(filename) > filename_unit_budget(root):
+            destination = compact_asset_cache_path(root, filename)
+            if len(destination.name) > filename_unit_budget(root):
+                raise OSError("The cache folder is too deep for the download. Choose a shorter cache folder.")
+        before = file_revision(destination) if destination.is_file() else None
+        if existing != destination and cached_file_ready(
+                destination, expected_sha256=checksum, cancel_check=cancel_check):
+            _check_cancel(cancel_check)
+            return _record_retrieval(remote, destination, checksum, cancel_check, source_revision=before)
+        if destination.exists():
+            raise ResolutionError("An existing source at the download location could not be verified. "
+                                  "It was preserved; restore it or choose another download location.")
+        kwargs = {"cancel_check": cancel_check}
+        if checksum:
+            kwargs["expected_sha256"] = checksum
+        accepted = []
+        if download is stream_download:
+            kwargs["provider_only"] = True
+            kwargs["on_accepted"] = lambda digest, revision: accepted.append((digest, revision))
+        download(remote.resolution["url"], destination, **kwargs)
         _check_cancel(cancel_check)
-        resolved = resolve_source(remote, nb, cancel_check=cancel_check)
-        if retained_selection is not None and not _same_selected_asset(
-                retained_selection, resolved.selected_asset):
-            raise ResolutionError(
-                "Resolved asset identity differs from the recorded selection; "
-                "the cached or remote source was not loaded."
+        if accepted:
+            digest, revision = accepted[0]
+            return _record_retrieval(
+                remote, destination, digest, cancel_check, downloaded=True,
+                source_revision=revision,
             )
-        if retained:
-            resolution = dict(resolved.resolution)
-            for key in ("retrieved_sha256", "retrieved_at", "provider_verification",
-                        "user_resolution"):
-                if key in retained:
-                    resolution[key] = copy.deepcopy(retained[key])
-            resolved = replace(resolved, resolution=resolution)
-        remote = resolved
-
-    if on_resolved is not None:
-        on_resolved(remote)
-
-    checksum = remote.expected_sha256
-    existing = remote.cached_path(cache_root=root)
-    if existing and cached_file_ready(
-            existing, expected_sha256=checksum, cancel_check=cancel_check):
-        _check_cancel(cancel_check)
-        return _record_retrieval(remote, existing, checksum, cancel_check)
-
-    destination = (root / remote.resolution["cache_filename"]).resolve()
-    if existing != destination and cached_file_ready(
-            destination, expected_sha256=checksum, cancel_check=cancel_check):
-        _check_cancel(cancel_check)
-        return _record_retrieval(remote, destination, checksum, cancel_check)
-    kwargs = {"cancel_check": cancel_check}
-    if checksum:
-        kwargs["expected_sha256"] = checksum
-    download(remote.resolution["url"], destination, **kwargs)
-    _check_cancel(cancel_check)
-    return _record_retrieval(
-        remote, destination, checksum, cancel_check, downloaded=True
-    )
+        return _record_retrieval(
+            remote, destination, checksum, cancel_check, downloaded=True
+        )
 
 
-def _record_retrieval(remote, path, checksum, cancel_check, *, downloaded=False):
-    if checksum is None:
+def _record_retrieval(remote, path, checksum, cancel_check, *, downloaded=False, source_revision=None):
+    before = source_revision if source_revision is not None else file_revision(path)
+    if checksum is None or source_revision is None:
         digest = hashlib.sha256()
         with Path(path).open("rb") as handle:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 _check_cancel(cancel_check)
                 digest.update(chunk)
-        checksum = digest.hexdigest()
+        observed = digest.hexdigest()
+        if checksum is not None and checksum != observed:
+            from .cache import AssetChecksumError
+            raise AssetChecksumError(remote.selected_asset.url, checksum, observed)
+        checksum = observed
     _check_cancel(cancel_check)
+    if file_revision(path) != before:
+        raise ResolutionError("The local source changed during verification. Retry loading it.")
     resolution = dict(remote.resolution)
     resolution["retrieved_sha256"] = checksum
     if downloaded:
@@ -475,7 +682,7 @@ def _record_retrieval(remote, path, checksum, cancel_check, *, downloaded=False)
     provider_checksum = remote.selected_asset.checksum_sha256
     if provider_checksum:
         resolution["provider_verification"] = {"checksum_sha256": provider_checksum, "status": "matched"}
-    return replace(remote, local_path=str(path), resolution=resolution)
+    return replace(remote, local_path=str(path), local_revision=before, resolution=resolution)
 
 
 def bind_remote_volume_plan(batch, remote):

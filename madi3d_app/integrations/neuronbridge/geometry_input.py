@@ -18,7 +18,6 @@ from .records import ChannelSelection, SourceIdentity
 
 
 SCENE_SOURCE_KEY = "neuronbridge_cdm_source_id"
-MAX_GEOMETRY_BYTES = 128 * 1024 * 1024
 RASTER_WARNING = (
     "Mesh/SWC geometry is rasterized as binary occupancy, not fluorescence. "
     "Thin features depend on the chosen raster resolution; template alignment is unverified."
@@ -36,6 +35,12 @@ class GeometryCapture:
     placement: str
     resolution: int
 
+    @staticmethod
+    def capture_bytes(polydata):
+        cells = (polydata.GetVerts(), polydata.GetLines(), polydata.GetPolys(), polydata.GetStrips())
+        return (polydata.GetNumberOfPoints() * 3
+                + sum(c.GetNumberOfConnectivityIds() + c.GetNumberOfCells() for c in cells)) * 8
+
     @classmethod
     def capture(cls, source_id, polydata, pose, parameters, placement, resolution=256, evidence=None):
         if type(resolution) is not int or not 16 <= resolution <= 512:
@@ -45,8 +50,6 @@ class GeometryCapture:
         matrix = invertible_affine4(pose)
         points = vtk_to_numpy(polydata.GetPoints().GetData())
         cells = (polydata.GetVerts(), polydata.GetLines(), polydata.GetPolys(), polydata.GetStrips())
-        if points.size * 8 + sum(c.GetNumberOfConnectivityIds() + c.GetNumberOfCells() for c in cells) * 8 > MAX_GEOMETRY_BYTES:
-            raise ValueError("Geometry capture exceeds 128 MiB. Simplify the mesh before generating its MIP.")
         arrays = []
         for cell_array in cells:
             ids = vtk_to_numpy(cell_array.GetConnectivityArray())

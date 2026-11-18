@@ -2,19 +2,24 @@
 
 from __future__ import annotations
 
-from madi3d_app.io_utils import check_resources
+from madi3d_app.io_utils import check_resources, file_revision, resolve_file_locator
 
+import errno
 import glob
 import json
 import math
 import os
 import shutil
 import tempfile
+import weakref
+from collections import Counter
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
 import numpy as np
 
+from . import nrrd_stream
 from .leica_lif import (
     decode_leica_lif_series_channels,
     inspect_leica_lif_source,
@@ -28,8 +33,17 @@ from .olympus import (
     inspect_olympus_source,
 )
 from .provenance import decoded_payload_descriptor
-from .probe import tiff_series_identity
+from .probe import (
+    _h5j_channel_order,
+    _nrrd_scalar_descriptor,
+    ome_series_metadata,
+    open_tiff_source,
+    tiff_series_identity,
+    tiff_time_metadata,
+)
+from .geometry import finite_tuple3
 from .source_formats import nifti_runtime_time_unit, volume_reader_mode
+from .scalars import prepare_volume_scalar_array, volume_runtime_dtype
 
 
 _nrrd = None
@@ -48,6 +62,16 @@ def require_nrrd():
             ) from exc
         _nrrd = module
     return _nrrd
+
+
+def _known_shape_bytes(shape, dtype):
+    """Return an array's byte size when both shape and scalar type are known."""
+    if dtype is None:
+        return None
+    try:
+        return math.prod(int(value) for value in shape) * np.dtype(dtype).itemsize
+    except (TypeError, ValueError):
+        return None
 
 
 def require_tifffile():
@@ -80,29 +104,6 @@ def require_nibabel():
     return _nibabel
 
 
-def prepare_decoded_array(array):
-    """Return a native-endian scalar array using the established load dtypes."""
-    array = np.asanyarray(array)
-    if np.iscomplexobj(array):
-        raise TypeError("Complex-valued volumes are not supported.")
-    if not array.dtype.isnative:
-        array = array.byteswap().view(array.dtype.newbyteorder("="))
-    dtype = array.dtype
-    if dtype == np.bool_:
-        array = array.astype(np.uint8, copy=False)
-    elif dtype == np.int8:
-        array = array.astype(np.int16)
-    elif dtype in (np.uint8, np.int16, np.uint16, np.float32, np.float64):
-        pass
-    elif np.issubdtype(dtype, np.integer) or dtype == np.float16:
-        array = array.astype(np.float32)
-    elif np.issubdtype(dtype, np.floating):
-        array = array.astype(np.float32)
-    else:
-        raise TypeError(f"Unsupported volume dtype: {dtype}")
-    return array
-
-
 def safe_scalar_range(array):
     try:
         low = float(np.nanmin(array))
@@ -114,7 +115,7 @@ def safe_scalar_range(array):
     return None
 
 
-def normalize_volume_to_tzyx(data, axes, channel=None):
+def normalize_volume_to_tzyx(data, axes, channel=None, *, reserve_memory=None):
     """Normalize named axes to T,Z,Y,X, retaining T even when singleton."""
     array = np.asanyarray(data)
     labels = [str(axis).upper() for axis in axes]
@@ -128,6 +129,8 @@ def normalize_volume_to_tzyx(data, axes, channel=None):
         if take is None:
             array = np.squeeze(array, axis=index)
         else:
+            if reserve_memory is not None:
+                reserve_memory(array.nbytes // array.shape[index], (array,))
             array = np.take(array, int(take), axis=index)
         labels.pop(index)
 
@@ -203,25 +206,17 @@ def nrrd_time_metadata(header, axes):
 
 
 def h5j_expected_dimensions(handle, channel_group):
-    values = []
-    for key in ("frames", "height", "width"):
-        try:
-            raw = np.asarray(channel_group.attrs.get(key)).reshape(-1)
-            value = int(raw[0]) if raw.size else 0
-        except Exception:
-            value = 0
-        values.append(value)
-    if all(value > 0 for value in values):
-        return tuple(values)
-    try:
-        image_size = tuple(
-            int(value)
-            for value in np.asarray(handle.attrs.get("image_size")).reshape(-1)[:3]
+    keys = ("frames", "height", "width")
+    if all(key in channel_group.attrs for key in keys):
+        return finite_tuple3(
+            [np.asarray(channel_group.attrs[key]).reshape(-1)[0] for key in keys],
+            "H5J dimensions", positive=True, integer=True,
         )
-    except Exception:
-        image_size = ()
-    if len(image_size) == 3 and all(value > 0 for value in image_size):
-        width, height, frames = image_size
+    if "image_size" in handle.attrs:
+        width, height, frames = finite_tuple3(
+            np.asarray(handle.attrs["image_size"]).reshape(-1),
+            "H5J image size", positive=True, integer=True,
+        )
         return frames, height, width
     return None
 
@@ -245,15 +240,76 @@ def crop_h5j_codec_padding(array, expected_dimensions):
     )
 
 
-def _h5j_ffmpeg_input_options(raw):
-    """Preserve every frame in legacy H5J channels stored as MP4."""
-    header = memoryview(np.ascontiguousarray(raw)).cast("B")[:8].tobytes()
+def _h5j_ffmpeg_input_options(header):
+    """Preserve every frame in legacy H5J channels stored as MP4.
+
+    Only the payload's first few bytes are required for the MP4-vs-HEVC
+    transport detection; callers pass that bounded header, never a full read.
+    """
+    header = bytes(memoryview(header)[:8])
     if len(header) == 8 and header[4:8] == b"ftyp":
         return ("-ignore_editlist", "1")
     return ()
 
 
-def run_h5j_ffmpeg(executable, args, *, cancel_check=None):
+_H5J_TRANSPORT_CHUNK_BYTES = 1024 * 1024
+
+
+def _h5j_encoded_payload_bytes(source):
+    """Return the encoded byte count of an HDF5 dataset handle or a buffer."""
+    import h5py
+
+    if isinstance(source, h5py.Dataset):
+        return int(np.prod(source.shape, dtype=np.int64)) * int(source.dtype.itemsize)
+    view = memoryview(source)
+    if view.ndim != 1 or view.format != "B":
+        view = memoryview(np.ascontiguousarray(source)).cast("B")
+    return len(view)
+
+
+def _write_h5j_encoded_payload(source, destination_path, *, cancel_check=None):
+    """Write one encoded H5J payload to FFmpeg's input file in fixed slabs.
+
+    HDF5 dataset handles transfer with bounded <=1 MiB slices so import never
+    needs the complete encoded channel in memory. Buffers stream through
+    memoryview slices of the same bound. Returns the payload's first bytes for
+    the legacy MP4 transport detection.
+    """
+    import h5py
+
+    from madi3d_app.io_utils import check_cancelled
+
+    dataset = isinstance(source, h5py.Dataset)
+    if dataset:
+        header_source = np.ascontiguousarray(source[:8])
+        data = None
+    else:
+        data = memoryview(source)
+        if data.ndim != 1 or data.format != "B":
+            data = memoryview(np.ascontiguousarray(source)).cast("B")
+        header_source = data[:8]
+    header = memoryview(header_source).cast("B")[:8].tobytes()
+    with open(destination_path, "wb") as stream:
+        if dataset:
+            itemsize = max(1, int(source.dtype.itemsize))
+            block = max(1, _H5J_TRANSPORT_CHUNK_BYTES // itemsize)
+            for offset in range(0, int(source.size), block):
+                if offset:
+                    check_cancelled(cancel_check)  # Cancellation between slabs.
+                stream.write(
+                    memoryview(
+                        np.ascontiguousarray(source[offset:offset + block])
+                    ).cast("B")
+                )
+        else:
+            for offset in range(0, len(data), _H5J_TRANSPORT_CHUNK_BYTES):
+                if offset:
+                    check_cancelled(cancel_check)  # Cancellation between slabs.
+                stream.write(data[offset:offset + _H5J_TRANSPORT_CHUNK_BYTES])
+    return header
+
+
+def run_h5j_ffmpeg(executable, args, *, cancel_check=None, operation="H5J"):
     from madi3d_app.integrations.ffmpeg.backend import (
         FFmpegProcessCancelled,
         FFmpegProcessTimeout,
@@ -261,7 +317,8 @@ def run_h5j_ffmpeg(executable, args, *, cancel_check=None):
     )
 
     try:
-        return run_ffmpeg_process(executable, args, cancel_check=cancel_check)
+        return run_ffmpeg_process(executable, args, cancel_check=cancel_check,
+                                  operation=operation)
     except FFmpegProcessCancelled as exc:
         raise InterruptedError("H5J FFmpeg operation cancelled.") from exc
     except FFmpegProcessTimeout as exc:
@@ -448,12 +505,178 @@ class VolumeDecodeContract:
         )
 
 
+def _validate_microscopy_series_request(selector, contract, inspection, *, source_name):
+    """Match a typed, container-checked request to its currently inspected series."""
+    if selector != contract.selector:
+        raise ValueError(
+            f"{source_name} selector does not match the probe-owned decode contract."
+        )
+    if not isinstance(selector, dict):
+        raise TypeError(
+            f"{source_name} selector must be a structured series/channel record."
+        )
+    try:
+        selector_series_index = int(selector["series_index"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"{source_name} selector is missing its series index.") from exc
+    if contract.series_index is None or selector_series_index != contract.series_index:
+        raise ValueError(
+            f"{source_name} selector series does not match the persisted decode contract."
+        )
+    selected = next(
+        (item for item in inspection.series if item.index == contract.series_index),
+        None,
+    )
+    if selected is None:
+        raise ValueError(
+            f"Persisted {source_name} series index {contract.series_index} is unavailable."
+        )
+    selector_identity = str(selector.get("series_identity") or "")
+    if (
+        not contract.series_identity
+        or selector_identity != contract.series_identity
+        or selected.identity != contract.series_identity
+    ):
+        raise ValueError(
+            f"Persisted {source_name} series identity does not match the selected source series."
+        )
+    if tuple(selected.shape) != contract.source_axis_sizes:
+        raise ValueError(
+            f"{source_name} source shape {selected.shape!r} does not match the "
+            f"probe-owned axis contract {contract.source_axis_sizes!r}."
+        )
+    return selected
+
+
 @dataclass(frozen=True)
 class DecodedVolumePayload:
     frame_zyx: np.ndarray
     scalar_range: tuple[float, float]
     time_info: dict[str, Any] | None
     source_descriptor: dict[str, Any] = field(default_factory=dict)
+    backing_revisions: tuple[tuple[str, tuple | None], ...] = ()
+
+
+_UNKNOWN_BACKING_PATH = "<unknown>"
+
+
+def _resolved_backing_path(path, base_directory):
+    resolved = resolve_file_locator(path, base_directory)
+    return os.path.normcase(resolved) if os.path.isabs(resolved) else resolved
+
+
+def _capture_backing_revisions(paths=(), *, unknown=False, base_directory=None):
+    revisions = []
+    seen = set()
+    for path in paths:
+        try:
+            resolved = _resolved_backing_path(path, base_directory or os.curdir)
+        except (TypeError, ValueError, OSError):
+            unknown = True
+            continue
+        key = os.path.normcase(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            revision = file_revision(resolved) if os.path.isabs(resolved) else None
+        except (OSError, TypeError, ValueError):
+            revision = None
+        revisions.append((resolved, revision))
+    if unknown:
+        revisions.append((_UNKNOWN_BACKING_PATH, None))
+    return tuple(revisions)
+
+
+def verify_backing_revisions(revisions):
+    """Reject changes to known pixel files; unknown evidence remains unknown."""
+    for path, revision in revisions:
+        if revision is None:
+            continue
+        try:
+            current = file_revision(path)
+        except OSError as exc:
+            raise RuntimeError(
+                f"External volume backing changed during decoding: {path}"
+            ) from exc
+        if current != revision:
+            raise RuntimeError(
+                f"External volume backing changed during decoding: {path}"
+            )
+
+
+def _nrrd_external_backing(header, descriptor_path):
+    value = header.get("datafile", header.get("data file"))
+    if value is None:
+        return ()
+    if not isinstance(value, (str, os.PathLike)):
+        return ((_UNKNOWN_BACKING_PATH, None),)
+    value = os.fspath(value)
+    if not value:
+        return ((_UNKNOWN_BACKING_PATH, None),)
+    return _capture_backing_revisions(
+        (value,), base_directory=os.path.dirname(os.path.abspath(descriptor_path))
+    )
+
+
+def _tiff_external_backing_paths(series, descriptor_path):
+    """Find external files represented in the selected series' pages."""
+    root_path = os.path.normcase(os.path.abspath(descriptor_path))
+    paths = []
+    unknown = False
+    try:
+        pages = series.pages
+        for page in pages:
+            parent = getattr(page, "parent", None)
+            handle = getattr(parent, "filehandle", None)
+            member_path = getattr(handle, "path", None)
+            if member_path:
+                resolved = _resolved_backing_path(
+                    member_path, os.path.dirname(root_path)
+                )
+                if resolved != root_path:
+                    paths.append(resolved)
+        if not pages:
+            unknown = True
+    except Exception:
+        unknown = True
+
+    return tuple(paths), unknown
+
+
+def _ome_external_backing_paths(ome_xml, series_index, descriptor_path):
+    paths = []
+    unknown = False
+    root_path = os.path.normcase(os.path.abspath(descriptor_path))
+    base = os.path.dirname(root_path)
+    if ome_xml:
+        try:
+            root = ET.fromstring(ome_xml)
+            images = [
+                node for node in root.iter()
+                if node.tag.rsplit("}", 1)[-1] == "Image"
+            ]
+            image = images[int(series_index)]
+            pixels = next(
+                node for node in image
+                if node.tag.rsplit("}", 1)[-1] == "Pixels"
+            )
+            for tiff_data in pixels:
+                if tiff_data.tag.rsplit("}", 1)[-1] != "TiffData":
+                    continue
+                for uuid_node in tiff_data:
+                    if uuid_node.tag.rsplit("}", 1)[-1] != "UUID":
+                        continue
+                    if uuid_node.text and uuid_node.text == root.get("UUID"):
+                        continue
+                    filename = uuid_node.attrib.get("FileName")
+                    if filename:
+                        resolved = _resolved_backing_path(filename, base)
+                        if resolved != root_path:
+                            paths.append(resolved)
+        except Exception:
+            unknown = True
+    return tuple(paths), unknown
 
 
 class VolumePayloadDecoder:
@@ -464,11 +687,22 @@ class VolumePayloadDecoder:
         *,
         ffmpeg_executable=None,
         cancel_check: Callable[[], bool] | None = None,
+        reserve_memory=None,
     ):
         self.ffmpeg_executable = (
             os.fspath(ffmpeg_executable) if ffmpeg_executable else None
         )
         self.cancel_check = cancel_check or (lambda: False)
+        self._memory_reserved = False
+        self.reserve_memory = reserve_memory
+
+    def _check_resources(self, *, memory_bytes=0, disk_bytes=0, directory=None):
+        """Keep disk checks while avoiding a duplicate RAM gate after admission."""
+        check_resources(
+            memory_bytes=0 if self._memory_reserved else memory_bytes,
+            disk_bytes=disk_bytes,
+            directory=directory,
+        )
 
     @staticmethod
     def reader_mode(path):
@@ -493,10 +727,22 @@ class VolumePayloadDecoder:
         *,
         source_axis_order=(),
         source_axis_semantics=(),
+        backing_revisions=(),
+        reserve_memory=None,
     ):
         source_array = np.asanyarray(tzyx)
-        tzyx = prepare_decoded_array(tzyx)
+        if reserve_memory is not None:
+            dtype = source_array.dtype
+            runtime = volume_runtime_dtype(dtype)
+            normalization_bytes = (source_array.nbytes if not dtype.isnative else 0)
+            if runtime != dtype.newbyteorder("="):
+                normalization_bytes += source_array.size * runtime.itemsize
+            if normalization_bytes:
+                reserve_memory(normalization_bytes, (source_array,))
+        tzyx = prepare_volume_scalar_array(tzyx)
         scalar_range = safe_scalar_range(tzyx) or (0.0, 1.0)
+        if reserve_memory is not None and not tzyx[0].flags.c_contiguous:
+            reserve_memory(tzyx[0].nbytes, (source_array, tzyx))
         frame = np.ascontiguousarray(tzyx[0])
         source_axis_order = tuple(str(value) for value in source_axis_order)
         if source_axis_semantics:
@@ -534,6 +780,7 @@ class VolumePayloadDecoder:
                 axis_order=source_axis_order,
                 axis_semantics=source_axis_semantics,
             ),
+            backing_revisions=tuple(backing_revisions),
         )
 
     @staticmethod
@@ -566,37 +813,7 @@ class VolumePayloadDecoder:
         return axes, shape
 
     @staticmethod
-    def _tiff_time_metadata(tiff, axes):
-        imagej = getattr(tiff, "imagej_metadata", None) or {}
-        time_spacing = 1.0
-        time_units = "frame"
-        if "T" in axes:
-            if bool(getattr(tiff, "is_lsm", False)):
-                try:
-                    candidate = float(
-                        dict(getattr(tiff, "lsm_metadata", None) or {}).get(
-                            "TimeIntervall"
-                        )
-                    )
-                    if math.isfinite(candidate) and candidate > 0:
-                        return candidate, "s"
-                except (TypeError, ValueError):
-                    pass
-            for key in ("finterval", "timeincrement", "TimeIncrement"):
-                try:
-                    candidate = float(imagej.get(key))
-                    if math.isfinite(candidate) and candidate > 0:
-                        time_spacing = candidate
-                        break
-                except Exception:
-                    pass
-            time_units = str(
-                imagej.get("tunit") or imagej.get("timeunit") or "frame"
-            )
-        return time_spacing, time_units
-
-    @staticmethod
-    def _select_tiff_source_subspace(data, axes, source_subselection):
+    def _select_tiff_source_subspace(data, axes, source_subselection, *, reserve_memory=None):
         array = np.asanyarray(data)
         labels = [str(label).upper() for label in axes]
         supplied = {
@@ -626,6 +843,8 @@ class VolumePayloadDecoder:
                 raise ValueError(
                     f"Persisted TIFF scene index {value!r} is unavailable for axis {label!r}."
                 )
+            if reserve_memory is not None:
+                reserve_memory(array.nbytes // size, (array,))
             array = np.take(array, index, axis=axis_index)
             labels.pop(axis_index)
         return array, "".join(labels)
@@ -647,9 +866,39 @@ class VolumePayloadDecoder:
                 )
             else:
                 parsed.append((0, "", 0, {}, selector, None))
-        with module.TiffFile(path) as tiff:
+        source_revisions = _capture_backing_revisions((path,))
+        with open_tiff_source(module.TiffFile, path) as (tiff, _):
+            verify_backing_revisions(source_revisions)
             cache = {}
-            results = []
+            ome_backings = {}
+            remaining = Counter((entry[0], entry[2]) for entry in parsed)
+            retained_outputs = []
+            data = None
+
+            def reserve(future_bytes, arrays=()):
+                if self.cancel_check():
+                    raise InterruptedError("Volume decoding was cancelled.")
+                roots = []
+                live_outputs = [ref for ref in retained_outputs if ref() is not None]
+                retained_outputs[:] = live_outputs
+                backing = [entry[0] for entry in cache.values()]
+                current = () if data is None else (data,)
+                for array in (*backing, *(ref() for ref in live_outputs), *current, *arrays):
+                    if array is None:
+                        continue
+                    while isinstance(array.base, np.ndarray):
+                        array = array.base
+                    if not any(array is root for root in roots):
+                        roots.append(array)
+                if self.reserve_memory is not None:
+                    self.reserve_memory(future_bytes, tuple(roots))
+                else:
+                    # A bare memory_reserved flag is not evidence that late
+                    # header facts were admitted by an operation token.
+                    check_resources(memory_bytes=future_bytes)
+                if self.cancel_check():
+                    raise InterruptedError("Volume decoding was cancelled.")
+
             for (
                 series_index,
                 series_identity,
@@ -658,9 +907,24 @@ class VolumePayloadDecoder:
                 channel,
                 explicit_axes,
             ) in parsed:
+                parent_key = (series_index, pyramid_level)
+                payload = selected = None
                 if self.cancel_check():
                     raise InterruptedError("Volume decoding was cancelled.")
                 try:
+                    if series_index not in ome_backings:
+                        declared_paths, unknown_declared = _ome_external_backing_paths(
+                            getattr(tiff, "ome_metadata", None), series_index, path
+                        )
+                        declared_revisions = _capture_backing_revisions(declared_paths)
+                        # tifffile may silently zero planes for missing companions.
+                        for member, revision in declared_revisions:
+                            if revision is None or not os.path.isfile(member):
+                                raise FileNotFoundError(
+                                    errno.ENOENT, "Missing OME-TIFF pixel backing", member
+                                )
+                        ome_backings[series_index] = declared_revisions, unknown_declared
+                    declared_revisions, unknown_declared = ome_backings[series_index]
                     if not 0 <= series_index < len(tiff.series):
                         raise ValueError(
                             f"Persisted TIFF series index {series_index} is unavailable."
@@ -674,10 +938,9 @@ class VolumePayloadDecoder:
                             f"Persisted TIFF pyramid level {pyramid_level} is unavailable."
                         )
                     cache_key = (
+                        source_revisions,
                         series_index,
                         pyramid_level,
-                        tuple(sorted(source_subselection.items())),
-                        str(explicit_axes or ""),
                     )
                     series = levels[pyramid_level]
                     actual_identity = tiff_series_identity(
@@ -691,51 +954,86 @@ class VolumePayloadDecoder:
                             "Persisted TIFF series identity does not match the selected source series."
                         )
                     if cache_key not in cache:
-                        source_dtype = np.dtype(series.dtype)
-                        runtime_dtype = prepare_decoded_array(
-                            np.empty(0, dtype=source_dtype)
-                        ).dtype
-                        # Cover source pixels, normalized channels and a temporary
-                        # copy during VTK import. Account for scalar promotion
-                        # without assuming every TIFF sample occupies 16 bytes.
-                        check_resources(
-                            memory_bytes=math.prod(int(v) for v in series.shape)
-                            * max(source_dtype.itemsize, runtime_dtype.itemsize) * 3
+                        member_paths, unknown_members = _tiff_external_backing_paths(
+                            series, path
                         )
+                        declared_members = dict(declared_revisions)
+                        page_revisions = _capture_backing_revisions(
+                            (member for member in member_paths if member not in declared_members),
+                            unknown=unknown_declared or unknown_members,
+                        )
+                        backing_revisions = source_revisions + declared_revisions + page_revisions
+                        source_dtype = np.dtype(series.dtype)
+                        prepare_volume_scalar_array(np.empty(0, dtype=source_dtype))
+                        reserve(math.prod(int(v) for v in series.shape) * source_dtype.itemsize)
+                        verify_backing_revisions(backing_revisions)
                         data = series.asarray()
+                        verify_backing_revisions(backing_revisions)
                         if self.cancel_check():
                             raise InterruptedError("Volume decoding was cancelled.")
-                        data, source_axes = self._select_tiff_source_subspace(
-                            data,
-                            str(series.axes).upper(),
-                            source_subselection,
-                        )
-                        axes, _shape = self._validated_tiff_axes(
-                            source_axes,
-                            data.shape,
-                            explicit_axes,
-                        )
-                        time_spacing, time_units = self._tiff_time_metadata(
-                            tiff, axes
-                        )
-                        cache[cache_key] = (
-                            data,
-                            axes,
-                            time_spacing,
-                            time_units,
-                        )
-                    data, axes, time_spacing, time_units = cache[cache_key]
-                    results.append(
-                        self._payload(
-                            normalize_volume_to_tzyx(data, axes, channel=channel),
-                            time_spacing,
-                            time_units,
-                            source_axis_order=axes,
-                        )
+                        cache[cache_key] = (data, backing_revisions)
+                        data = None
+                    data, backing_revisions = cache[cache_key]
+                    verify_backing_revisions(backing_revisions)
+                    data, source_axes = self._select_tiff_source_subspace(
+                        data, str(series.axes).upper(), source_subselection,
+                        reserve_memory=reserve,
                     )
+                    axes, _shape = self._validated_tiff_axes(source_axes, data.shape, explicit_axes)
+                    time_spacing, time_units = tiff_time_metadata(
+                        dict(getattr(tiff, "imagej_metadata", None) or {}),
+                        dict(getattr(tiff, "lsm_metadata", None) or {}),
+                        ome_series_metadata(tiff.ome_metadata, series_index)[1],
+                        is_lsm=bool(getattr(tiff, "is_lsm", False)),
+                        time_axis_length=(
+                            int(_shape[axes.index("T")]) if "T" in axes else 1
+                        ),
+                    )
+                    selected = normalize_volume_to_tzyx(
+                        data, axes, channel=channel, reserve_memory=reserve,
+                    )
+                    data = None
+                    if remaining[parent_key] == 1:
+                        cache.pop(cache_key, None)
+                    payload = self._payload(
+                        selected,
+                        time_spacing,
+                        time_units,
+                        source_axis_order=axes,
+                        backing_revisions=backing_revisions,
+                        reserve_memory=reserve,
+                    )
+                    selected = None
+                    # Only the returned payload and still-needed parents remain
+                    # when byte staging and VTK publication begin.
+                    if self.reserve_memory is not None:
+                        reserve(2 * payload.frame_zyx.nbytes,
+                                (payload.frame_zyx, payload.time_info.get("data")))
+                    if self.cancel_check():
+                        raise InterruptedError("Volume decoding was cancelled.")
+                    verify_backing_revisions(backing_revisions)
+                    for array in (payload.frame_zyx, payload.time_info.get("data")):
+                        if array is not None:
+                            while isinstance(array.base, np.ndarray):
+                                array = array.base
+                            retained_outputs.append(weakref.ref(array))
+                    array = data = None
+                    remaining[parent_key] -= 1
+                    if not remaining[parent_key]:
+                        cache.pop(cache_key, None)
+                    yield payload
+                    del payload
+                except InterruptedError:
+                    raise
                 except Exception as exc:
-                    results.append(exc)
-        return results
+                    # Do not retain failed allocation frames (and their arrays)
+                    # in the exception yielded to a caller.
+                    exc.__traceback__ = None
+                    payload = selected = data = None
+                    remaining[parent_key] -= 1
+                    if not remaining[parent_key]:
+                        cache.pop((source_revisions, *parent_key), None)
+                    yield exc
 
     def _decode_nrrd_many(self, path, selectors, decode_contracts=None):
         selectors = list(selectors)
@@ -760,12 +1058,21 @@ class VolumePayloadDecoder:
             raise ValueError(
                 "NRRD decode contracts must correspond one-to-one with selectors."
             )
-        sizes = [math.prod(contract.source_axis_sizes) for contract in decode_contracts
+        sizes = [contract.source_axis_sizes for contract in decode_contracts
                  if isinstance(contract, VolumeDecodeContract)]
-        if sizes:
-            check_resources(memory_bytes=max(sizes) * 16)
-        array, header = require_nrrd().read(path)
-        results = []
+        nrrd = require_nrrd()
+        descriptor_path = os.fspath(path)
+        header_before = nrrd.read_header(descriptor_path)
+        source_dtype, _bit_depth = _nrrd_scalar_descriptor(header_before.get("type"))
+        if sizes and source_dtype is not None:
+            self._check_resources(
+                memory_bytes=max(math.prod(size) for size in sizes) * np.dtype(source_dtype).itemsize
+            )
+        backing_revisions = _nrrd_external_backing(header_before, path)
+        array, header = nrrd_stream.read_nrrd(
+            descriptor_path, index_order="F", cancel_check=self.cancel_check
+        )
+        verify_backing_revisions(backing_revisions)
         for selector, contract in zip(selectors, decode_contracts):
             if self.cancel_check():
                 raise InterruptedError("Volume decoding was cancelled.")
@@ -789,25 +1096,29 @@ class VolumePayloadDecoder:
                     )
                 axes = contract.normalization_axes
                 time_spacing, time_units = nrrd_time_metadata(header, axes)
-                results.append(
-                    self._payload(
-                        normalize_volume_to_tzyx(array, axes, channel=selector),
-                        time_spacing,
-                        time_units,
-                        source_axis_order=contract.source_axis_order,
-                        source_axis_semantics=contract.source_axis_semantics,
-                    )
+                yield self._payload(
+                    normalize_volume_to_tzyx(array, axes, channel=selector),
+                    time_spacing,
+                    time_units,
+                    source_axis_order=contract.source_axis_order,
+                    source_axis_semantics=contract.source_axis_semantics,
+                    backing_revisions=backing_revisions,
                 )
             except Exception as exc:
-                results.append(exc)
-        return results
+                yield exc
 
     def _decode_nifti(self, path):
         nibabel = require_nibabel()
         image = nibabel.load(path, mmap=True)
         shape = getattr(image, "shape", None) or getattr(image.dataobj, "shape", ())
-        if shape:
-            check_resources(memory_bytes=math.prod(int(v) for v in shape) * 16)
+        source_dtype = getattr(image.dataobj, "dtype", None)
+        # Nonidentity ArrayProxy scaling can widen the result. Stored scalar
+        # width alone is not evidence of that materialized allocation.
+        unscaled = (getattr(image.dataobj, "slope", None) == 1
+                    and getattr(image.dataobj, "inter", None) == 0)
+        allocation_bytes = _known_shape_bytes(shape, source_dtype) if unscaled else None
+        if allocation_bytes is not None:
+            self._check_resources(memory_bytes=allocation_bytes)
         data = np.asanyarray(image.dataobj)
         if data.ndim < 2:
             raise ValueError(f"NIfTI volume has unsupported shape {data.shape}.")
@@ -839,54 +1150,61 @@ class VolumePayloadDecoder:
             source_axis_order=axes,
         )
 
-    def _decode_h5j_stream(self, raw, expected_dimensions):
+    def _decode_h5j_stream(self, source, expected_dimensions):
         if not self.ffmpeg_executable:
             raise RuntimeError(
                 "H5J loading started without a prepared FFmpeg executable."
             )
-        from madi3d_app.io_utils import check_resources, check_cancelled
-        if expected_dimensions is not None:
-            z, y, x = (int(v) for v in expected_dimensions)
-            # Include codec padding, TIFF overhead and the encoded input.
-            padded = max(64, ((x + 31) // 32) * 32) * max(64, ((y + 31) // 32) * 32) * max(1, z)
-            check_resources(disk_bytes=padded * 8 + np.asarray(raw).nbytes)
+        from madi3d_app.io_utils import check_cancelled
+        from madi3d_app.integrations.ffmpeg.backend import (
+            H5J_DECODER_FILTER, read_grayscale_y4m_header,
+        )
+        # The encoded copy is known; decoder scratch and output depth are not.
+        self._check_resources(disk_bytes=_h5j_encoded_payload_bytes(source))
         temporary = tempfile.mkdtemp(prefix="h5j_")
         try:
             encoded = os.path.join(temporary, "data.h265")
-            with open(encoded, "wb") as stream:
-                data = memoryview(np.ascontiguousarray(raw)).cast('B')
-                for offset in range(0, len(data), 1024 * 1024):
-                    check_cancelled(self.cancel_check)
-                    stream.write(data[offset:offset + 1024 * 1024])
-            input_options = _h5j_ffmpeg_input_options(raw)
-            pattern = os.path.join(temporary, "frame_%06d.tif")
+            header = _write_h5j_encoded_payload(
+                source, encoded, cancel_check=self.cancel_check
+            )
+            input_options = _h5j_ffmpeg_input_options(header)
+            decoded_path = os.path.join(temporary, "decoded.y4m")
             process = run_h5j_ffmpeg(
                 self.ffmpeg_executable,
                 [
                     "-y", "-v", "error", *input_options, "-i", encoded,
-                    "-compression_algo", "raw", pattern,
+                    # Negotiate native 8/12-bit gray without TIFF's 16-bit
+                    # rescaling. FFmpeg also handles limited-range YUV input.
+                    "-vf", H5J_DECODER_FILTER, "-strict", "-1",
+                    "-fps_mode", "passthrough", "-f", "yuv4mpegpipe", decoded_path,
                 ],
                 cancel_check=self.cancel_check,
+                operation="H5J decode",
             )
             if process.returncode != 0:
                 stderr = (process.stderr or b"").decode("utf-8", "replace")[-4000:]
                 raise RuntimeError(f"FFmpeg H5J decoding failed:\n{stderr}")
-            frames = sorted(glob.glob(os.path.join(temporary, "frame_*.tif")))
-            if not frames:
-                raise RuntimeError("No frames decoded from H5J channel")
-            first = require_tifffile().imread(frames[0])
-            shape = (len(frames), *first.shape)
-            check_resources(memory_bytes=int(np.prod(shape)) * first.dtype.itemsize)
-            array = np.empty(shape, dtype=first.dtype)
-            array[0] = first
-            os.remove(frames[0])
-            for index, frame_path in enumerate(frames[1:], start=1):
-                check_cancelled(self.cancel_check)
-                frame = require_tifffile().imread(frame_path)
-                if frame.shape != first.shape or frame.dtype != first.dtype:
-                    raise ValueError("H5J decoded frames have inconsistent shape or dtype.")
-                array[index] = frame
-                os.remove(frame_path)
+            with open(decoded_path, "rb") as stream:
+                width, height, bit_depth = read_grayscale_y4m_header(stream)
+                dtype = np.dtype(np.uint8 if bit_depth == 8 else "<u2")
+                frame_bytes = width * height * dtype.itemsize
+                # FFmpeg emits a fixed FRAME marker without per-frame tags.
+                count, remainder = divmod(os.path.getsize(decoded_path) - stream.tell(), frame_bytes + 6)
+                if count == 0 or remainder:
+                    raise ValueError("H5J decoding produced missing or incomplete frames.")
+                memory_bytes = count * frame_bytes
+                if expected_dimensions is not None:
+                    z, y, x = expected_dimensions
+                    if y < height or x < width:
+                        memory_bytes += z * y * x * dtype.itemsize
+                self._check_resources(memory_bytes=memory_bytes)
+                array = np.empty((count, height, width), dtype=dtype)
+                for index in range(count):
+                    check_cancelled(self.cancel_check)
+                    if stream.read(6) != b"FRAME\n":
+                        raise ValueError("Invalid decoded H5J frame marker.")
+                    if stream.readinto(memoryview(array[index]).cast("B")) != frame_bytes:
+                        raise ValueError("H5J decoding produced an incomplete frame.")
             return crop_h5j_codec_padding(array, expected_dimensions)
         finally:
             shutil.rmtree(temporary, ignore_errors=True)
@@ -894,44 +1212,20 @@ class VolumePayloadDecoder:
     def _decode_h5j_many(self, path, selectors):
         import h5py
 
-        results = []
         with h5py.File(path, "r") as handle:
             group = handle["/Channels"]
             expected = h5j_expected_dimensions(handle, group)
-            raw_order = group.attrs.get(
-                "channel_order", handle.attrs.get("channel_order")
-            )
-            keys = []
-            if raw_order is not None:
-                if isinstance(raw_order, (bytes, str)):
-                    try:
-                        raw_order = json.loads(
-                            raw_order.decode("utf-8", "replace")
-                            if isinstance(raw_order, bytes)
-                            else raw_order
-                        )
-                    except Exception:
-                        raw_order = [raw_order]
-                keys = [
-                    value.decode("utf-8", "replace")
-                    if isinstance(value, bytes)
-                    else str(value)
-                    for value in np.asarray(raw_order).reshape(-1)
-                ]
+            keys, explicit_order, order_error = _h5j_channel_order(handle, group)
             available = {str(key) for key in group.keys()}
-            if keys and (
-                len(set(keys)) != len(keys) or set(keys) != available
-            ):
-                raise ValueError(
-                    "H5J channel-order metadata does not match the /Channels datasets."
-                )
+            if order_error:
+                raise ValueError(order_error)
             for selector in selectors:
                 if self.cancel_check():
                     raise InterruptedError("Volume decoding was cancelled.")
                 try:
                     if isinstance(selector, str):
                         key = selector
-                    elif not keys:
+                    elif not explicit_order and len(keys) != 1:
                         raise ValueError(
                             "H5J channel order is unresolved; select channels by explicit name."
                         )
@@ -939,11 +1233,9 @@ class VolumePayloadDecoder:
                         key = keys[0 if selector is None else int(selector)]
                     if key not in available:
                         raise ValueError(f"H5J channel {key!r} is unavailable.")
-                    check_resources(memory_bytes=int(group[key].size) * int(group[key].dtype.itemsize)
-                                    + (math.prod(expected) * 8 if expected is not None else 0))
-                    raw = group[key][:]
-                    array = self._decode_h5j_stream(raw, expected)
-                    del raw
+                    # The dataset handle streams to FFmpeg's input file in
+                    # bounded slabs; no complete encoded channel is read here.
+                    array = self._decode_h5j_stream(group[key], expected)
                     payload = self._payload(
                         array[np.newaxis, ...],
                         source_axis_order=("Channels", "Z", "Y", "X"),
@@ -951,19 +1243,16 @@ class VolumePayloadDecoder:
                             "channel", "space-z", "space-y", "space-x"
                         ),
                     )
-                    results.append(
-                        DecodedVolumePayload(
-                            frame_zyx=payload.frame_zyx,
-                            scalar_range=payload.scalar_range,
-                            time_info=None,
-                            source_descriptor=payload.source_descriptor,
-                        )
+                    yield DecodedVolumePayload(
+                        frame_zyx=payload.frame_zyx,
+                        scalar_range=payload.scalar_range,
+                        time_info=None,
+                        source_descriptor=payload.source_descriptor,
                     )
                 except InterruptedError:
                     raise
                 except Exception as exc:
-                    results.append(exc)
-        return results
+                    yield exc
 
     @staticmethod
     def _resolved_olympus_axes(source_axes, contract):
@@ -1111,49 +1400,9 @@ class VolumePayloadDecoder:
                 "Olympus source family changed since this request was prepared; "
                 "retry loading or relink the source."
             )
-        if selector != contract.selector:
-            raise ValueError(
-                "Olympus selector does not match the probe-owned decode contract."
-            )
-        if not isinstance(selector, dict):
-            raise TypeError("Olympus selector must be a structured series/channel record.")
-        try:
-            selector_series_index = int(selector["series_index"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise ValueError("Olympus selector is missing its series index.") from exc
-        if (
-            contract.series_index is None
-            or selector_series_index != contract.series_index
-        ):
-            raise ValueError(
-                "Olympus selector series does not match the persisted decode contract."
-            )
-        selected = next(
-            (
-                item
-                for item in inspection.series
-                if item.index == contract.series_index
-            ),
-            None,
+        selected = _validate_microscopy_series_request(
+            selector, contract, inspection, source_name="Olympus"
         )
-        if selected is None:
-            raise ValueError(
-                f"Persisted Olympus series index {contract.series_index} is unavailable."
-            )
-        selector_identity = str(selector.get("series_identity") or "")
-        if (
-            not contract.series_identity
-            or selector_identity != contract.series_identity
-            or selected.identity != contract.series_identity
-        ):
-            raise ValueError(
-                "Persisted Olympus series identity does not match the selected source series."
-            )
-        if tuple(selected.shape) != contract.source_axis_sizes:
-            raise ValueError(
-                f"Olympus source shape {selected.shape!r} does not match the "
-                f"probe-owned axis contract {contract.source_axis_sizes!r}."
-            )
         resolved_axes = cls._resolved_olympus_axes(selected.axes, contract)
         if resolved_axes != contract.source_axis_order:
             raise ValueError(
@@ -1231,12 +1480,28 @@ class VolumePayloadDecoder:
         for series_index, requests in groups.items():
             if self.cancel_check():
                 raise InterruptedError("Volume decoding was cancelled.")
+            selected_series = requests[0][1]
+            if inspection.container_format == "olympus-oif":
+                member_paths = tuple(selected_series.member_paths)
+                backing_revisions = _capture_backing_revisions(
+                    member_paths,
+                    unknown=not bool(member_paths),
+                    base_directory=os.path.dirname(os.path.abspath(path)),
+                )
+            else:
+                backing_revisions = ()
             pixels = decode_olympus_series_channels(
                 path,
                 series_index,
                 [request[2] for request in requests],
                 cancel_check=self.cancel_check,
             )
+            try:
+                verify_backing_revisions(backing_revisions)
+            except Exception as exc:
+                for request in requests:
+                    results[request[0]] = exc
+                continue
             if len(pixels) != len(requests):
                 raise RuntimeError(
                     "Olympus pixel reader returned the wrong number of channel results."
@@ -1279,6 +1544,7 @@ class VolumePayloadDecoder:
                         selected.time_units,
                         source_axis_order=contract.source_axis_order,
                         source_axis_semantics=contract.source_axis_semantics,
+                        backing_revisions=backing_revisions,
                     )
                     expected_dimensions = tuple(
                         contract.source_axis_sizes[
@@ -1306,6 +1572,7 @@ class VolumePayloadDecoder:
                         scalar_range=payload.scalar_range,
                         time_info=payload.time_info,
                         source_descriptor=descriptor,
+                        backing_revisions=backing_revisions,
                     )
                 except Exception as exc:
                     results[result_index] = exc
@@ -1323,46 +1590,9 @@ class VolumePayloadDecoder:
             raise ValueError(
                 "Leica LIF source container does not match the persisted decode contract."
             )
-        if selector != contract.selector:
-            raise ValueError(
-                "Leica LIF selector does not match the probe-owned decode contract."
-            )
-        if not isinstance(selector, dict):
-            raise TypeError(
-                "Leica LIF selector must be a structured image/channel record."
-            )
-        try:
-            selector_index = int(selector["series_index"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise ValueError(
-                "Leica LIF selector is missing its series index."
-            ) from exc
-        if contract.series_index is None or selector_index != contract.series_index:
-            raise ValueError(
-                "Leica LIF selector series does not match the persisted decode contract."
-            )
-        selected = next(
-            (item for item in inspection.series if item.index == contract.series_index),
-            None,
+        selected = _validate_microscopy_series_request(
+            selector, contract, inspection, source_name="Leica LIF"
         )
-        if selected is None:
-            raise ValueError(
-                f"Persisted Leica LIF series index {contract.series_index} is unavailable."
-            )
-        selector_identity = str(selector.get("series_identity") or "")
-        if (
-            not contract.series_identity
-            or selector_identity != contract.series_identity
-            or selected.identity != contract.series_identity
-        ):
-            raise ValueError(
-                "Persisted Leica LIF series identity does not match the selected source image."
-            )
-        if tuple(selected.shape) != contract.source_axis_sizes:
-            raise ValueError(
-                f"Leica LIF source shape {selected.shape!r} does not match the "
-                f"probe-owned axis contract {contract.source_axis_sizes!r}."
-            )
         if tuple(selector.get("axes") or ()) != contract.source_axis_order:
             raise ValueError(
                 "Leica LIF selector axes do not match the probe-owned decode contract."
@@ -1605,9 +1835,12 @@ class VolumePayloadDecoder:
                 for result_index, *_ in requests:
                     results[result_index] = error
                 continue
-            check_resources(
-                memory_bytes=math.prod(first_contract.source_axis_sizes) * 24
+            allocation_bytes = _known_shape_bytes(
+                first_contract.source_axis_sizes,
+                requests[0][2].get("scalar_dtype"),
             )
+            if allocation_bytes is not None:
+                self._check_resources(memory_bytes=allocation_bytes)
             try:
                 decoded_channels = decode_nikon_nd2_series_channels(
                     path,
@@ -1803,8 +2036,12 @@ class VolumePayloadDecoder:
                 for result_index, *_ in requests:
                     results[result_index] = error
                 continue
-            # Bound the final arrays plus native plane buffers and decoded payload copies.
-            check_resources(memory_bytes=math.prod(first_contract.source_axis_sizes) * 24)
+            allocation_bytes = _known_shape_bytes(
+                first_contract.source_axis_sizes,
+                requests[0][2].get("scalar_dtype"),
+            )
+            if allocation_bytes is not None:
+                self._check_resources(memory_bytes=allocation_bytes)
             try:
                 decoded_channels = decode_zeiss_czi_series_channels(
                     path, series_index,
@@ -1858,6 +2095,69 @@ class VolumePayloadDecoder:
                     results[result_index] = exc
         return results
 
+    def decode_iter_many(
+        self,
+        path,
+        selectors: Iterable[Any],
+        *,
+        decode_contracts: Iterable[VolumeDecodeContract | None] | None = None,
+        memory_reserved=False,
+    ):
+        """Yield one result per selector while keeping one source open.
+
+        TIFF, NRRD and H5J produce channels incrementally. Native microscopy
+        readers currently return a complete source-group result; that one
+        unavoidable group owner is drained as each result is consumed.
+        """
+        selectors = list(selectors)
+        mode = self.reader_mode(path)
+        previous_memory_reserved = self._memory_reserved
+        self._memory_reserved = bool(memory_reserved)
+        try:
+            if mode == "tiff":
+                yield from self._decode_tiff_many(path, selectors)
+                return
+            if mode == "nrrd":
+                yield from self._decode_nrrd_many(path, selectors, decode_contracts)
+                return
+            if mode == "h5j":
+                yield from self._decode_h5j_many(path, selectors)
+                return
+            if mode == "nifti":
+                if any(selector not in (None, "") for selector in selectors):
+                    raise ValueError("NIfTI channel selectors are not supported.")
+                if self.cancel_check():
+                    raise InterruptedError("Volume decoding was cancelled.")
+                if not selectors:
+                    return
+                payload = self._decode_nifti(path)
+                # Immutable source pixels may back distinct scene identities.
+                payload.frame_zyx.setflags(write=False)
+                if payload.time_info.get("data") is not None:
+                    payload.time_info["data"].setflags(write=False)
+                for _selector in selectors:
+                    yield payload
+                return
+            if mode in {"olympus", "leica", "nikon", "zeiss-czi"}:
+                if mode == "olympus":
+                    values = self._decode_olympus_many(path, selectors, decode_contracts)
+                elif mode == "leica":
+                    values = self._decode_leica_many(path, selectors, decode_contracts)
+                elif mode == "nikon":
+                    values = self._decode_nikon_many(path, selectors, decode_contracts)
+                else:
+                    values = self._decode_czi_many(path, selectors, decode_contracts)
+                # These reader APIs allocate a complete source group. Keep it
+                # under the single source-group reservation and release each
+                # result reference as soon as the consumer advances.
+                values.reverse()
+                while values:
+                    yield values.pop()
+                return
+            raise RuntimeError(f"Unsupported volume type: {path}")
+        finally:
+            self._memory_reserved = previous_memory_reserved
+
     def decode_many(
         self,
         path,
@@ -1865,41 +2165,10 @@ class VolumePayloadDecoder:
         *,
         decode_contracts: Iterable[VolumeDecodeContract | None] | None = None,
     ):
-        selectors = list(selectors)
-        mode = self.reader_mode(path)
-        if mode == "tiff":
-            return self._decode_tiff_many(path, selectors)
-        if mode == "nrrd":
-            return self._decode_nrrd_many(path, selectors, decode_contracts)
-        if mode == "h5j":
-            return self._decode_h5j_many(path, selectors)
-        if mode == "nifti":
-            if any(selector not in (None, "") for selector in selectors):
-                raise ValueError("NIfTI channel selectors are not supported.")
-            if self.cancel_check():
-                raise InterruptedError("Volume decoding was cancelled.")
-            if not selectors:
-                return []
-            payload = self._decode_nifti(path)
-            # Immutable source pixels may back distinct scene identities. GUI
-            # publication creates independent runtime objects for each request.
-            payload.frame_zyx.setflags(write=False)
-            if payload.time_info.get("data") is not None:
-                payload.time_info["data"].setflags(write=False)
-            return [payload for _selector in selectors]
-        if mode == "olympus":
-            return self._decode_olympus_many(
-                path, selectors, decode_contracts
-            )
-        if mode == "leica":
-            return self._decode_leica_many(
-                path, selectors, decode_contracts
-            )
-        if mode == "nikon":
-            return self._decode_nikon_many(path, selectors, decode_contracts)
-        if mode == "zeiss-czi":
-            return self._decode_czi_many(path, selectors, decode_contracts)
-        raise RuntimeError(f"Unsupported volume type: {path}")
+        """Decode all selected payloads for callers retaining the complete result."""
+        return list(self.decode_iter_many(
+            path, selectors, decode_contracts=decode_contracts
+        ))
 
     def decode(self, path, selector=None, *, decode_contract=None):
         contracts = None if decode_contract is None else [decode_contract]
@@ -1919,7 +2188,6 @@ __all__ = [
     "h5j_expected_dimensions",
     "normalize_volume_to_tzyx",
     "nrrd_time_metadata",
-    "prepare_decoded_array",
     "require_nibabel",
     "require_nrrd",
     "require_tifffile",

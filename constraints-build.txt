@@ -1,0 +1,147 @@
+# Reproducible packaging constraints for MADI3D.
+#
+# Provenance: successful Windows package run 32033520579,
+# job 95398609749, source commit 4c20b418ff8533a3e0dd91692c35426d988ccd2f.
+# Environment: CPython 3.11.9, pip 26.2.1, Windows Server 2025 x64.
+#
+# Direct application/build dependencies are constrained cross-platform. Most
+# retain the versions used by that known-good package; the Qt binding pair is
+# deliberately pinned to the last validated 6.9.x line because PySide6 6.10+
+# with VTK 9.6.2 can enter an infinite native QVTK repaint loop on macOS.
+# The portable transitive closure is constrained identically on all targets.
+# Constraints do not install a package; Windows-only dependencies remain absent
+# on other platforms unless an actual requirement selects them.
+
+# Direct application/build dependencies.
+PyInstaller==6.22.1
+Pillow==12.3.0
+pypdfium2==5.13.0
+# The PySide6 meta-package and Addons are intentionally omitted: all imported
+# Qt modules and the native QVTK smoke test are covered by Essentials.
+PySide6_Essentials==6.9.3
+shiboken6==6.9.3
+SimpleITK==2.5.6
+h5py==3.16.0
+imagecodecs==2026.3.6
+imageio==2.37.4
+liffile==2026.2.16
+nibabel==5.4.2
+numpy==2.4.6
+oiffile==2026.2.8
+# Keep the proven OpenCV version while avoiding its unused native GUI/Qt stack.
+opencv-python-headless==5.0.0.93
+pylibCZIrw==6.1.0
+psutil==7.2.2
+pydantic==2.9.2
+pygame==2.6.1
+pynrrd==1.1.3
+requests==2.34.2
+cloud-volume==12.15.2
+scipy==1.17.1
+scikit-image==0.26.0
+lazy-loader==0.6
+threadpoolctl==3.6.0
+tifffile==2026.3.3
+tqdm==4.70.0
+truststore==0.10.4
+vtk==9.6.2
+
+# Build/runtime transitive closure observed in the known-good Windows package.
+altgraph==0.17.5
+annotated-types==0.8.0
+certifi==2026.7.22
+charset-normalizer==3.5.1
+click==8.5.0
+cloudpickle==3.1.2
+colorama==0.4.6
+contourpy==1.3.3
+cycler==0.12.1
+dask==2026.8.0
+fsspec==2026.9.0
+fonttools==4.63.0
+idna==3.18
+importlib-metadata==9.0.1
+importlib-resources==7.1.0
+kiwisolver==1.5.0
+locket==1.0.0
+matplotlib==3.11.1
+nd2==0.11.3
+ome-types==0.6.3
+packaging==26.3
+cmake==4.1.3
+partd==1.4.2
+pefile==2024.8.26
+pydantic-extra-types==2.11.1
+pydantic-core==2.23.4
+pyinstaller-hooks-contrib==2026.6
+pyparsing==3.3.2
+python-dateutil==2.9.0.post0
+pywin32-ctypes==0.2.3
+PyYAML==6.0.3
+resource-backed-dask-array==0.1.0
+six==1.17.0
+toolz==1.1.0
+typing-extensions==4.16.0
+urllib3==2.7.0
+xsdata==26.2
+zipp==4.1.0
+# pylibCZIrw source-build/runtime dependency closure.
+xmltodict==1.0.4
+validators==0.35.0
+setuptools==65.5.0
+# CloudVolume 12.15.2 runtime closure observed in actual PyInstaller Analysis.
+DracoPy==2.2.0
+pysimdjson==7.0.2
+attrs==26.1.0
+boto3==1.43.114
+botocore==1.43.114
+brotli==1.2.0
+cffi==2.1.1
+chardet==7.6.0
+cloud-files==6.4.3
+compressed-segmentation==2.3.3
+crc32c==2.9.post0
+cryptography==50.0.2
+deflate==0.9.0
+dill==0.4.1
+fasteners==0.20
+fastremap==1.20.0
+gevent==26.9.0
+google-api-core==2.42.0
+google-auth==2.62.0
+google-cloud-core==2.8.0
+google-cloud-storage==3.17.1
+google-crc32c==1.9.0
+google-resumable-media==2.11.0
+googleapis-common-protos==1.75.5
+greenlet==3.5.6
+inflection==0.5.1
+intervaltree==3.2.1
+jmespath==1.1.0
+json5==0.17.3
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+microviewer==1.21.0
+multiprocess==0.70.19
+networkx==3.6.1
+opentelemetry-api==1.45.1
+orjson==3.13.0
+osteoid==0.7.4
+pathos==0.3.5
+posix-ipc==1.3.2 ; sys_platform != "win32"
+ppft==1.7.8
+protobuf==7.36.2
+pyasn1==0.6.4
+pyasn1-modules==0.4.2
+pycparser==3.11
+python-jsonschema-objects==0.5.7
+referencing==0.37.0
+rpds-py==2026.9.1
+rsa==4.9.1
+s3transfer==0.19.2
+simplejpeg==1.9.0
+sortedcontainers==2.4.0
+tenacity==9.2.1
+zope-event==6.2
+zope-interface==8.7
+zstandard==0.25.0

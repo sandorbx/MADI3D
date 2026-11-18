@@ -19,6 +19,7 @@ class RemoteSource:
     resolution: Mapping[str, Any] = field(default_factory=dict)
     local_path: str = field(default="", compare=False)
     problems: tuple[str, ...] = ()
+    local_revision: tuple | None = field(default=None, compare=False, repr=False)
 
     def __post_init__(self):
         if not isinstance(self.source, SourceIdentity):
@@ -31,6 +32,11 @@ class RemoteSource:
         retrieved = resolution.get("retrieved_sha256")
         if retrieved is not None and (not isinstance(retrieved, str) or not re.fullmatch(r"[0-9a-f]{64}", retrieved)):
             raise ValueError("Invalid retrieved asset checksum.")
+        acquisition = resolution.get("local_acquisition")
+        if acquisition is not None:
+            checksum = acquisition.get("checksum_sha256")
+            if not isinstance(checksum, str) or not re.fullmatch(r"[0-9a-f]{64}", checksum):
+                raise ValueError("Invalid local acquisition checksum.")
         json.dumps(resolution, allow_nan=False)
         filename = resolution.get("cache_filename")
         if filename and (not isinstance(filename, str) or not re.fullmatch(
@@ -85,12 +91,15 @@ class RemoteSource:
     def cached_path(self, cache_root=None):
         """Find this exact selected asset locally; retrieval workers verify integrity."""
         from .cache import (
-            asset_cache_filename, cached_file_ready, legacy_asset_cache_filename,
+            asset_cache_filename, cached_file_ready, compact_asset_cache_path, legacy_asset_cache_filename,
             neuronbridge_cache_root,
         )
 
         root = (Path(cache_root).expanduser() if cache_root is not None
                 else neuronbridge_cache_root())
+        if self.resolution.get("local_acquisition"):
+            path = Path(self.local_path) if self.local_path else None
+            return path if path is not None and cached_file_ready(path) else None
         candidates = []
 
         def add(path):
@@ -99,10 +108,14 @@ class RemoteSource:
                 if candidate not in candidates:
                     candidates.append(candidate)
 
+        def add_versioned(filename):
+            add(root / filename)
+            add(compact_asset_cache_path(root, filename))
+
         if self.local_path:
             add(self.local_path)
         if self.resolution.get("cache_filename"):
-            add(root / self.resolution["cache_filename"])
+            add_versioned(self.resolution["cache_filename"])
 
         selected = self.selected_asset
         if selected is not None and selected.asset_type:
@@ -120,7 +133,7 @@ class RemoteSource:
                 url = selected.url or asset.url
                 checksum = selected.checksum_sha256 or asset.checksum_sha256
                 if asset_id or url:
-                    add(root / asset_cache_filename(
+                    add_versioned(asset_cache_filename(
                         library=self.source.library,
                         release=self.source.library_release,
                         data_version=version,
@@ -167,6 +180,9 @@ class RemoteSource:
 
     @property
     def expected_sha256(self):
+        acquisition = self.resolution.get("local_acquisition")
+        if acquisition:
+            return acquisition["checksum_sha256"]
         asset = self.selected_asset
         return (asset.checksum_sha256 if asset else None) or self.resolution.get("retrieved_sha256")
 

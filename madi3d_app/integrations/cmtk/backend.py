@@ -7,12 +7,14 @@ Detection happens only when a CMTK feature explicitly calls ``detect()``.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import RLock
 from typing import Iterable, Optional, Sequence
 
 from madi3d_storage import atomic_write_json, config_file, read_json_object
@@ -20,6 +22,10 @@ from madi3d_storage import atomic_write_json, config_file, read_json_object
 
 MANAGED_WSL_DISTRO = "MADI3D-CMTK"
 CMTK_CORE_TOOLS = ("mat2dof", "dof2mat", "registration", "warp", "reformatx", "describe")
+CMTK_POPULATION_TOOLS = (
+    "groupwise_init", "groupwise_affine", "groupwise_warp", "average_images", "avg_adm",
+    "fit_spline_xform", "streamxform", "make_initial_affine", "fit_affine_xform",
+)
 CMTK_STATE_READY = "ready"
 CMTK_STATE_UNAVAILABLE = "unavailable"
 CMTK_STATE_UNCHECKED = "unchecked"
@@ -114,6 +120,42 @@ def process_error(proc) -> str:
     )
 
 
+def host_wsl_version(runner=subprocess.run) -> str:
+    """Best-effort host package version, distinct from distro WSL 1/2 mode."""
+    try:
+        proc = runner(["wsl.exe", "--version"], capture_output=True, check=False, timeout=5)
+        if proc.returncode != 0:
+            return ""
+        text = decode_console(proc.stdout)
+        # Localized labels vary; match the WSL component, never WSLg/kernel/Windows.
+        match = re.search(
+            r"^[^:\r\n]*\bWSL\b[^:\r\n]*:\s*(\d+\.\d+\.\d+(?:\.\d+)?)(?=\s|$)",
+            text, re.MULTILINE | re.IGNORECASE,
+        )
+        return match.group(1) if match else ""
+    except Exception:
+        return ""
+
+
+def wsl_runtime_guidance(version: str) -> str:
+    """Advisory recovery text; never authorizes changing the shared runtime."""
+    known_problem = version in ("2.4.12", "2.4.12.0")
+    detail = (
+        "WSL 2.4.12 has caused a CMTK process I/O relay stall. Update to 3.0.5 "
+        "or newer; 3.0.5 resolved the reported incident. "
+        if known_problem else
+        "If CMTK startup or process I/O stalls, consider updating the host WSL runtime. "
+    )
+    return (
+        f"Host WSL runtime: {version or 'version undetermined'}. " + detail
+        + "In PowerShell, check with `wsl --version`, then update with `wsl --update` "
+        "(or `wsl --update --web-download` if Microsoft Store is unavailable). "
+        "WSL is shared with other distributions and workloads, including Docker; "
+        "MADI3D does not update it automatically. Reinstalling Ubuntu or CMTK does "
+        "not replace the host WSL runtime."
+    )
+
+
 def _missing_command(text: str) -> bool:
     low = str(text or "").lower()
     return any(marker in low for marker in (
@@ -162,6 +204,42 @@ class CMTKBackend:
     def __init__(self, runner=subprocess.run, cmtk_command="cmtk"):
         self.runner = runner
         self.cmtk_command = str(cmtk_command or "cmtk")
+        self._process_lock = RLock()
+        self._managed_processes = {}
+        self._unconfirmed_processes = set()
+        self._retirement_checks = {}
+
+    def _retain_managed_process(self, process):
+        token = object()
+        with self._process_lock:
+            self._managed_processes[token] = process
+        return token
+
+    def _settle_managed_process(self, token, *, confirmed, retirement_check=None):
+        with self._process_lock:
+            if confirmed:
+                self._managed_processes.pop(token, None)
+                self._unconfirmed_processes.discard(token)
+                self._retirement_checks.pop(token, None)
+            else:
+                self._unconfirmed_processes.add(token)
+                if retirement_check is not None:
+                    self._retirement_checks[token] = retirement_check
+
+    @property
+    def managed_processes_finished(self):
+        """True only after every owned compute process confirms teardown."""
+        with self._process_lock:
+            checks = tuple(self._retirement_checks.items())
+        for token, check in checks:
+            try:
+                confirmed = check()
+            except Exception:
+                confirmed = False
+            if confirmed:
+                self._settle_managed_process(token, confirmed=True)
+        with self._process_lock:
+            return not self._managed_processes
 
     @property
     def label(self):
@@ -217,7 +295,10 @@ class CMTKBackend:
                     timeout=20,
                 )
             except Exception as exc:
-                return False, details + [f"{tool}: {exc}"]
+                failure = f"{tool}: {exc}"
+                if self.kind == "wsl":
+                    failure += "\n" + wsl_runtime_guidance(host_wsl_version(self.runner))
+                return False, details + [failure]
             text = process_error(proc)
             if getattr(proc, "returncode", 1) != 0 or _missing_command(text):
                 return False, details + [f"{tool}: {text or 'validation failed'}"]
@@ -347,6 +428,10 @@ class WSLCMTKBackend(CMTKBackend):
 
     def remove_execution_temp_dir(self, path: str) -> None:
         value = self._validated_execution_temp_path(path)
+        with self._process_lock:
+            if self._unconfirmed_processes:
+                raise CMTKError(
+                    "The WSL CMTK workspace is retained because owned-process cleanup was not confirmed.")
         proc = self.runner(
             self._prefix() + ["/bin/rm", "-rf", "--", value],
             capture_output=True, check=False, timeout=30,
@@ -438,6 +523,11 @@ class CMTKManager:
             marker = low.find("cmtk ")
             if marker >= 0:
                 return text[marker:].strip()
+            # Distribution binaries can print only "3.3.1p2" for --version.
+            # Probe details prefix that output with the requested tool name.
+            version = text.partition(":")[2].strip()
+            if re.fullmatch(r"\d+\.\d+\.\d+(?:p\d+)?", version):
+                return version
         return ""
 
     def persisted_status(self) -> CMTKStatus:
@@ -557,6 +647,16 @@ class CMTKManager:
         return self.last_status
 
     def mark_command_missing(self, tool, detail=""):
+        if tool in CMTK_POPULATION_TOOLS:
+            # Optional template tools do not determine pairwise readiness.
+            self.validated_tools.discard(tool)
+            if self.backend is not None:
+                self.backend.validated_tools.discard(tool)
+            config = self.load_config()
+            self.update_config(validated_tools=[
+                value for value in config.get("validated_tools", ()) if value != tool
+            ])
+            return self.persisted_status()
         message = f"Configured CMTK tool '{tool}' was not found."
         details = [str(detail)] if str(detail or "").strip() else []
         return self.mark_unavailable(message, details)
@@ -671,13 +771,42 @@ class CMTKManager:
         return self.backend
 
     def validate_backend(self, backend, tools, *, managed=None):
-        ok, details = backend.probe(tools)
-        if ok:
-            return self.accept_backend(backend, tools, details, managed=managed)
-        self.mark_unavailable(
-            "The selected CMTK backend failed validation.", details
-        )
-        return None
+        tools = tuple(tools)
+        optional_tools = tuple(tool for tool in tools if tool in CMTK_POPULATION_TOOLS)
+        required_tools = tuple(tool for tool in tools if tool not in CMTK_POPULATION_TOOLS)
+
+        details = []
+        if required_tools:
+            ok, required_details = backend.probe(required_tools)
+            details.extend(required_details)
+            if not ok:
+                self.mark_unavailable(
+                    "The selected CMTK backend failed validation.", details
+                )
+                return None
+
+        if optional_tools:
+            ok, optional_details = backend.probe(optional_tools)
+            details.extend(optional_details)
+            if not ok:
+                if self.persisted_status().ready:
+                    # Optional template tools do not determine pairwise readiness.
+                    for tool in optional_tools:
+                        self.mark_command_missing(tool)
+                    return None
+                self.mark_unavailable(
+                    "The selected CMTK backend failed validation.", details
+                )
+                return None
+
+        if not tools:
+            ok, details = backend.probe(tools)
+            if not ok:
+                self.mark_unavailable(
+                    "The selected CMTK backend failed validation.", details
+                )
+                return None
+        return self.accept_backend(backend, tools, details, managed=managed)
 
     def invalidate(self):
         self.backend = None
@@ -689,6 +818,10 @@ class CMTKManager:
     def detect(self, tools: Iterable[str] = ()) -> Optional[CMTKBackend]:
         """Probe now; call only from an actual CMTK-dependent action."""
         tools = tuple(dict.fromkeys(str(v) for v in tools if str(v).strip()))
+        if tools and any(tool in CMTK_POPULATION_TOOLS for tool in tools):
+            selected = self.restore_persisted_backend()
+            if selected is not None:
+                return self.validate_backend(selected, tools)
         if self.backend is not None:
             missing = tuple(v for v in tools if v not in self.validated_tools)
             if not missing:

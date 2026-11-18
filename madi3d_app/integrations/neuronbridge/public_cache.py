@@ -8,14 +8,18 @@ import tempfile
 from pathlib import Path
 from uuid import UUID
 
-from .cache import neuronbridge_cache_root
+from madi3d_storage import cache_dir
 from .public_api import MAX_BYTES, PublicAPIError, canonical, checkpoint
 from .records import SearchResults
 
 
 class PublicSnapshotCache:
     def __init__(self, root=None):
-        self.root = Path(root) if root is not None else neuronbridge_cache_root() / "public_metadata"
+        # Keep offline metadata at its existing cache location when the geometry
+        # destination changes. NB_CACHE_DIR historically also selects this cache.
+        metadata_root = (Path(os.environ["NB_CACHE_DIR"]).expanduser()
+                         if os.environ.get("NB_CACHE_DIR") else cache_dir() / "NeuronBridge")
+        self.root = Path(root) if root is not None else metadata_root / "public_metadata"
 
     def _path(self, key, suffix):
         return self.root / (str(UUID(key)) + suffix)

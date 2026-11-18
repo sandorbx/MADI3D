@@ -196,12 +196,87 @@
       "size": 2710482,
       "sha256": "0c8c490764f9c2a793133491adca0cd073b73e0bde965c68cbe58d91b5ed4261",
       "revision": "3147391d946bb4b6c68edd901f2add6ac1f31f8c"
+    },
+    {
+      "component": "crc32c",
+      "owner": "crc32c",
+      "platforms": [
+        "Windows-x64",
+        "Linux-x64",
+        "macOS-x64",
+        "macOS-arm64"
+      ],
+      "filename": "crc32c-2.9.post0.tar.gz",
+      "url": "https://files.pythonhosted.org/packages/f6/07/b5fabe88654f5eded3e4b6d84cde572dd0280a7362a6a5b698bbd77be5df/crc32c-2.9.post0.tar.gz",
+      "size": 48258,
+      "sha256": "6a089e0340de8438e836a09e613c6b541675d0f3aa92b3fe34295aaba62f014f"
+    },
+    {
+      "component": "microviewer",
+      "owner": "microviewer",
+      "platforms": [
+        "Windows-x64",
+        "Linux-x64",
+        "macOS-x64",
+        "macOS-arm64"
+      ],
+      "filename": "microviewer-1.21.0.tar.gz",
+      "url": "https://files.pythonhosted.org/packages/c5/ad/389fab379346658d70b4da421ad5e1605b1ecf0f2513460ba532bdae60e6/microviewer-1.21.0.tar.gz",
+      "size": 1485499,
+      "sha256": "072b6d6008fcfe3001c920b2fc24e3b913384b35691f88f84c971d902f375c53"
+    },
+    {
+      "component": "orjson",
+      "owner": "orjson",
+      "platforms": [
+        "Windows-x64",
+        "Linux-x64",
+        "macOS-x64",
+        "macOS-arm64"
+      ],
+      "filename": "orjson-3.13.0.tar.gz",
+      "url": "https://files.pythonhosted.org/packages/f2/72/380b97dc45bd162d23afe5194721ef678d9eac7cfaa549fe2873f7f0a518/orjson-3.13.0.tar.gz",
+      "size": 2732604,
+      "sha256": "d1de5eb04485110c5da4c657e49168995d55e076b1ce60f1a042e254f4186c4f"
+    },
+    {
+      "component": "fastremap",
+      "owner": "fastremap",
+      "platforms": [
+        "Windows-x64",
+        "Linux-x64",
+        "macOS-x64",
+        "macOS-arm64"
+      ],
+      "filename": "fastremap-1.20.0.tar.gz",
+      "url": "https://files.pythonhosted.org/packages/22/3c/54d2378454d92ca1a894939d7db8b1a828ba45737e05532750520dd03e9f/fastremap-1.20.0.tar.gz",
+      "size": 55917,
+      "sha256": "a64ffb4a99fd06c6f54f0ffbf48c73532fa238c429a4278b45767a55957468a0"
+    },
+    {
+      "component": "pysimdjson",
+      "owner": "pysimdjson",
+      "platforms": [
+        "Windows-x64",
+        "Linux-x64",
+        "macOS-x64",
+        "macOS-arm64"
+      ],
+      "filename": "pysimdjson-7.0.2.tar.gz",
+      "url": "https://files.pythonhosted.org/packages/9c/24/65e3cad88e74ef8ca59fefded953eb78ebface8a3199c3a97fe318a7387b/pysimdjson-7.0.2.tar.gz",
+      "size": 1397812,
+      "sha256": "44cf276e48912a3b9c7ca362c14da8420a7ac15a9f1a16ec95becff86db3904a"
     }
   ],
   "source_required_owners": [
     "pygame",
     "opencv-python-headless",
-    "pylibczirw"
+    "pylibczirw",
+    "crc32c",
+    "fastremap",
+    "microviewer",
+    "orjson",
+    "pysimdjson"
   ],
   "native_provenance": [],
   "local_materials": [
@@ -218,6 +293,7 @@
     "LICENSES/CPython-native-NOTICES.txt",
     "scripts/build_macos_opencv.py",
     "scripts/third_party_sources.py",
+    "LICENSES/fastremap-LICENSE.txt",
     "scripts/third_party_licenses.py",
     "scripts/qt_lgpl.py",
     "constraints-opencv-build.txt",
@@ -236,7 +312,10 @@
     "LICENSES/pylibCZIrw-NOTICE.md",
     "LICENSES/libCZI-LGPL-3.0.txt",
     "LICENSES/libCZI-THIRD-PARTY-LICENSES.txt",
-    "LICENSES/pybind11-LICENSE.txt"
+    "LICENSES/pybind11-LICENSE.txt",
+    "LICENSES/microviewer-LICENSE.txt",
+    "LICENSES/orjson-native-NOTICES.txt",
+    "LICENSES/pysimdjson-native-NOTICES.txt"
   ],
   "investigations": [
     {
@@ -494,6 +573,176 @@
         "eigen-3147391d946bb4b6c68edd901f2add6ac1f31f8c.tar.gz"
       ],
       "rationale": "Controlled, patched source build on every supported platform. The exact upstream sdist, bundled libCZI and pybind11 source, pinned zstd source, reviewed patch, build receipt, and native input hashes accompany the application."
+    },
+    {
+      "owner": "crc32c",
+      "platforms": [
+        "Windows-x64"
+      ],
+      "wheel_sha256": "7e18fe7151234cd06dc4c29a9ed82fc2cf5e3d5b5569a08e2706ef91e1329ce9",
+      "source_archives": [
+        "crc32c-2.9.post0.tar.gz"
+      ],
+      "rationale": "Official PyPI wheel SHA-256 and matching versioned source archive are retained."
+    },
+    {
+      "owner": "crc32c",
+      "platforms": [
+        "Linux-x64"
+      ],
+      "wheel_sha256": "bece7e666065dd5e5c5f36886b4d8f765216e6c043b346e772e2e94aa701bd5c",
+      "source_archives": [
+        "crc32c-2.9.post0.tar.gz"
+      ],
+      "rationale": "Official PyPI wheel SHA-256 and matching versioned source archive are retained."
+    },
+    {
+      "owner": "crc32c",
+      "platforms": [
+        "macOS-x64"
+      ],
+      "wheel_sha256": "6c72fdf3ed34aefe7230a0400200d945244c26335041e9e1fe288a88911d742d",
+      "source_archives": [
+        "crc32c-2.9.post0.tar.gz"
+      ],
+      "rationale": "Official PyPI wheel SHA-256 and matching versioned source archive are retained."
+    },
+    {
+      "owner": "crc32c",
+      "platforms": [
+        "macOS-arm64"
+      ],
+      "wheel_sha256": "942ff6c3a229bb03c91d098fe7ff2b8bb472889a0de14b4ac174463db6b54327",
+      "source_archives": [
+        "crc32c-2.9.post0.tar.gz"
+      ],
+      "rationale": "Official PyPI wheel SHA-256 and matching versioned source archive are retained."
+    },
+    {
+      "owner": "fastremap",
+      "platforms": [
+        "Windows-x64"
+      ],
+      "wheel_sha256": "1c801e725fecf6d56b654bf11a26522d81c8f6ae5647736565b4cfdba0add9d8",
+      "source_archives": [
+        "fastremap-1.20.0.tar.gz"
+      ],
+      "rationale": "Official PyPI wheel SHA-256 and matching versioned source archive are retained. The inspected Windows PE import table contains no GNU runtime imports; its Python source remains external under LGPL replacement terms."
+    },
+    {
+      "owner": "fastremap",
+      "platforms": [
+        "Linux-x64"
+      ],
+      "wheel_sha256": "99f2e605a78c86fbe0721f81d3ddf8728c3644187a8dbe84d409f0a356ba62ea",
+      "source_archives": [
+        "fastremap-1.20.0.tar.gz"
+      ],
+      "rationale": "Official PyPI wheel SHA-256 and matching versioned source archive are retained."
+    },
+    {
+      "owner": "fastremap",
+      "platforms": [
+        "macOS-x64"
+      ],
+      "wheel_sha256": "a9d9ba687bf91c884275e59485e5f9f202c1fbcdc7f37656f720e1f00deaa362",
+      "source_archives": [
+        "fastremap-1.20.0.tar.gz"
+      ],
+      "rationale": "Official PyPI wheel SHA-256 and matching versioned source archive are retained."
+    },
+    {
+      "owner": "fastremap",
+      "platforms": [
+        "macOS-arm64"
+      ],
+      "wheel_sha256": "a19f91eac09f82e8da6ca51a22f6f0b0b8e936045db86b818fd0431774681d3c",
+      "source_archives": [
+        "fastremap-1.20.0.tar.gz"
+      ],
+      "rationale": "Official PyPI wheel SHA-256 and matching versioned source archive are retained."
+    },
+    {
+      "owner": "microviewer",
+      "platforms": [
+        "Linux-x64",
+        "Windows-x64",
+        "macOS-arm64",
+        "macOS-x64"
+      ],
+      "wheel_sha256": "8de9d6814dab3a1af1869807b556b8b7876797e6b6198797dc3563c23174a56c",
+      "source_archives": [
+        "microviewer-1.21.0.tar.gz"
+      ],
+      "rationale": "Official PyPI wheel SHA-256 and matching versioned source archive are retained."
+    },
+    {
+      "owner": "orjson",
+      "platforms": [
+        "Windows-x64"
+      ],
+      "wheel_sha256": "a0377d6962fa431c93ecd78fdea771bb62ec545b24ee0c5d4e32acf2260af259",
+      "source_archives": [
+        "orjson-3.13.0.tar.gz"
+      ],
+      "rationale": "Official PyPI wheel SHA-256 and matching versioned source archive are retained."
+    },
+    {
+      "owner": "orjson",
+      "platforms": [
+        "Linux-x64"
+      ],
+      "wheel_sha256": "89bcf2d4bc6c9a7e1763c8cf534f38712e66b76a0fefda7fb7785462f0d635e4",
+      "source_archives": [
+        "orjson-3.13.0.tar.gz"
+      ],
+      "rationale": "Official PyPI wheel SHA-256 and matching versioned source archive are retained."
+    },
+    {
+      "owner": "orjson",
+      "platforms": [
+        "macOS-arm64",
+        "macOS-x64"
+      ],
+      "wheel_sha256": "948bad47f2e2e43527f14248364a0e5dee26dd3184691010ec4a1ebeb0fd6771",
+      "source_archives": [
+        "orjson-3.13.0.tar.gz"
+      ],
+      "rationale": "Official PyPI wheel SHA-256 and matching versioned source archive are retained."
+    },
+    {
+      "owner": "pysimdjson",
+      "platforms": [
+        "Windows-x64"
+      ],
+      "wheel_sha256": "d3ff730a48e666a2f663a43663fd71c10ba5d0393cfce500c4f535f09fae39e7",
+      "source_archives": [
+        "pysimdjson-7.0.2.tar.gz"
+      ],
+      "rationale": "Official PyPI wheel SHA-256 and matching versioned source archive are retained."
+    },
+    {
+      "owner": "pysimdjson",
+      "platforms": [
+        "Linux-x64"
+      ],
+      "wheel_sha256": "0caeb9edaeae4bbbce9fdc0c2e81d303c29628ef637c11b248942c591eb59b24",
+      "source_archives": [
+        "pysimdjson-7.0.2.tar.gz"
+      ],
+      "rationale": "Official PyPI wheel SHA-256 and matching versioned source archive are retained."
+    },
+    {
+      "owner": "pysimdjson",
+      "platforms": [
+        "macOS-arm64",
+        "macOS-x64"
+      ],
+      "wheel_sha256": "9ef56dff19b004dd52bbaf31bd6b26486d20a07de50bf3fd0e2d655cebadc135",
+      "source_archives": [
+        "pysimdjson-7.0.2.tar.gz"
+      ],
+      "rationale": "Official PyPI wheel SHA-256 and matching versioned source archive are retained."
     }
   ]
 }

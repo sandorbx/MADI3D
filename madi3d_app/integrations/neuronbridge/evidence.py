@@ -14,6 +14,11 @@ from .remote import RemoteSource, remote_from_metadata, same_source_identity
 
 SESSION_KEY = "neuronbridge_sessions"
 OBJECT_KEY = "neuronbridge"
+RESULT_FLIP_X = "neuronbridge_flip_x"
+RESULT_FLIP_X_PENDING_FAFB = "pending-fafb-flip-x"
+RESULT_FLIP_X_PENDING_SIDES = {"pending-low-x": -1, "pending-high-x": 1}
+# Older projects may have a pending image-mirror decision with no query side.
+RESULT_FLIP_X_PENDING = ("pending", *RESULT_FLIP_X_PENDING_SIDES, RESULT_FLIP_X_PENDING_FAFB)
 RETRIEVAL_KEY = "neuronbridge_retrievals"
 RESOLUTION_KEY = "neuronbridge_resolutions"
 SOURCE_KEY = "neuronbridge_source_observations"
@@ -71,6 +76,8 @@ def _is_project_session_payload(payload):
     if payload.get("csv_bytes_base64") is not None:
         return False
     context = payload.get("session", {}).get("context", {})
+    if context.get("backend") == "madi3d-local" and context.get("schema_version") in (1, 2):
+        return False
     if any(key in context for key in (*_TRANSIENT_EVIDENCE_KEYS, "tie_order", "result_limit_scope")):
         return False
     external = payload.get("session", {}).get("external_evidence", {})
@@ -252,7 +259,9 @@ def project_remote_evidence(objects, project_metadata, *, index=None):
         old_remote = remote_from_metadata(row.object_metadata, project_metadata, sources=sources)
         metadata, project_metadata = retain_remote(row.object_metadata, project_metadata, sources=sources)
         paths = {}
-        if old_remote is not None:
+        # Only historical default rows carry disposable cache locators.
+        # Explicit linked/embedded choices retain ordinary durable file paths.
+        if old_remote is not None and row.mesh_storage == "":
             cache_name = old_remote.resolution.get("cache_filename")
             for field in ("file_path", "alternate_file_path"):
                 path = getattr(row, field)
@@ -321,6 +330,11 @@ def migrate_remote_backings(model, objects, project_metadata, *, index):
 
 
 def merge_sessions(metadata, sessions):
+    """Retain accepted results at the existing project publication boundary.
+
+    The detached return value is adopted by the existing project publication
+    boundary. A preview or failed worker need never call this function.
+    """
     result = copy.deepcopy(dict(metadata or {}))
     if not sessions:
         return result
@@ -346,9 +360,9 @@ def project_search_results(results, hit_ids=None, *, index=None):
     """
     from .thumbnails import thumbnail_reference
 
-    complete = hit_ids is None
+    complete = hit_ids is None and results.subset is None
     hit_ids = ({o.occurrence_id for o in results.occurrences}
-               if complete else set(hit_ids))
+               if hit_ids is None else set(hit_ids))
     hits = (tuple(sorted((index.matches[(results.session.session_id, oid)].occurrence for oid in hit_ids),
                          key=lambda hit: hit.row_index)) if index is not None else
             tuple(o for o in results.occurrences if o.occurrence_id in hit_ids))
@@ -668,7 +682,9 @@ def validate_evidence(
     origins=(),
     prevalidated_sessions=None,
 ):
-    from .query import QUERY_KEY, validate_queries, validate_query_associations, validate_query_freshness
+    from .query import (
+        QUERY_KEY, validate_queries, validate_query_associations, validate_query_freshness,
+    )
     from .workspace import validate_workspace
 
     metadata = project_metadata or {}
@@ -827,6 +843,7 @@ def copy_origin(metadata, *, derived=False, operation=None):
         return result
     if not derived:
         return result
+    result.pop(RESULT_FLIP_X, None)
     parents = copy.deepcopy(source.get("derived_from", []))
     # An already-derived origin contributes its original evidence references,
     # not another empty intermediate origin on every edit.
@@ -856,6 +873,7 @@ def _upgrade_object_origin(
     *,
     tolerate_unavailable=False,
     canonicalize_selected=False,
+    history_diagnostics=None,
 ):
     """Convert session-dependent v1 origins to direct bounded evidence."""
     result = mutable_metadata_copy(origin)
@@ -864,15 +882,36 @@ def _upgrade_object_origin(
         sessions,
         tolerate_unavailable=tolerate_unavailable,
         canonicalize_selected=canonicalize_selected,
+        history_diagnostics=history_diagnostics,
     )
                for parent in result.get("derived_from", ())]
     if parents:
         result["derived_from"] = parents
-    if canonicalize_selected and "selected_results" in result:
-        result["selected_results"] = [
-            SearchResults.from_dict(payload).to_dict()
-            for payload in result.get("selected_results", ())
-        ]
+    unavailable_occurrences = list(result.get("unavailable_occurrences", ()))
+    if (canonicalize_selected or tolerate_unavailable) and "selected_results" in result:
+        retained = []
+        for payload in result["selected_results"]:
+            try:
+                parsed = SearchResults.from_dict(payload)
+                retained.append(parsed.to_dict() if canonicalize_selected else payload)
+            except (KeyError, TypeError, ValueError):
+                if not tolerate_unavailable:
+                    raise
+                prior_count = len(unavailable_occurrences)
+                if isinstance(payload, dict):
+                    session = payload.get("session")
+                    session_id = session.get("session_id") if isinstance(session, dict) else None
+                    hits = payload.get("occurrences")
+                    for hit in hits if isinstance(hits, (list, tuple)) else ():
+                        if (isinstance(session_id, str) and isinstance(hit, dict)
+                                and isinstance(hit.get("occurrence_id"), str)):
+                            unavailable_occurrences.append({"session_id": session_id,
+                                                            "occurrence_id": hit["occurrence_id"]})
+                if len(unavailable_occurrences) == prior_count and history_diagnostics is not None:
+                    history_diagnostics.append(
+                        "Selected NeuronBridge result evidence is unavailable because its saved "
+                        "structure is invalid. Local objects and unaffected evidence were retained.")
+        result["selected_results"] = retained
     unavailable_sessions = set(result.get("unavailable_session_ids", ()))
     if tolerate_unavailable:
         # A retained absence marker records an earlier failed recovery.  It
@@ -886,7 +925,6 @@ def _upgrade_object_origin(
             result["session_ids"] = available
         else:
             result.pop("session_ids", None)
-    unavailable_occurrences = list(result.get("unavailable_occurrences", ()))
     if result.get("version") == 1:
         refs = list(result.pop("matches", ()))
         source_ref = result.pop("source_ref", None)
@@ -974,7 +1012,15 @@ def extract_embedded_sessions(
 ):
     """Flat CSV embeds each referenced session once in an object metadata cell."""
     from dataclasses import replace
-    from .query import QUERY_KEY, ASSOCIATION_KEY, merge_query_metadata
+    from .query import (
+        QUERY_KEY, ASSOCIATION_KEY, SUPPLEMENTARY_KEY, merge_query_metadata,
+    )
+
+    # Supplementary image collections belong to the retired executable route.
+    # Completed sessions retain their compact consumed hashes and measurements.
+    if SUPPLEMENTARY_KEY in metadata:
+        metadata = dict(metadata)
+        metadata.pop(SUPPLEMENTARY_KEY)
 
     if any(isinstance(record, dict) and "retrieved_at" in record.get("facts", {})
            for record in metadata.get(RETRIEVAL_KEY, {}).values()):
@@ -990,6 +1036,7 @@ def extract_embedded_sessions(
         }
     unavailable_sessions = set()
     unavailable_occurrence_refs = []
+    history_diagnostics = []
     if tolerate_unavailable and metadata.get(SESSION_KEY):
         retained = {}
         for key, payload in metadata[SESSION_KEY].items():
@@ -1050,6 +1097,7 @@ def extract_embedded_sessions(
                 values[OBJECT_KEY], metadata.get(SESSION_KEY, {}),
                 tolerate_unavailable=tolerate_unavailable,
                 canonicalize_selected=canonicalize_selected,
+                history_diagnostics=history_diagnostics,
             )
             if tolerate_unavailable:
                 unavailable_sessions.update(
@@ -1084,6 +1132,7 @@ def extract_embedded_sessions(
                     record.object_metadata[OBJECT_KEY], sessions,
                     tolerate_unavailable=True,
                     canonicalize_selected=canonicalize_selected,
+                    history_diagnostics=history_diagnostics,
                 ),
             }) if OBJECT_KEY in record.object_metadata else record
             for record in upgraded
@@ -1118,4 +1167,10 @@ def extract_embedded_sessions(
         metadata = _record_unavailable_sessions(
             metadata, unavailable_sessions, unavailable_occurrence_refs,
         )
+    if history_diagnostics:
+        metadata = dict(metadata)
+        existing = metadata.get("history_recovery_diagnostics", ())
+        metadata["history_recovery_diagnostics"] = list(dict.fromkeys([
+            *(existing if isinstance(existing, (list, tuple)) else ()), *history_diagnostics,
+        ]))
     return tuple(upgraded), metadata

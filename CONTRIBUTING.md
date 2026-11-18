@@ -38,8 +38,7 @@ Contributions must:
 - document externally licensed code, data, assets, or binaries before they are
   introduced.
 
-Follow the [General development policy](docs/General%20MADI3D%20development%20instructions.txt)
-for risk-based validation and [AGENTS.md](AGENTS.md) for execution/navigation.
+Follow the development instructions provided with your authorized checkout.
 
 The project maintainers decide whether and when a contribution is accepted,
 modified, postponed, rejected, or designated for open-source publication.

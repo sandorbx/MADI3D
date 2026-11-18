@@ -603,6 +603,81 @@
       "source_file_sha256": "e9d9da42725ca9a5e5f4b9f47f5a8e56b18636c9bbbbaa38ed0b9d3ba83a2553",
       "archive_sha256": "9046298fb440324c9d4135ecea7879ffed8546dd1b58e59430ea07a4633f563b",
       "sha256": "3dba93abfd04310c1530467fd3a9e57fe201550290a2c5ed9f4c7a7af160fdae"
+    },
+    {
+      "path": "orjson-3.13.0.tar.gz!/include/yyjson/yyjson.h",
+      "url": "https://files.pythonhosted.org/packages/f2/72/380b97dc45bd162d23afe5194721ef678d9eac7cfaa549fe2873f7f0a518/orjson-3.13.0.tar.gz",
+      "sha256": "14ced93743da860dc7b565b9f073fa5cba103132ff5d42048cdfccacd1b79ffc"
+    },
+    {
+      "path": "orjson-3.13.0.tar.gz!/include/cargo/associative-cache-3.0.1/LICENSE-MIT",
+      "url": "https://files.pythonhosted.org/packages/f2/72/380b97dc45bd162d23afe5194721ef678d9eac7cfaa549fe2873f7f0a518/orjson-3.13.0.tar.gz",
+      "sha256": "65f94e99ddaf4f5d1782a6dae23f35d4293a9a01444a13135a6887017d353cee"
+    },
+    {
+      "path": "orjson-3.13.0.tar.gz!/include/cargo/bytecount-0.6.9/LICENSE.MIT",
+      "url": "https://files.pythonhosted.org/packages/f2/72/380b97dc45bd162d23afe5194721ef678d9eac7cfaa549fe2873f7f0a518/orjson-3.13.0.tar.gz",
+      "sha256": "a5dea80c1f383cb5f80a6bb0da5e55a2beb9f24adb123ce6300af2cbaaa3bf65"
+    },
+    {
+      "path": "orjson-3.13.0.tar.gz!/include/cargo/itoap-1.0.1/LICENSE",
+      "url": "https://files.pythonhosted.org/packages/f2/72/380b97dc45bd162d23afe5194721ef678d9eac7cfaa549fe2873f7f0a518/orjson-3.13.0.tar.gz",
+      "sha256": "5891374673c9ae0ff2a4d400dab3eb836483205897d265b6ff97fe46c75d8610"
+    },
+    {
+      "path": "orjson-3.13.0.tar.gz!/include/cargo/jiff-core-0.1.1/LICENSE-MIT",
+      "url": "https://files.pythonhosted.org/packages/f2/72/380b97dc45bd162d23afe5194721ef678d9eac7cfaa549fe2873f7f0a518/orjson-3.13.0.tar.gz",
+      "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f"
+    },
+    {
+      "path": "orjson-3.13.0.tar.gz!/include/cargo/once_cell-1.21.4/LICENSE-MIT",
+      "url": "https://files.pythonhosted.org/packages/f2/72/380b97dc45bd162d23afe5194721ef678d9eac7cfaa549fe2873f7f0a518/orjson-3.13.0.tar.gz",
+      "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+    },
+    {
+      "path": "orjson-3.13.0.tar.gz!/include/cargo/pyo3-ffi-0.29.3/LICENSE-MIT",
+      "url": "https://files.pythonhosted.org/packages/f2/72/380b97dc45bd162d23afe5194721ef678d9eac7cfaa549fe2873f7f0a518/orjson-3.13.0.tar.gz",
+      "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6"
+    },
+    {
+      "path": "orjson-3.13.0.tar.gz!/include/cargo/libc-0.2.190/LICENSE-MIT",
+      "url": "https://files.pythonhosted.org/packages/f2/72/380b97dc45bd162d23afe5194721ef678d9eac7cfaa549fe2873f7f0a518/orjson-3.13.0.tar.gz",
+      "sha256": "123a331b5dbf04c30097fa43b8f858bc85df671fe776de498d01f3d6b7c1f69e"
+    },
+    {
+      "path": "orjson-3.13.0.tar.gz!/include/cargo/simdutf8-0.1.5/LICENSE-MIT",
+      "url": "https://files.pythonhosted.org/packages/f2/72/380b97dc45bd162d23afe5194721ef678d9eac7cfaa549fe2873f7f0a518/orjson-3.13.0.tar.gz",
+      "sha256": "1847e0e0698142ed4347c1441a9fa81c8fbddd44b1d8bbcd5e3647f991759d7f"
+    },
+    {
+      "path": "orjson-3.13.0.tar.gz!/include/cargo/zmij-1.0.23/LICENSE-MIT",
+      "url": "https://files.pythonhosted.org/packages/f2/72/380b97dc45bd162d23afe5194721ef678d9eac7cfaa549fe2873f7f0a518/orjson-3.13.0.tar.gz",
+      "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+    },
+    {
+      "path": "pysimdjson-7.0.2.tar.gz!/LICENSE",
+      "url": "https://files.pythonhosted.org/packages/9c/24/65e3cad88e74ef8ca59fefded953eb78ebface8a3199c3a97fe318a7387b/pysimdjson-7.0.2.tar.gz",
+      "sha256": "1067c30a692a52f66c3b8c1bd6df26efdd7d84a43ef8ebe10ccb395f7e79ddec"
+    },
+    {
+      "path": "simdjson-v3.12.3/LICENSE",
+      "url": "https://raw.githubusercontent.com/simdjson/simdjson/v3.12.3/LICENSE",
+      "sha256": "5fa8894e890bd77958f93b165433e0fb0dffa5bc982bfb147e4748e95bad24e5"
+    },
+    {
+      "path": "pysimdjson-7.0.2/simdjson/simdjson.h#L9646-L9689",
+      "url": "https://files.pythonhosted.org/packages/9c/24/65e3cad88e74ef8ca59fefded953eb78ebface8a3199c3a97fe318a7387b/pysimdjson-7.0.2.tar.gz",
+      "sha256": "acffdbe9983f5996c4bd096132ffdd745a074ed8c9ba9b26b0d09c654fd45e43"
+    },
+    {
+      "path": "pysimdjson-7.0.2/simdjson/simdjson.cpp#L2944-L2959",
+      "url": "https://files.pythonhosted.org/packages/9c/24/65e3cad88e74ef8ca59fefded953eb78ebface8a3199c3a97fe318a7387b/pysimdjson-7.0.2.tar.gz",
+      "sha256": "6aaf3aedb3d142064c4891403914948ce3a10fef09d0308c225430116280063b"
+    },
+    {
+      "path": "microviewer-1.21.0/LICENSE",
+      "url": "https://files.pythonhosted.org/packages/c5/ad/389fab379346658d70b4da421ad5e1605b1ecf0f2513460ba532bdae60e6/microviewer-1.21.0.tar.gz",
+      "sha256": "20c17d8b8c48a600800dfd14f95d5cb9ff47066a9641ddeab48dc54aec96e331"
     }
   ]
 }

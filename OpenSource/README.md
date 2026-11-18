@@ -37,10 +37,14 @@ composition. The exact project-owned Python files in scope are:
 ### 3D microscopy stitching core
 
 - `madi3d_app/stitching/__init__.py`
+- `madi3d_app/stitching/common.py`
+- `madi3d_app/stitching/fusion.py`
 - `madi3d_app/stitching/models.py`
+- `madi3d_app/stitching/registration.py`
 - `madi3d_app/stitching/service.py`
 - `madi3d_app/stitching/stitching_positioning.py`
 - `madi3d_app/stitching/workers.py`
+- `madi3d_app/stitching/workspace.py`
 
 ### Volumetric segmentation
 
@@ -50,29 +54,36 @@ composition. The exact project-owned Python files in scope are:
 ### NeuronBridge and Color-Depth MIP integration
 
 - `madi3d_app/integrations/neuronbridge/__init__.py`
+- `madi3d_app/integrations/neuronbridge/archive_catalog.py`
+- `madi3d_app/integrations/neuronbridge/archive_install.py`
 - `madi3d_app/integrations/neuronbridge/assets.py`
 - `madi3d_app/integrations/neuronbridge/cache.py`
-- `madi3d_app/integrations/neuronbridge/cave_pacing.py`
+- `madi3d_app/integrations/cave/pacing.py`
+- `madi3d_app/integrations/cave/__init__.py`
 - `madi3d_app/integrations/neuronbridge/cdm.py`
 - `madi3d_app/integrations/neuronbridge/cdm_export.py`
 - `madi3d_app/integrations/neuronbridge/cdm_lut.py`
 - `madi3d_app/integrations/neuronbridge/cdm_records.py`
 - `madi3d_app/integrations/neuronbridge/comments.py`
 - `madi3d_app/integrations/neuronbridge/csv_parser.py`
-- `madi3d_app/integrations/neuronbridge/download_worker.py`
 - `madi3d_app/integrations/neuronbridge/evidence.py`
 - `madi3d_app/integrations/neuronbridge/geometry_input.py`
+- `madi3d_app/integrations/neuronbridge/gradient_preparation.py`
+- `madi3d_app/integrations/neuronbridge/gradient_scorer.py`
+- `madi3d_app/integrations/neuronbridge/gradient_supply.py`
 - `madi3d_app/integrations/neuronbridge/import_service.py`
 - `madi3d_app/integrations/neuronbridge/local_catalog.py`
-- `madi3d_app/integrations/neuronbridge/local_library.py`
+- `madi3d_app/integrations/neuronbridge/local_geometry.py`
+- `madi3d_app/integrations/neuronbridge/library_store.py`
 - `madi3d_app/integrations/neuronbridge/local_scorer.py`
 - `madi3d_app/integrations/neuronbridge/local_search.py`
-- `madi3d_app/integrations/neuronbridge/local_smoke.py`
 - `madi3d_app/integrations/neuronbridge/mapping.py`
-- `madi3d_app/integrations/neuronbridge/message_client.py`
+- `madi3d_app/integrations/neuronbridge/orientation.py`
+- `madi3d_app/integrations/cave/transport.py`
 - `madi3d_app/integrations/neuronbridge/public_api.py`
 - `madi3d_app/integrations/neuronbridge/public_cache.py`
 - `madi3d_app/integrations/neuronbridge/query.py`
+- `madi3d_app/integrations/neuronbridge/record_migration.py`
 - `madi3d_app/integrations/neuronbridge/records.py`
 - `madi3d_app/integrations/neuronbridge/remote.py`
 - `madi3d_app/integrations/neuronbridge/search_profiles.py`
@@ -81,10 +92,27 @@ composition. The exact project-owned Python files in scope are:
 - `madi3d_app/integrations/neuronbridge/workspace.py`
 
 This scope covers the reusable query/evidence records, Color-Depth MIP
-generation and export, local-library search, public-result lookup, asset/cache
-handling, and NeuronBridge data-service integration. Private GUI composition
-and application controllers remain outside this scope unless explicitly listed
-in a later public-source release.
+generation and export, local-library search, official bulk-archive
+installation, public-result lookup, asset/cache handling, and NeuronBridge
+data-service integration. Private GUI composition and application controllers
+remain outside this scope unless explicitly listed in a later
+public-source release.
+
+The embedded Color-Depth MIP palette, positive CDS scorer, and native
+gradient code retain their respective upstream BSD-3-Clause notices in
+[`LICENSES/THIRD-PARTY.md`](../LICENSES/THIRD-PARTY.md).
+The [offline scientific corpus](neuronbridge/README.md) documents how to
+reproduce the tested numerical behavior from this export.
+
+The headless backend runs with Python, NumPy, SciPy, Pillow, Requests,
+tifffile, imagecodecs, and tqdm, plus VTK for mesh/SWC rasterization.
+Use the versions in `constraints-build.txt`
+to reproduce the application environment. The archive installer defaults to
+the NeuronBridge downloaded-assets directory and accepts an explicit root.
+The desktop application supplies its configured root and owns memory
+admission. The Qt download worker and packaged-project smoke program remain
+application adapters outside the standalone export. The prior AGPL grant
+for those two files still applies.
 
 ### Shared dependencies used by the public scientific components
 
@@ -126,9 +154,40 @@ listed above.
 
 - `madi3d_app/volume/rendering.py`
 
+### FlyWire geometry and input integration
+
+- `madi3d_app/integrations/flywire/__init__.py`
+- `madi3d_app/integrations/flywire/backend.py`
+- `madi3d_app/integrations/flywire/catalog.py`
+- `madi3d_app/integrations/flywire/catalog_download.py`
+- `madi3d_app/integrations/flywire/catalog_review.py`
+- `madi3d_app/integrations/flywire/geometry.py`
+- `madi3d_app/integrations/flywire/input_parser.py`
+- `madi3d_app/integrations/flywire/process.py`
+- `madi3d_app/integrations/flywire/records.py`
+- `madi3d_app/integrations/flywire/reference_links.py`
+- `madi3d_app/mesh/cache.py`
+- `madi3d_app/mesh/export.py`
+- `madi3d_app/mesh/ply.py`
+- `madi3d_app/mesh/processing.py`
+- `madi3d_app/tools/swc/__init__.py`
+- `madi3d_app/tools/swc/model.py`
+
+The [standalone FlyWire guide](flywire/README.md) lists supported entry points,
+installation commands, and the code and data inventory. The shared mesh and
+SWC sources support the detached geometry path.
+
+The prior AGPL grant for `madi3d_app/integrations/flywire/service.py` and
+`madi3d_app/integrations/flywire/summary.py` still applies. These
+application adapters depend on private project and scene services and are
+outside the standalone source distribution.
+
+The standalone qualification programs `OpenSource/flywire/smoke.py` and
+`OpenSource/flywire/stage.py` are also AGPL-3.0-only.
+
 The scope applies only to the exact project-owned files listed above. In
 particular, private application GUI composition such as
-`madi3d_app/registration/panel.py`, `madi3d_app/stitching/panel.py`, the
+`madi3d_app/ui/registration/panel.py`, `madi3d_app/ui/stitching/panel.py`, the
 NeuronBridge UI/controllers, and the general render-window/application
 infrastructure is not included unless it is explicitly added to this manifest
 in a later public-source release.

@@ -1,0 +1,30 @@
+{
+  "url": "https://janelia-flylight-templates.s3.amazonaws.com/JRC2018_Unisex_20x_HR/JRC2018_UNISEX_20x_HR.nrrd",
+  "retrieved_utc": "2026-09-07",
+  "sha256": "00b8fe7db7981523d28af9ee629cc614515d7c95c6d3ffb6293540c369741a70",
+  "size_bytes": 151069944,
+  "etag": "16ab6c5a77aae8612b5f13971ac2ade6-9",
+  "last_modified": "2020-03-20T15:44:56Z",
+  "header_sha256": "07c16461a7cc34bd8cbd7d89def0f5aae7531855e20026a1d4da6590f2d9e5b3",
+  "raw_array_sha256": "25f9e9d4d6776bf4adf7708f76a9f43d23ab4306485872ac6b33b4e204e2dfb0",
+  "raw_array_layout": "ZYX, uint16 big-endian, C contiguous",
+  "crop": {
+    "start_xyz": [
+      590,
+      270,
+      70
+    ],
+    "shape_xyz": [
+      32,
+      24,
+      8
+    ],
+    "dtype": "uint16 little-endian",
+    "sha256": "8006de67f0b74d981de55676922472782d13a32da7baab63fa23fc06fa854e64",
+    "file_sha256": "ed60a3422dbf2061058172583f883ace36937001973134ca92d569b258faf117"
+  },
+  "license": "CC-BY-4.0",
+  "license_evidence": "https://raw.githubusercontent.com/awslabs/open-data-registry/be73a322704eb8951cf592014f74e84b1d373f64/datasets/janelia-flylight.yaml",
+  "attribution": "Janelia Research Campus, FlyLight Project Team; Bogovic et al. An unbiased template of the Drosophila brain and ventral nerve cord. DOI:10.1371/journal.pone.0236495",
+  "modifications": "Cropped at stated voxel indices; byte order changed to little-endian. No resampling."
+}

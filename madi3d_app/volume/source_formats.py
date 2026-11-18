@@ -40,16 +40,12 @@ class VolumeSourceFormat:
     reader_mode: str
     container_formats: tuple[str, ...]
     reader_dependencies: tuple[str, ...]
-    decode_memory_factor: float
-    decode_memory_floor_bytes: int
     source_replacement_supported: bool = True
     source_replacement_checks_channels: bool = False
     source_replacement_reason: str = ""
     prefer_model_decode_contract: bool = False
     requires_typed_decode_contract: bool = False
 
-
-_MIB = 1024**2
 
 VOLUME_SOURCE_FORMATS = (
     VolumeSourceFormat(
@@ -58,8 +54,6 @@ VOLUME_SOURCE_FORMATS = (
         reader_mode="nrrd",
         container_formats=("nrrd",),
         reader_dependencies=("nrrd",),
-        decode_memory_factor=8.0,
-        decode_memory_floor_bytes=512 * _MIB,
         source_replacement_checks_channels=True,
         prefer_model_decode_contract=True,
     ),
@@ -69,8 +63,6 @@ VOLUME_SOURCE_FORMATS = (
         reader_mode="nrrd",
         container_formats=("nrrd",),
         reader_dependencies=("nrrd",),
-        decode_memory_factor=8.0,
-        decode_memory_floor_bytes=512 * _MIB,
         source_replacement_supported=False,
         source_replacement_reason=(
             "Detached NRRD (.nhdr) sources require export to a new file; atomic "
@@ -84,8 +76,6 @@ VOLUME_SOURCE_FORMATS = (
         reader_mode="tiff",
         container_formats=("tiff", "imagej-tiff", "ome-tiff", "zeiss-lsm"),
         reader_dependencies=("tifffile", "imagecodecs"),
-        decode_memory_factor=4.0,
-        decode_memory_floor_bytes=384 * _MIB,
         source_replacement_checks_channels=True,
     ),
     VolumeSourceFormat(
@@ -94,8 +84,6 @@ VOLUME_SOURCE_FORMATS = (
         reader_mode="tiff",
         container_formats=("zeiss-lsm",),
         reader_dependencies=("tifffile", "imagecodecs"),
-        decode_memory_factor=4.0,
-        decode_memory_floor_bytes=384 * _MIB,
         source_replacement_supported=False,
         source_replacement_reason=(
             "Zeiss LSM sources are read-only; writing or source replacement is "
@@ -108,8 +96,6 @@ VOLUME_SOURCE_FORMATS = (
         reader_mode="olympus",
         container_formats=("olympus-oif",),
         reader_dependencies=("oiffile", "tifffile", "imagecodecs"),
-        decode_memory_factor=4.0,
-        decode_memory_floor_bytes=384 * _MIB,
         source_replacement_supported=False,
         source_replacement_reason=(
             "Olympus OIF/OIB sources are read-only; writing or source replacement "
@@ -124,8 +110,6 @@ VOLUME_SOURCE_FORMATS = (
         reader_mode="olympus",
         container_formats=("olympus-oib",),
         reader_dependencies=("oiffile", "tifffile", "imagecodecs"),
-        decode_memory_factor=4.0,
-        decode_memory_floor_bytes=384 * _MIB,
         source_replacement_supported=False,
         source_replacement_reason=(
             "Olympus OIF/OIB sources are read-only; writing or source replacement "
@@ -140,8 +124,6 @@ VOLUME_SOURCE_FORMATS = (
         reader_mode="leica",
         container_formats=("leica-lif",),
         reader_dependencies=("liffile",),
-        decode_memory_factor=4.0,
-        decode_memory_floor_bytes=384 * _MIB,
         source_replacement_supported=False,
         source_replacement_reason=(
             "Leica LIF sources are read-only; import or Save As to a supported "
@@ -156,8 +138,6 @@ VOLUME_SOURCE_FORMATS = (
         reader_mode="nikon",
         container_formats=("nikon-nd2",),
         reader_dependencies=("nd2",),
-        decode_memory_factor=4.0,
-        decode_memory_floor_bytes=384 * _MIB,
         source_replacement_supported=False,
         source_replacement_reason=(
             "Nikon ND2 sources are read-only; use Save As or export to a supported "
@@ -172,8 +152,6 @@ VOLUME_SOURCE_FORMATS = (
         reader_mode="zeiss-czi",
         container_formats=("zeiss-czi",),
         reader_dependencies=("pylibCZIrw",),
-        decode_memory_factor=4.0,
-        decode_memory_floor_bytes=384 * _MIB,
         source_replacement_supported=False,
         source_replacement_reason=(
             "ZEISS CZI sources are read-only; use Save As or export to a supported "
@@ -188,8 +166,6 @@ VOLUME_SOURCE_FORMATS = (
         reader_mode="h5j",
         container_formats=("h5j",),
         reader_dependencies=("h5py",),
-        decode_memory_factor=16.0,
-        decode_memory_floor_bytes=1536 * _MIB,
         source_replacement_checks_channels=True,
     ),
     VolumeSourceFormat(
@@ -198,8 +174,6 @@ VOLUME_SOURCE_FORMATS = (
         reader_mode="nifti",
         container_formats=("nifti",),
         reader_dependencies=("nibabel",),
-        decode_memory_factor=3.0,
-        decode_memory_floor_bytes=384 * _MIB,
     ),
     VolumeSourceFormat(
         key="nifti-gzip",
@@ -207,8 +181,6 @@ VOLUME_SOURCE_FORMATS = (
         reader_mode="nifti",
         container_formats=("nifti",),
         reader_dependencies=("nibabel",),
-        decode_memory_factor=12.0,
-        decode_memory_floor_bytes=768 * _MIB,
     ),
 )
 
@@ -310,30 +282,6 @@ def volume_requires_typed_decode_contract(
     )
 
 
-def estimated_volume_decode_bytes(
-    path: os.PathLike[str] | str,
-    *,
-    file_size_bytes: int | None = None,
-) -> int:
-    if file_size_bytes is None:
-        try:
-            file_size_bytes = os.path.getsize(path)
-        except OSError:
-            file_size_bytes = 256 * _MIB
-    file_size_bytes = max(1, int(file_size_bytes))
-    source_format = volume_source_format(path)
-    if source_format is not None and source_format.key == "czi":
-        # Compressed CZI size does not bound the decoded volume or native plane.
-        # Typed T/Z/Y/X sizes are checked by the import and decode resource guards.
-        return int(source_format.decode_memory_floor_bytes)
-    if source_format is None:
-        factor, floor = 6.0, 512 * _MIB
-    else:
-        factor = source_format.decode_memory_factor
-        floor = source_format.decode_memory_floor_bytes
-    return max(int(floor), int(file_size_bytes * factor))
-
-
 def source_replacement_format(
     path: os.PathLike[str] | str,
     *,
@@ -386,7 +334,6 @@ __all__ = [
     "VOLUME_SOURCE_FORMATS",
     "VolumeSourceFormat",
     "SourceBundleError",
-    "estimated_volume_decode_bytes",
     "is_supported_volume_path",
     "nifti_runtime_time_unit",
     "nifti_time_unit",

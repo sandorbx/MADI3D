@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+from contextlib import ExitStack
 import hashlib
 import json
 import math
@@ -9,8 +10,11 @@ import os
 import re
 import shutil
 import tempfile
+import threading
+import time
 import traceback
 import uuid
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,6 +37,9 @@ from madi3d_app.integrations.cmtk.registration import (
     write_working_nrrd,
 )
 from madi3d_app.integrations.cmtk.xform import write_cmtk_matrix_xform
+from madi3d_app.registration.diagnostics import (
+    StreamDiagnostics, _bounded_registration_log_text, emit_command_diagnostic,
+)
 from madi3d_app.registration.models import (
     REGISTRATION_ALGORITHM_VERSION,
     RegistrationLogEntry,
@@ -40,9 +47,17 @@ from madi3d_app.registration.models import (
     RegistrationTransformChain,
     TransformStageResult,
     registration_qc_thresholds,
-    _canonical_local_geometry_payload,
+    registration_local_grid,
 )
-from madi3d_app.registration.output import partial_output_path
+from madi3d_app.registration.output import (
+    partial_output_path, cmtk_linear_stage_labels, linear_qc_text,
+)
+from madi3d_app.registration.quality import (
+    array_similarity_diagnostics as _array_similarity_diagnostics,
+    normalized_cross_correlation as _ncc,
+    normalized_mutual_information as _normalized_mutual_information,
+    robust_normalize as _robust_normalize,
+)
 from madi3d_app.volume.geometry import (
     affine_matrix4 as _matrix4,
     affine_support_bounds as _support_bounds,
@@ -53,27 +68,15 @@ from madi3d_app.volume.geometry import (
     general_grid_affine_from_components,
     grid_components_from_affine,
     invertible_affine4,
+    spatial_unit_scale,
 )
+from madi3d_app.volume.resampling import affine_pull_mapping_zyx as _output_to_source_zyx_mapping
 
 # -----------------------------------------------------------------------------
 # Small geometry helpers
 # -----------------------------------------------------------------------------
 
-_XYZ_ZYX_PERMUTATION = np.array(
-    [[0.0, 0.0, 1.0, 0.0],
-     [0.0, 1.0, 0.0, 0.0],
-     [1.0, 0.0, 0.0, 0.0],
-     [0.0, 0.0, 0.0, 1.0]],
-    dtype=float,
-)
-
-_UNIT_POWER10_METERS = {
-    "nm": -9,
-    "micron": -6,
-    "mm": -3,
-    "cm": -2,
-    "m": 0,
-}
+_REGISTRATION_LOG_LIMIT = 128
 
 
 @dataclass(frozen=True)
@@ -83,22 +86,6 @@ class RegistrationWorkingSpacePreparation:
     fixed: dict
     moving: dict
     provenance: dict
-
-
-@dataclass(frozen=True)
-class RegistrationLocalGrid:
-    """Numerical voxel lattice; physical calibration is optional evidence."""
-
-    dimensions: tuple[int, int, int]
-    origin: tuple[float, float, float]
-    spacing: tuple[float, float, float]
-    direction: tuple[tuple[float, float, float], ...]
-    space_units: tuple[str, str, str] | None
-    coordinate_space_id: str
-
-
-def _matrix_to_json(value):
-    return _matrix4(value).tolist()
 
 
 def _canonical_units_or_none(raw_units):
@@ -130,7 +117,7 @@ def _working_geometry_payload(snapshot):
         "spacing": list(components["spacing"]),
         "origin": list(components["origin"]),
         "direction": np.asarray(components["direction"], dtype=float).tolist(),
-        "local_index_to_working_affine": _matrix_to_json(local_affine),
+        "local_index_to_working_affine": _matrix4(local_affine).tolist(),
         "physical_units": list(units) if units is not None else None,
         "coordinate_space_id": str(snapshot.get("coordinate_space_id") or ""),
         "coordinate_mode": "physical" if units is not None else "numerical",
@@ -140,9 +127,10 @@ def _working_geometry_payload(snapshot):
     }
 
 
-def _local_geometry_payload(snapshot):
+def local_geometry_payload(snapshot):
+    """Project a captured modeled working grid into registration geometry."""
     geometry = _working_geometry_payload(snapshot)
-    grid = _validated_local_grid(
+    grid = registration_local_grid(
         {
             "origin": geometry.get("origin"),
             "spacing": geometry.get("spacing"),
@@ -163,54 +151,10 @@ def _local_geometry_payload(snapshot):
     }
 
 
-def _validated_local_grid(geometry, label="registration grid"):
-    geometry = _canonical_local_geometry_payload(geometry, label)
-    dims = finite_tuple3(
-        geometry.get("dims_xyz"), f"{label} dimensions", positive=True, integer=True
-    )
-    affine = general_grid_affine_from_components(
-        geometry.get("origin"), geometry.get("spacing"), geometry.get("direction")
-    )
-    components = grid_components_from_affine(affine)
-    units, _unit_state = _canonical_units_or_none(geometry.get("space_units"))
-    return RegistrationLocalGrid(
-        dimensions=dims,
-        origin=components["origin"],
-        spacing=components["spacing"],
-        direction=tuple(
-            tuple(float(value) for value in row)
-            for row in np.asarray(components["direction"], dtype=float)
-        ),
-        space_units=units,
-        coordinate_space_id=str(geometry.get("coordinate_space_id") or ""),
-    )
-
-
-def _local_grid_mismatches(reference, candidate):
-    mismatches = []
-    for field, label in (
-        ("dimensions", "dimensions"),
-        ("space_units", "spatial units"),
-        ("coordinate_space_id", "coordinate-space identity"),
-    ):
-        if getattr(reference, field) != getattr(candidate, field):
-            mismatches.append(label)
-    for field, label in (
-        ("origin", "origin"),
-        ("spacing", "spacing"),
-        ("direction", "direction"),
-    ):
-        if not geometry_values_equivalent(
-            getattr(reference, field), getattr(candidate, field)
-        ):
-            mismatches.append(label)
-    return tuple(mismatches)
-
-
 def _registration_geometry_revision(working_geometry, initial_pose):
     payload = {
         "working_geometry": copy.deepcopy(working_geometry),
-        "initial_pose": _matrix_to_json(initial_pose),
+        "initial_pose": _matrix4(initial_pose).tolist(),
     }
     encoded = json.dumps(
         payload, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True
@@ -330,10 +274,7 @@ def _prepare_registration_pair(fixed, moving):
     conversions = []
     for item in (target, source):
         if target_unit is not None and item["units"] is not None:
-            scale = 10.0 ** (
-                _UNIT_POWER10_METERS[item["units"][0]]
-                - _UNIT_POWER10_METERS[target_unit]
-            )
+            scale = spatial_unit_scale(item["units"][0], target_unit)
             mode = "exact-physical-unit-conversion"
         else:
             scale = 1.0
@@ -366,7 +307,7 @@ def _prepare_registration_pair(fixed, moving):
             "source_units_canonical": list(item["units"]) if item["units"] is not None else None,
             "target_working_unit": target_unit,
             "scale_to_target_working_space": float(scale),
-            "conversion_matrix": _matrix_to_json(conversion),
+            "conversion_matrix": _matrix4(conversion).tolist(),
             "mode": mode,
             "uncertainty": item["unit_state"] if item["units"] is None else None,
         }
@@ -437,8 +378,8 @@ def _prepare_registration_pair(fixed, moving):
         "target_geometry_revision": _registration_geometry_revision(
             target["working_geometry"], target["actor_matrix"]
         ),
-        "source_initial_pose": _matrix_to_json(source["actor_matrix"]),
-        "target_initial_pose": _matrix_to_json(target["actor_matrix"]),
+        "source_initial_pose": _matrix4(source["actor_matrix"]).tolist(),
+        "target_initial_pose": _matrix4(target["actor_matrix"]).tolist(),
         "warnings": list(dict.fromkeys(value for value in warnings if value)),
         "assumptions": list(dict.fromkeys(value for value in assumptions if value)),
     }
@@ -471,13 +412,13 @@ def _map_stages_to_source_target_space(stages, working_space):
         details["operation_space_incremental_moving_to_reference"] = copy.deepcopy(
             stage.incremental_moving_to_fixed
         )
-        details["source_to_operation"] = _matrix_to_json(source_to_operation)
-        details["target_to_operation"] = _matrix_to_json(target_to_operation)
+        details["source_to_operation"] = _matrix4(source_to_operation).tolist()
+        details["target_to_operation"] = _matrix4(target_to_operation).tolist()
         mapped.append(TransformStageResult(
             name=stage.name,
             kind=stage.kind,
-            cumulative_moving_to_fixed=_matrix_to_json(public_cumulative),
-            incremental_moving_to_fixed=_matrix_to_json(public_incremental),
+            cumulative_moving_to_fixed=_matrix4(public_cumulative).tolist(),
+            incremental_moving_to_fixed=_matrix4(public_incremental).tolist(),
             metric_value=stage.metric_value,
             ncc=stage.ncc,
             iterations=stage.iterations,
@@ -492,7 +433,7 @@ def _map_stages_to_source_target_space(stages, working_space):
     return mapped
 
 
-def _prepare_reformat_target(record, original_fixed, working_space):
+def prepare_reformat_target(record, original_fixed, working_space):
     """Capture the default Reference or one explicit output lattice in target units."""
 
     explicit = bool(record)
@@ -505,7 +446,7 @@ def _prepare_reformat_target(record, original_fixed, working_space):
         descriptor = copy.deepcopy(dict(record.get("descriptor") or {}))
         label = str(record.get("display_name") or "explicit output grid")
     else:
-        geometry = _local_geometry_payload(original_fixed)
+        geometry = local_geometry_payload(original_fixed)
         actor = invertible_affine4(
             working_space.get("target_initial_pose"), "Reference output-grid pose"
         )
@@ -566,13 +507,11 @@ def _prepare_reformat_target(record, original_fixed, working_space):
         or selected_working_grid.get("physical_grid_diagnostics")
         or []
     )
-    grid = _validated_local_grid(geometry, f"{label} Reformat output grid")
+    grid = registration_local_grid(geometry, f"{label} Reformat output grid")
     source_units = grid.space_units
     target_unit = working_space.get("target_working_unit")
     if source_units is not None and target_unit:
-        scale = 10.0 ** (
-            _UNIT_POWER10_METERS[source_units[0]] - _UNIT_POWER10_METERS[target_unit]
-        )
+        scale = spatial_unit_scale(source_units[0], target_unit)
         mode = "exact-physical-unit-conversion"
     else:
         scale = 1.0
@@ -633,7 +572,7 @@ def _prepare_reformat_target(record, original_fixed, working_space):
         "direction": np.asarray(
             normalized_components["direction"], dtype=float
         ).tolist(),
-        "local_index_to_working_affine": _matrix_to_json(normalized_local),
+        "local_index_to_working_affine": _matrix4(normalized_local).tolist(),
         "physical_units": verified_output_units,
         "source_coordinate_space_id": output_coordinate_space_id,
         "coordinate_mode": coordinate_mode,
@@ -694,18 +633,18 @@ def _prepare_reformat_target(record, original_fixed, working_space):
             captured.get("geometry_revision") or ""
         ),
         "source_geometry": geometry,
-        "source_actor_matrix": _matrix_to_json(actor),
+        "source_actor_matrix": _matrix4(actor).tolist(),
         "unit_conversion": {
             "source_units_canonical": list(source_units) if source_units is not None else None,
             "target_working_unit": target_unit,
             "scale_to_target_working_space": float(scale),
-            "conversion_matrix": _matrix_to_json(conversion),
+            "conversion_matrix": _matrix4(conversion).tolist(),
             "mode": mode,
         },
         "normalized_geometry": normalized_geometry,
         "normalized_working_grid": normalized_working_grid,
         "normalized_physical_grid": normalized_physical_grid,
-        "normalized_actor_matrix": _matrix_to_json(normalized_actor),
+        "normalized_actor_matrix": _matrix4(normalized_actor).tolist(),
     }
 
     def append_unique(key, value):
@@ -731,16 +670,6 @@ def _prepare_reformat_target(record, original_fixed, working_space):
     return result
 
 
-def _output_to_source_zyx_mapping(source_world_affine, output_world_affine):
-    try:
-        out_xyz_to_in_xyz = np.linalg.solve(
-            _matrix4(source_world_affine), _matrix4(output_world_affine)
-        )
-    except np.linalg.LinAlgError as exc:
-        raise RuntimeError("Registration input transform is singular.") from exc
-    return _XYZ_ZYX_PERMUTATION @ out_xyz_to_in_xyz @ _XYZ_ZYX_PERMUTATION
-
-
 def _resample_zyx(source_zyx, source_world_affine, output_world_affine,
                   output_shape_zyx, *, order=1, output_dtype=np.float32):
     from madi3d_app.volume.resampling import sample_affine_zyx
@@ -753,43 +682,21 @@ def _resample_zyx(source_zyx, source_world_affine, output_world_affine,
         raise RuntimeError("Registration requires SciPy. Install it with: pip install scipy") from exc
 
 
-def _robust_normalize(array):
-    x = np.asarray(array, dtype=np.float32)
-    finite = np.isfinite(x)
-    vals = x[finite]
-    if vals.size < 32:
-        return np.zeros_like(x, dtype=np.float32)
-    positive = vals[vals > 0]
-    if positive.size >= 256:
-        vals = positive
-    lo, hi = np.percentile(vals, (0.5, 99.7))
-    if not math.isfinite(float(lo)) or not math.isfinite(float(hi)) or hi <= lo:
-        return np.zeros_like(x, dtype=np.float32)
-    y = np.clip((x - float(lo)) / float(hi - lo), 0.0, 1.0)
-    y[~finite] = 0.0
-    return y.astype(np.float32, copy=False)
-
-
-def _ncc(a, b, mask=None):
-    a = np.asarray(a, dtype=np.float32)
-    b = np.asarray(b, dtype=np.float32)
-    valid = np.isfinite(a) & np.isfinite(b)
-    if mask is not None:
-        valid &= np.asarray(mask, dtype=bool)
-    if np.count_nonzero(valid) < 128:
-        return float("nan")
-    av = a[valid].astype(np.float64, copy=False)
-    bv = b[valid].astype(np.float64, copy=False)
-    av -= av.mean(); bv -= bv.mean()
-    denom = math.sqrt(float(np.dot(av, av)) * float(np.dot(bv, bv)))
-    if denom <= 1e-15:
-        return float("nan")
-    return float(np.dot(av, bv) / denom)
+_MOMENT_ANALYSIS_MAX_DIM = 128
 
 
 def _weighted_world_moments(snapshot, max_samples=300000):
-    """Return weighted COM and principal axes in MADI world coordinates."""
-    data = _robust_normalize(snapshot["data"])
+    """Estimate weighted COM and principal axes in MADI world coordinates.
+
+    Normalize at most 128**3 spatial samples, independently of native volume
+    size. Slicing borrows source storage; all masks and indexed arrays below
+    are bounded by this analysis grid (and point arrays by max_samples).
+    """
+    source = np.asarray(snapshot["data"])
+    stride = tuple(max(1, (n + _MOMENT_ANALYSIS_MAX_DIM - 1)
+                       // _MOMENT_ANALYSIS_MAX_DIM) for n in source.shape)
+    sample = source[::stride[0], ::stride[1], ::stride[2]]
+    data = _robust_normalize(sample)
     flat = data.ravel()
     positive = np.flatnonzero(flat > max(0.02, float(np.percentile(flat, 70.0))))
     if positive.size < 64:
@@ -804,6 +711,8 @@ def _weighted_world_moments(snapshot, max_samples=300000):
         positive = positive[idx]
     z, y, x = np.unravel_index(positive, data.shape)
     xyz = np.column_stack((x, y, z)).astype(np.float64)
+    # The captured affine consumes native XYZ indices, not analysis indices.
+    xyz *= np.asarray(stride[::-1], dtype=float)
     weights = flat[positive].astype(np.float64)
     weights = np.maximum(weights, 1e-6)
     world = (
@@ -871,15 +780,19 @@ def _initial_moving_to_fixed(fixed, moving, mode):
 _LANDMARK_INITIAL_ALIGNMENT_MODES = frozenset(("landmarks", "landmarks_9dof"))
 
 
-def _is_landmark_initial_alignment(value):
+def is_landmark_initial_alignment(value):
+    """Whether Initial alignment requests a supported landmark model."""
     return str(value or "current") in _LANDMARK_INITIAL_ALIGNMENT_MODES
 
 
-def _validate_landmark_9dof_pipeline(settings):
+def validate_landmark_initialization_settings(settings):
+    """Check that refinement can retain the selected landmark initializer."""
     settings = dict(settings or {})
     if str(settings.get("initial_alignment") or "current") != "landmarks_9dof":
         return
-    if _linear_engine(settings) != "cmtk":
+    if not bool(settings.get("linear_enabled", True)):
+        return
+    if registration_linear_engine(settings) != "cmtk":
         raise RuntimeError(
             "Landmark 9-DOF initialization requires the CMTK linear engine. "
             "ITK's anisotropic-scale transform uses a different matrix parameterization and cannot preserve this no-shear CMTK initializer exactly."
@@ -1070,6 +983,28 @@ def _landmark_9dof_moving_to_fixed(reference_points, moving_points, weights=None
         "optimizer_optimality": float(result.optimality),
         "linear_geometry_qc": geometry_qc,
     }
+
+
+def fit_landmark_initialization(mode, reference_points, moving_points, weights=None):
+    """Fit moving -> reference in the supplied common coordinate space.
+
+    Return matrix, per-pair residuals, moving spread singular values and fit
+    details. Rigid requires three non-collinear pairs; no-shear 9-DOF requires
+    four non-coplanar pairs. Positive weights retain their existing semantics.
+    Callers validate refinement settings separately and supply world coordinates
+    for editor validation or operation coordinates for worker execution.
+    """
+    if str(mode) == "landmarks_9dof":
+        matrix, residuals, details = _landmark_9dof_moving_to_fixed(
+            reference_points, moving_points, weights
+        )
+        return matrix, residuals, details.get("moving_spread_singular_values") or [], details
+    if str(mode) == "landmarks":
+        matrix, residuals, singular = _landmark_rigid_moving_to_fixed(
+            reference_points, moving_points, weights
+        )
+        return matrix, residuals, singular, {}
+    raise ValueError(f"Unsupported landmark initialization: {mode}")
 
 
 def _effective_world_spacing(snapshot):
@@ -1400,8 +1335,13 @@ def _native_working_array(snapshot, grid, *, normalize=False):
 def _cmtk_nonlinear_working_grid(snapshot, support_bounds, settings):
     """Build the CMTK input lattice independently from global ITK settings."""
     settings = dict(settings or {})
-    target_spacing = max(1e-6, float(settings.get("cmtk_working_spacing", 0.75)))
-    max_dim = max(32, int(settings.get("cmtk_max_grid_dim", 768)))
+    target_spacing = _setting_spacing(
+        settings, "cmtk_working_spacing", _CMTK_INPUT_WORKING_SPACING_DEFAULT
+    )
+    max_dim = _setting_count(
+        settings, "cmtk_max_grid_dim", _CMTK_INPUT_MAX_GRID_DIM_DEFAULT,
+        minimum=_MIN_WORKING_DIM,
+    )
     return _working_grid(
         snapshot, target_spacing, max_dim, support_bounds=support_bounds
     )
@@ -1571,7 +1511,91 @@ _CMTK_LINEAR_METRIC_BY_GLOBAL_METRIC = {
 }
 
 
-def _linear_engine(settings):
+# Result-affecting registration numerics are resolved once at this
+# settings→algorithm boundary. An absent key (or a key persisted as null)
+# receives its documented default; an explicitly persisted key is passed through
+# unchanged so its owning validator accepts or rejects it. Explicit values are
+# never defaulted, clamped, or truncated into a different scientific run.
+_LINEAR_WORKING_SPACING_DEFAULT = 1.5
+_LINEAR_MAX_GRID_DIM_DEFAULT = 512
+_CMTK_INPUT_WORKING_SPACING_DEFAULT = 0.75
+_CMTK_INPUT_MAX_GRID_DIM_DEFAULT = 768
+_MIN_WORKING_DIM = 32
+_SHRINK_FACTORS_DEFAULT = (8, 4, 2, 1)
+
+
+def _finite_setting_number(value, key):
+    """Return one explicit numeric registration value as a finite float."""
+    if isinstance(value, bool):
+        raise ValueError(f"Registration setting {key!r} must be a number; got {value!r}.")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Registration setting {key!r} must be a finite number; got {value!r}."
+        ) from exc
+    if not math.isfinite(number):
+        raise ValueError(
+            f"Registration setting {key!r} must be a finite number; got {value!r}."
+        )
+    return number
+
+
+def _whole_setting_number(value, key, *, minimum):
+    """Return one explicit integer registration value without truncating it."""
+    number = _finite_setting_number(value, key)
+    if not number.is_integer():
+        raise ValueError(
+            f"Registration setting {key!r} must be a whole number; got {value!r}."
+        )
+    result = int(number)
+    if result < minimum:
+        raise ValueError(
+            f"Registration setting {key!r} must be at least {minimum}; got {result}."
+        )
+    return result
+
+
+def _setting_value(settings, key, default):
+    """Return one persisted value, or the documented default when unset or null."""
+    value = settings.get(key, default)
+    return default if value is None else value
+
+
+def _setting_number(settings, key, default):
+    """Resolve a numeric setting; documented default when absent, explicit otherwise."""
+    return _finite_setting_number(_setting_value(settings, key, default), key)
+
+
+def _setting_count(settings, key, default, *, minimum=1):
+    """Resolve an integer setting without truncating an explicitly persisted value."""
+    return _whole_setting_number(_setting_value(settings, key, default), key, minimum=minimum)
+
+
+def _setting_spacing(settings, key, default):
+    """Resolve a physical working spacing; an explicit value must be greater than 0."""
+    spacing = _setting_number(settings, key, default)
+    if spacing <= 0.0:
+        raise ValueError(
+            f"Registration setting {key!r} must be greater than 0; got {spacing!r}."
+        )
+    return spacing
+
+
+def _setting_schedule(settings, key, default):
+    """Resolve a persisted resolution schedule instead of defaulting malformed input."""
+    value = _setting_value(settings, key, default)
+    if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
+        raise ValueError(
+            f"Registration setting {key!r} must be a non-empty list of whole numbers; "
+            f"got {value!r}."
+        )
+    if not value:
+        raise ValueError(f"Registration setting {key!r} must contain at least one level.")
+    return [_whole_setting_number(item, key, minimum=1) for item in value]
+
+
+def registration_linear_engine(settings):
     """Return the explicitly selected global linear engine."""
     engine = str(dict(settings or {}).get("linear_engine", "itk") or "itk").strip().lower()
     if engine not in {"itk", "cmtk"}:
@@ -1581,63 +1605,7 @@ def _linear_engine(settings):
     return engine
 
 
-def _cmtk_linear_backend_ui_state(manager):
-    """Return display-only readiness from persisted state; never probe CMTK/WSL."""
-    required = tuple(CMTKRegistrationRunner.LINEAR_REQUIRED_TOOLS)
-    try:
-        status = manager.persisted_status()
-    except Exception:
-        status = getattr(manager, "last_status", None)
-    ready = bool(getattr(status, "ready", False))
-    if ready:
-        label = str(getattr(status, "backend", "") or "CMTK")
-        version = str(getattr(status, "version", "") or "").strip()
-        display_version = version[5:].strip() if version.lower().startswith("cmtk ") else version
-        suffix = f" ({display_version})" if display_version else ""
-        return {
-            "ready": True,
-            "combo_text": "CMTK",
-            "summary": f"CMTK ready{suffix}: {label}.",
-            "required_tools": required,
-        }
-
-    prior = str(getattr(status, "summary", "") or "").strip()
-    state = str(getattr(status, "state", "") or "").lower()
-    if state == "unavailable":
-        summary = (
-            "CMTK setup/repair is required. Selecting CMTK is allowed; Calculate registration "
-            "will open the dependency setup path. MADI3D will not silently fall back to ITK."
-        )
-    else:
-        summary = (
-            "CMTK has not been validated on this installation yet. Selecting CMTK is allowed; "
-            "the first CMTK action will run the dependency setup/check path. "
-            "MADI3D will not silently fall back to ITK."
-        )
-    if prior and prior not in {"CMTK is ready.", "CMTK has not been checked yet."}:
-        summary += f" Last CMTK status: {prior}"
-    return {
-        "ready": False,
-        "combo_text": "CMTK — setup required",
-        "summary": summary,
-        "required_tools": required,
-    }
-
-
-def recommended_registration_threads():
-    """Bound automatic thread choices and leave one available CPU for the UI."""
-    process_count = getattr(os, "process_cpu_count", os.cpu_count)
-    available = process_count() or 1
-    affinity = getattr(os, "sched_getaffinity", None)
-    if affinity is not None:
-        try:
-            available = min(available, len(affinity(0)))
-        except OSError:
-            pass
-    return min(8, max(1, int(available) - 1))
-
-
-def _cmtk_linear_settings_from_registration(settings):
+def cmtk_linear_settings(settings):
     """Map common registration settings onto the first-class CMTK linear runner."""
     settings = dict(settings or {})
     model = str(settings.get("global_model", "affine") or "affine").lower()
@@ -1648,21 +1616,24 @@ def _cmtk_linear_settings_from_registration(settings):
         metric = _CMTK_LINEAR_METRIC_BY_GLOBAL_METRIC.get(
             str(settings.get("metric", "mattes") or "mattes").lower(), "nmi"
         )
+    defaults = CMTKLinearSettings()
+    linear_thread_default = _setting_value(settings, "cmtk_threads", defaults.threads)
     return CMTKLinearSettings(
         metric=metric,
         final_dof=_CMTK_LINEAR_DOF_BY_MODEL[model],
-        exploration=float(settings.get("cmtk_linear_exploration", 16.0) or 16.0),
-        accuracy=float(settings.get("cmtk_linear_accuracy", 0.8) or 0.8),
-        coarsest=float(settings.get("cmtk_linear_coarsest", 8.0) or 8.0),
-        threads=max(1, int(settings.get("cmtk_linear_threads", settings.get("cmtk_threads", 1)) or 1)),
+        exploration=_setting_number(settings, "cmtk_linear_exploration", defaults.exploration),
+        accuracy=_setting_number(settings, "cmtk_linear_accuracy", defaults.accuracy),
+        coarsest=_setting_number(settings, "cmtk_linear_coarsest", defaults.coarsest),
+        threads=_setting_count(settings, "cmtk_linear_threads", linear_thread_default),
     ).validated()
 
 
-def _cmtk_required_tools_for_registration(settings):
+def required_cmtk_tools(settings):
     """Return the exact CMTK capabilities required by the selected workflow."""
     settings = dict(settings or {})
     tools = []
-    if _linear_engine(settings) == "cmtk":
+    linear_enabled = bool(settings.get("linear_enabled", True))
+    if linear_enabled and registration_linear_engine(settings) == "cmtk":
         tools.extend(CMTKRegistrationRunner.LINEAR_REQUIRED_TOOLS)
     if bool(settings.get("deformable", False)):
         tools.extend(CMTKRegistrationRunner.REQUIRED_TOOLS)
@@ -1685,12 +1656,7 @@ def _cmtk_working_to_world_moving_to_reference(
     return _matrix4(from_reference_local @ local @ to_floating_local)
 
 
-def _cmtk_linear_path_labels(dof_sequence):
-    labels = {6: "Rigid", 7: "Similarity", 9: "Scale", 12: "Affine"}
-    return [labels[int(dof)] for dof in tuple(dof_sequence or ()) if int(dof) in labels]
-
-
-def _cmtk_warp_settings_from_registration(settings):
+def cmtk_warp_settings(settings):
     """Return validated settings for the only supported nonlinear engine: CMTK."""
     settings = dict(settings or {})
     legacy = sorted(key for key in _LEGACY_DEFORMABLE_SETTING_KEYS if key in settings)
@@ -1701,18 +1667,21 @@ def _cmtk_warp_settings_from_registration(settings):
             + ". Reapply a current CMTK preset or configure the CMTK controls directly."
         )
 
+    defaults = CMTKWarpSettings()
     cmtk = CMTKWarpSettings(
         metric=str(settings.get("cmtk_metric", "nmi") or "nmi").lower(),
-        exploration=float(settings.get("cmtk_exploration", 26.0) or 26.0),
-        accuracy=float(settings.get("cmtk_accuracy", 0.8) or 0.8),
-        coarsest=float(settings.get("cmtk_coarsest", 8.0) or 8.0),
-        grid_spacing=float(settings.get("cmtk_grid_spacing", 80.0) or 80.0),
-        refine=max(0, int(settings.get("cmtk_refine", 4) or 0)),
+        exploration=_setting_number(settings, "cmtk_exploration", defaults.exploration),
+        accuracy=_setting_number(settings, "cmtk_accuracy", defaults.accuracy),
+        coarsest=_setting_number(settings, "cmtk_coarsest", defaults.coarsest),
+        grid_spacing=_setting_number(settings, "cmtk_grid_spacing", defaults.grid_spacing),
+        refine=_setting_count(settings, "cmtk_refine", defaults.refine, minimum=0),
         mode=str(settings.get("cmtk_mode", "fast") or "fast"),
-        threads=max(1, int(settings.get("cmtk_threads", 1) or 1)),
-        energy_weight=float(settings.get("cmtk_energy_weight", 0.1) or 0.0),
-        jacobian_weight=float(settings.get("cmtk_jacobian_weight", 0.0) or 0.0),
-        inverse_consistency_weight=float(settings.get("cmtk_inverse_consistency_weight", 0.0) or 0.0),
+        threads=_setting_count(settings, "cmtk_threads", defaults.threads),
+        energy_weight=_setting_number(settings, "cmtk_energy_weight", defaults.energy_weight),
+        jacobian_weight=_setting_number(settings, "cmtk_jacobian_weight", defaults.jacobian_weight),
+        inverse_consistency_weight=_setting_number(
+            settings, "cmtk_inverse_consistency_weight", defaults.inverse_consistency_weight
+        ),
         omit_original_data=bool(settings.get("cmtk_omit_original_data", False)),
         match_histograms=bool(settings.get("cmtk_match_histograms", False)),
     ).validated()
@@ -1727,8 +1696,8 @@ def _cmtk_warp_settings_from_registration(settings):
 
 
 
-def _cleanup_runtime_cmtk_chains(chains):
-    """Remove only MADI-created Commit-4 temporary CMTK workspaces."""
+def cleanup_runtime_cmtk_chains(chains):
+    """Remove only MADI-created runtime CMTK workspaces, never durable bundles."""
     temp_root = Path(tempfile.gettempdir()).resolve()
     for chain in list(chains or []):
         try:
@@ -2075,58 +2044,6 @@ def _linear_stage_pipeline(global_model):
     raise ValueError(f"Unsupported global registration model: {global_model!r}.")
 
 
-def _registration_stage_path(stages):
-    """Return the successfully executed transform path in compact terms."""
-    labels = {
-        "rigid": "Rigid",
-        "similarity": "Similarity",
-        "scaleversor": "Scale",
-        "affine": "Affine",
-        "cmtk_warp": "Warp",
-    }
-    path = []
-    for stage in list(stages or []):
-        status = stage.get("execution_status", "pending") if isinstance(stage, dict) else getattr(stage, "execution_status", "pending")
-        kind = stage.get("kind", "") if isinstance(stage, dict) else getattr(stage, "kind", "")
-        details = stage.get("details", {}) if isinstance(stage, dict) else getattr(stage, "details", {})
-        if not execution_succeeded(status):
-            continue
-        if str(dict(details or {}).get("engine") or "").lower() == "cmtk":
-            for cmtk_label in _cmtk_linear_path_labels(dict(details or {}).get("dof_sequence") or ()):
-                if not path or path[-1] != cmtk_label:
-                    path.append(cmtk_label)
-            if dict(details or {}).get("dof_sequence"):
-                continue
-        label = labels.get(str(kind or "").lower())
-        if not label:
-            continue
-        if not path or path[-1] != label:
-            path.append(label)
-    return " → ".join(path) if path else "Initial only"
-
-
-def _linear_qc_text(qc, precision=4):
-    """Format decomposed polar scale and shear values without hiding components."""
-    qc = dict(qc or {})
-    try:
-        digits = max(1, int(precision))
-    except Exception:
-        digits = 4
-    parts = []
-    scale = list(qc.get("scale_xyz") or qc.get("axis_stretch_xyz") or ())
-    if len(scale) == 3:
-        parts.append("scale XYZ=" + "/".join(f"{float(v):.{digits}f}" for v in scale))
-    shears = [qc.get("shear_xy"), qc.get("shear_xz"), qc.get("shear_yz")]
-    if all(value is not None for value in shears):
-        parts.append(
-            "shear XY/XZ/YZ="
-            + "/".join(f"{float(v):+.{digits}f}" for v in shears)
-        )
-        if qc.get("max_abs_shear") is not None:
-            parts.append(f"max |shear|={float(qc['max_abs_shear']):.{digits}f}")
-    return "; ".join(parts)
-
-
 def _configure_metric(
     registration, metric_name, bins, sampling, seed,
     fixed_mask=None, moving_mask=None, neighborhood_radius=4,
@@ -2297,80 +2214,6 @@ def _resolve_gradient_memory_strategy(setting, image, sampling_fraction):
     except Exception:
         voxels = 0
     return "on_demand" if voxels >= 2_000_000 and float(sampling_fraction) < 0.35 else "precompute"
-
-
-def _normalized_mutual_information(a, b, mask=None, bins=64):
-    """Deterministic full-grid NMI diagnostic for normalized registration images.
-
-    This is deliberately independent from the optimizer's stochastic metric
-    sampling.  It uses one fixed 64-bin joint histogram by default and the
-    entropy-ratio definition (H(A)+H(B))/H(A,B), where larger values indicate
-    stronger statistical dependence.
-    """
-    a = np.asarray(a, dtype=np.float32)
-    b = np.asarray(b, dtype=np.float32)
-    valid = np.isfinite(a) & np.isfinite(b)
-    if mask is not None:
-        valid &= np.asarray(mask, dtype=bool)
-    if np.count_nonzero(valid) < 128:
-        return float("nan")
-    av = np.clip(a[valid].astype(np.float64, copy=False), 0.0, 1.0)
-    bv = np.clip(b[valid].astype(np.float64, copy=False), 0.0, 1.0)
-    hist, _x, _y = np.histogram2d(
-        av, bv, bins=max(8, int(bins)), range=((0.0, 1.0), (0.0, 1.0))
-    )
-    total = float(hist.sum())
-    if total <= 0.0:
-        return float("nan")
-    pxy = hist / total
-    px = pxy.sum(axis=1)
-    py = pxy.sum(axis=0)
-
-    def entropy(prob):
-        values = np.asarray(prob, dtype=np.float64)
-        values = values[values > 0.0]
-        return -float(np.sum(values * np.log(values))) if values.size else 0.0
-
-    hxy = entropy(pxy)
-    if hxy <= 1e-15:
-        return float("nan")
-    return float((entropy(px) + entropy(py)) / hxy)
-
-
-
-def _array_similarity_diagnostics(fixed_array, moving_array, *, nmi_bins=64):
-    """Return deterministic NMI/NCC and foreground overlap on one shared grid."""
-    fixed = _robust_normalize(np.asarray(fixed_array, dtype=np.float32))
-    moving = _robust_normalize(np.asarray(moving_array, dtype=np.float32))
-    if fixed.shape != moving.shape:
-        raise ValueError(
-            f"Similarity QC arrays must share one grid; got {fixed.shape} and {moving.shape}."
-        )
-    fixed_fg = np.isfinite(fixed) & (fixed > 0.02)
-    moving_fg = np.isfinite(moving) & (moving > 0.02)
-    fixed_count = int(np.count_nonzero(fixed_fg))
-    moving_count = int(np.count_nonzero(moving_fg))
-    overlap_count = int(np.count_nonzero(fixed_fg & moving_fg))
-    foreground_overlap = (
-        float(overlap_count / max(1, min(fixed_count, moving_count)))
-        if fixed_count >= 128 and moving_count >= 128 else float("nan")
-    )
-    metric_mask = fixed_fg if fixed_count >= 128 else None
-    valid = np.isfinite(fixed) & np.isfinite(moving)
-    if metric_mask is not None:
-        valid &= metric_mask
-    return {
-        "ncc": _ncc(fixed, moving, metric_mask),
-        "nmi": _normalized_mutual_information(
-            fixed, moving, metric_mask, bins=nmi_bins
-        ),
-        "valid_voxels": int(np.count_nonzero(valid)),
-        "nmi_bins": int(max(8, int(nmi_bins))),
-        "foreground_overlap_fraction": foreground_overlap,
-        "fixed_foreground_voxels": fixed_count,
-        "moving_foreground_voxels": moving_count,
-        "overlap_foreground_voxels": overlap_count,
-    }
 
 
 def _deformation_qc_evidence(linear_similarity, warp_similarity, jacobian, configured_metric, *, thresholds=None):
@@ -2545,7 +2388,7 @@ def _reformat_local_transform(transform_payload, reference_actor_matrix, source_
 
 
 
-def _polydata_points_fingerprint(polydata):
+def polydata_points_fingerprint(polydata):
     """Stable SHA-256 fingerprint of current mesh point coordinates."""
     if polydata is None or polydata.GetPoints() is None:
         return ""
@@ -2578,7 +2421,7 @@ def _apply_points_affine(points_xyz, matrix4):
 def _sitk_image_native(array_zyx, geometry):
     sitk = _sitk_module()
     arr = np.ascontiguousarray(array_zyx)
-    grid = _validated_local_grid(geometry, "native registration image")
+    grid = registration_local_grid(geometry, "native registration image")
     if tuple(arr.shape[-3:]) != grid.dimensions[::-1]:
         raise ValueError(
             "Native registration data shape does not match its working grid."
@@ -2592,7 +2435,7 @@ def _sitk_image_native(array_zyx, geometry):
 
 def _sitk_reference_image(geometry, pixel_id):
     sitk = _sitk_module()
-    grid = _validated_local_grid(
+    grid = registration_local_grid(
         geometry, "reference registration image"
     )
     image = sitk.Image(list(grid.dimensions), int(pixel_id))
@@ -2611,9 +2454,11 @@ class RegistrationWorker(QtCore.QThread):
     failed = QtCore.Signal(str)
     cancelled = QtCore.Signal()
 
-    def __init__(self, tasks, settings, cmtk_backend=None, parent=None):
+    def __init__(self, tasks, settings, cmtk_backend=None, parent=None, *, reserve_memory=None):
         super().__init__(parent)
         self.tasks = list(tasks or [])
+        self.task_offset = 0
+        self.task_total = len(self.tasks)
         # Small direct provenance captures stay parallel to results after the
         # large task arrays are released.  They are runtime state only.
         self.completed_captures = []
@@ -2624,16 +2469,18 @@ class RegistrationWorker(QtCore.QThread):
         ]
         self.settings = RegistrationSettings.from_dict(settings)
         self.cmtk_backend = cmtk_backend
+        self._reserve_memory = reserve_memory
         self._cancel = False
         self._active_method = None
-        self.logs: list[RegistrationLogEntry] = []
+        self.logs = deque(maxlen=_REGISTRATION_LOG_LIMIT)
+        self._stream_diagnostics = StreamDiagnostics(self._emit_diag)
 
-    def _diag(self, message, level="INFO", details=""):
+    def _emit_diag(self, message, level="INFO", details=""):
         """Emit detailed worker diagnostics without touching Qt widgets directly."""
         entry = RegistrationLogEntry(
-            level=str(level or "INFO"),
-            message=str(message or ""),
-            details=str(details or ""),
+            level=_bounded_registration_log_text(level or "INFO"),
+            message=_bounded_registration_log_text(message or ""),
+            details=_bounded_registration_log_text(details or ""),
             source="registration-worker",
         )
         self.logs.append(entry)
@@ -2641,6 +2488,15 @@ class RegistrationWorker(QtCore.QThread):
             self.diagnostic.emit(entry.level, entry.message, entry.details)
         except Exception:
             pass
+
+    def _flush_stream_diagnostics(self):
+        self._stream_diagnostics.flush()
+
+    def _diag(self, message, level="INFO", details="", *, streamed=False):
+        self._stream_diagnostics.diagnostic(message, level, details, streamed=streamed)
+
+    def _cmtk_command(self, command):
+        emit_command_diagnostic(command, self._diag)
 
     def request_cancel(self):
         # Do not call into a SimpleITK registration object from the GUI thread.
@@ -2656,25 +2512,64 @@ class RegistrationWorker(QtCore.QThread):
         if self._cancel or self.isInterruptionRequested():
             raise InterruptedError("Registration cancelled")
 
+    def _admit_working_arrays(self, working_bytes, *prepared_inputs):
+        """Pause before construction while the GUI resizes the existing token."""
+        self._check_cancel()
+        if self._reserve_memory is None:
+            return
+        backing = {}
+        snapshots = [snapshot for task in self.tasks if task
+                     for snapshot in (task["fixed"], task["moving"])]
+        for snapshot in (*snapshots, *prepared_inputs):
+            array = snapshot["data"]
+            while isinstance(array.base, np.ndarray):
+                array = array.base
+            backing[id(array)] = array.nbytes
+        request = {
+            "worker": self, "working_bytes": int(working_bytes),
+            "materialized_bytes": sum(backing.values()),
+            "done": threading.Event(), "error": None,
+        }
+        self._reserve_memory(request)
+        while not request["done"].wait(0.05):
+            self._check_cancel()
+        self._check_cancel()
+        if request["error"] is not None:
+            if request.get("cancelled"):
+                raise InterruptedError(request["error"])
+            raise MemoryError(request["error"])
+
     def run(self):
         sitk = None
         previous_global_threads = None
         results = []
         try:
-            sitk = _sitk_module()
-            threads = max(1, int(self.settings.get("threads", max(1, (os.cpu_count() or 2) - 1))))
-            try:
-                previous_global_threads = int(sitk.ProcessObject.GetGlobalDefaultNumberOfThreads())
-                sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(threads)
-            except Exception:
-                previous_global_threads = None
+            linear_enabled = bool(self.settings.get("linear_enabled", True))
+            if linear_enabled:
+                sitk = _sitk_module()
+                threads = max(1, int(self.settings.get("threads", max(1, (os.cpu_count() or 2) - 1))))
+                try:
+                    previous_global_threads = int(sitk.ProcessObject.GetGlobalDefaultNumberOfThreads())
+                    sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(threads)
+                except Exception:
+                    previous_global_threads = None
+            else:
+                sitk = None
+                threads = max(1, int(self.settings.get("cmtk_threads", 1) or 1))
+            linear_diagnostics = (
+                f"model={self.settings.get('global_model')}; linear_engine={registration_linear_engine(self.settings)}; "
+                f"global_metric={self.settings.get('metric')}; "
+                f"sampling={100.0 * float(self.settings.get('sampling', 0.0)):.3g}%; "
+                f"global_spacing={self.settings.get('working_spacing')}; "
+                f"global_safety_max={self.settings.get('max_grid_dim')}"
+                if linear_enabled else "global linear alignment=disabled"
+            )
             self._diag(
                 "Registration worker started",
                 details=(
                     f"tasks={len(self.tasks)}; preset={self.settings.get('preset', 'custom')}; requested_threads={threads}; "
-                    f"model={self.settings.get('global_model')}; linear_engine={_linear_engine(self.settings)}; deformable={bool(self.settings.get('deformable', False))}; "
-                    f"global_metric={self.settings.get('metric')}; cmtk_metric={self.settings.get('cmtk_metric', 'nmi')}; "
-                    f"sampling={100.0 * float(self.settings.get('sampling', 0.0)):.3g}%; global_spacing={self.settings.get('working_spacing')}; global_safety_max={self.settings.get('max_grid_dim')}; "
+                    f"{linear_diagnostics}; linear_enabled={linear_enabled}; deformable={bool(self.settings.get('deformable', False))}; "
+                    f"cmtk_metric={self.settings.get('cmtk_metric', 'nmi')}; "
                     f"CMTK_input_spacing={self.settings.get('cmtk_working_spacing', 0.75)}; CMTK_input_safety_max={self.settings.get('cmtk_max_grid_dim', 768)}; "
                     f"ITK_threads={threads}; CMTK_threads={self.settings.get('cmtk_threads', 1)}; "
                     f"SimpleITK={getattr(sitk, 'Version_VersionString', lambda: 'unknown')()}; "
@@ -2682,32 +2577,39 @@ class RegistrationWorker(QtCore.QThread):
                     f"cmtk_backend={getattr(self.cmtk_backend, 'label', 'not requested') if self.cmtk_backend is not None else 'not requested'}"
                 ),
             )
-            total = max(1, len(self.tasks))
+            total = max(1, self.task_total)
             for index, task in enumerate(self.tasks):
                 self._check_cancel()
-                task_log_start = len(self.logs)
-                prefix = int(round(100.0 * index / total))
+                self._flush_stream_diagnostics()
+                self.logs.clear()
+                pair_index = self.task_offset + index
+                prefix = int(round(100.0 * pair_index / total))
                 self.progress.emit(prefix, f"Preparing {task['moving']['display_name']} → {task['fixed']['display_name']}")
-                chain = self._register_pair(task, index, total)
-                chain.logs = copy.deepcopy(self.logs[task_log_start:])
+                chain = self._register_pair(task, pair_index, total)
+                self._flush_stream_diagnostics()
+                chain.logs = copy.deepcopy(list(self.logs))
                 results.append(chain)
                 self.completed_captures.append(task.get("scientific_capture"))
-                # Batch snapshots are large NumPy arrays. Release each completed
-                # moving task immediately instead of retaining the whole batch
-                # until QThread teardown. The shared fixed snapshot remains alive
-                # through the still-pending task dictionaries.
+                # _register_pair has returned and released its construction
+                # arrays. Keep only capture/output coverage.
+                self._admit_working_arrays(0)
+                # Pair snapshots are large NumPy arrays. Release each completed
+                # moving task immediately. The controller retains only the
+                # compatible reference capture for the next pair.
                 try:
                     self.tasks[index] = None
                 except Exception:
                     pass
             self._emit_finishing("Finalizing registration results…")
-            self.progress.emit(100, "Registration complete")
+            self.progress.emit(int(round(100.0 * (self.task_offset + len(self.tasks)) / total)), "Registration complete")
             self.succeeded.emit(results)
         except InterruptedError:
-            _cleanup_runtime_cmtk_chains(results)
+            cleanup_runtime_cmtk_chains(results)
+            self._flush_stream_diagnostics()
             self.cancelled.emit()
         except Exception:
-            _cleanup_runtime_cmtk_chains(results)
+            cleanup_runtime_cmtk_chains(results)
+            self._flush_stream_diagnostics()
             self.failed.emit(traceback.format_exc())
         finally:
             if sitk is not None and previous_global_threads is not None:
@@ -2715,6 +2617,7 @@ class RegistrationWorker(QtCore.QThread):
                     sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(previous_global_threads)
                 except Exception:
                     pass
+            self._flush_stream_diagnostics()
 
     def _method_progress_callback(self, method, base, span, label, optimizer_fraction=0.90):
         """Report SimpleITK global-stage progress with headroom for validation.
@@ -2763,10 +2666,10 @@ class RegistrationWorker(QtCore.QThread):
                 "Run the CMTK setup/validation path and retry. MADI3D will not silently fall back to ITK."
             )
 
-        cmtk_settings = _cmtk_linear_settings_from_registration(settings)
+        cmtk_settings = cmtk_linear_settings(settings)
         thresholds = registration_qc_thresholds(settings.get("qc_thresholds"))
         dof_sequence = tuple(int(v) for v in cmtk_settings.dof_sequence)
-        path_labels = _cmtk_linear_path_labels(dof_sequence)
+        path_labels = cmtk_linear_stage_labels(dof_sequence)
         label = "CMTK global " + " → ".join(path_labels)
         global_model = str(settings.get("global_model", "affine") or "affine").lower()
         stage_start_overlap = float(_support_overlap_fraction(fixed, moving, cumulative_m2f))
@@ -2796,14 +2699,14 @@ class RegistrationWorker(QtCore.QThread):
             self._check_cancel()
 
             def cmtk_stdout(text):
-                chunk = str(text or "").rstrip()
+                chunk = str(text or "")
                 if chunk:
-                    self._diag("CMTK linear stdout", details=chunk)
+                    self._diag("CMTK linear stdout", details=chunk, streamed=True)
 
             def cmtk_stderr(text):
-                chunk = str(text or "").rstrip()
+                chunk = str(text or "")
                 if chunk:
-                    self._diag("CMTK linear stderr", level="WARNING", details=chunk)
+                    self._diag("CMTK linear stderr", details=chunk, streamed=True)
 
             self._diag(
                 f"{label} prepared",
@@ -2824,6 +2727,7 @@ class RegistrationWorker(QtCore.QThread):
                 floating_grid=canonical_cmtk_grid(moving_grid),
                 workspace=workspace,
                 settings=cmtk_settings,
+                on_command=self._cmtk_command,
                 on_stdout=cmtk_stdout,
                 on_stderr=cmtk_stderr,
                 cancel_check=lambda: bool(self._cancel or self.isInterruptionRequested()),
@@ -2912,7 +2816,7 @@ class RegistrationWorker(QtCore.QThread):
                     f"NCC={similarity_before.get('ncc')} -> {similarity_after.get('ncc')} "
                     f"(delta={similarity_delta.get('ncc')}); "
                     f"overlap={stage_start_overlap:.6g} -> {final_overlap:.6g}; "
-                    f"det={sanity.get('determinant')}; {_linear_qc_text(sanity, precision=5)}; "
+                    f"det={sanity.get('determinant')}; {linear_qc_text(sanity, precision=5)}; "
                     f"condition={sanity.get('condition_number')}; warnings={quality_warnings or 'none'}; "
                     f"artifact error={artifact_error or 'none'}; QC failures={qc_failures or 'none'}"
                 ),
@@ -2920,8 +2824,8 @@ class RegistrationWorker(QtCore.QThread):
             stage = TransformStageResult(
                 name=label,
                 kind=global_model,
-                cumulative_moving_to_fixed=_matrix_to_json(result_matrix),
-                incremental_moving_to_fixed=_matrix_to_json(incremental),
+                cumulative_moving_to_fixed=_matrix4(result_matrix).tolist(),
+                incremental_moving_to_fixed=_matrix4(incremental).tolist(),
                 metric_value=None,
                 ncc=None if not math.isfinite(ncc) else ncc,
                 iterations=0,
@@ -2958,10 +2862,10 @@ class RegistrationWorker(QtCore.QThread):
                     "input_image_source": "shared_global_linear_working_grid",
                     "reference_working_grid": _working_grid_payload(fixed_grid),
                     "floating_working_grid": _working_grid_payload(moving_grid),
-                    "initial_moving_to_reference_matrix": _matrix_to_json(cumulative_m2f),
-                    "cmtk_initial_working_moving_to_reference_matrix": _matrix_to_json(cmtk_local_initial),
-                    "cmtk_optimized_working_moving_to_reference_matrix": _matrix_to_json(result.moving_to_reference),
-                    "optimized_moving_to_reference_matrix": _matrix_to_json(candidate_m2f),
+                    "initial_moving_to_reference_matrix": _matrix4(cumulative_m2f).tolist(),
+                    "cmtk_initial_working_moving_to_reference_matrix": _matrix4(cmtk_local_initial).tolist(),
+                    "cmtk_optimized_working_moving_to_reference_matrix": _matrix4(result.moving_to_reference).tolist(),
+                    "optimized_moving_to_reference_matrix": _matrix4(candidate_m2f).tolist(),
                     "deterministic_similarity_before": similarity_before,
                     "deterministic_similarity_after": similarity_after,
                     "deterministic_similarity_delta": similarity_delta,
@@ -2981,6 +2885,10 @@ class RegistrationWorker(QtCore.QThread):
 
     def _register_pair(self, task, task_index, task_total):
         settings = self.settings
+        linear_enabled = bool(settings.get("linear_enabled", True))
+        deformable_enabled = bool(settings.get("deformable", False))
+        if not linear_enabled and not deformable_enabled:
+            raise RuntimeError("Enable global linear alignment or CMTK warp before running registration.")
         thresholds = registration_qc_thresholds(settings.get("qc_thresholds"))
         original_fixed = task["fixed"]
         original_moving = task["moving"]
@@ -2988,28 +2896,44 @@ class RegistrationWorker(QtCore.QThread):
         fixed = preparation.fixed
         moving = preparation.moving
         working_space = copy.deepcopy(preparation.provenance)
-        working_space["reformat_target"] = _prepare_reformat_target(
+        working_space["reformat_target"] = prepare_reformat_target(
             task.get("reformat_target"), original_fixed, working_space
         )
         for warning in working_space.get("warnings") or ():
             self._diag("Registration working-space warning", level="WARNING", details=warning)
         for assumption in working_space.get("assumptions") or ():
             self._diag("Registration working-space assumption", level="WARNING", details=assumption)
-        sitk = _sitk_module()
+        sitk = _sitk_module() if linear_enabled else None
         from madi3d_version import MADI3D_VERSION
         working_space["software_versions"] = {
             "MADI3D": MADI3D_VERSION,
-            "SimpleITK": str(getattr(sitk, "Version_VersionString", lambda: "unknown")()),
             "NumPy": str(np.__version__),
         }
+        if sitk is not None:
+            working_space["software_versions"]["SimpleITK"] = str(
+                getattr(sitk, "Version_VersionString", lambda: "unknown")()
+            )
 
         # Keep the fixed and moving working images compact. Their physical origins
         # remain in MADI world coordinates, so ITK can register them without one
         # enormous mostly-empty union canvas. Foreground support defines the ROI;
         # working spacing defines numerical resolution, while max_grid_dim is
         # retained only as a memory/runtime safety ceiling.
-        target_working_spacing = max(1e-6, float(settings.get("working_spacing", 1.5)))
-        max_working_dim = max(32, int(settings.get("max_grid_dim", 512)))
+        if linear_enabled:
+            target_working_spacing = _setting_spacing(
+                settings, "working_spacing", _LINEAR_WORKING_SPACING_DEFAULT
+            )
+            max_working_dim = _setting_count(
+                settings, "max_grid_dim", _LINEAR_MAX_GRID_DIM_DEFAULT,
+                minimum=_MIN_WORKING_DIM,
+            )
+        else:
+            # A warp-only run keeps its support bounding on the CMTK input lattice;
+            # the global linear controls do not run, so they are not read here.
+            target_working_spacing = _setting_spacing(
+                settings, "cmtk_working_spacing", _CMTK_INPUT_WORKING_SPACING_DEFAULT
+            )
+            max_working_dim = _MIN_WORKING_DIM
         use_foreground = bool(settings.get("ignore_background", True))
         if use_foreground:
             fixed_support, fixed_support_details = _foreground_support_bounds(
@@ -3036,33 +2960,55 @@ class RegistrationWorker(QtCore.QThread):
         else:
             fixed.pop("registration_support_bounds_world", None)
             moving.pop("registration_support_bounds_world", None)
-        fixed_grid = _working_grid(
-            fixed, target_working_spacing, max_working_dim, support_bounds=fixed_support
-        )
-        moving_grid = _working_grid(
-            moving, target_working_spacing, max_working_dim, support_bounds=moving_support
-        )
-        fixed_arr = _native_working_array(fixed, fixed_grid, normalize=True)
-        moving_arr = _native_working_array(moving, moving_grid, normalize=True)
-        fixed_img = _sitk_image(fixed_arr, fixed_grid)
-        moving_img = _sitk_image(moving_arr, moving_grid)
-        fixed_mask = _registration_foreground_mask(fixed_img, fixed_arr, use_foreground)
-        moving_mask = _registration_foreground_mask(moving_img, moving_arr, use_foreground)
-        self._diag(
-            f"Prepared working images: {moving.get('display_name')} → {fixed.get('display_name')}",
-            details=(
-                f"target working spacing={target_working_spacing:g}; safety max axis={max_working_dim}; "
-                f"fixed dims XYZ={fixed_grid['dims_xyz']}, spacing={tuple(round(float(v), 6) for v in fixed_grid['spacing'])}, safety scale={fixed_grid['safety_scale']:.6g}; "
-                f"moving dims XYZ={moving_grid['dims_xyz']}, spacing={tuple(round(float(v), 6) for v in moving_grid['spacing'])}, safety scale={moving_grid['safety_scale']:.6g}; "
-                f"foreground support={use_foreground}; fixed detector={fixed_support_details}; moving detector={moving_support_details}; "
-                f"metric masks fixed={fixed_mask is not None}, moving={moving_mask is not None}"
-            ),
-        )
+        fixed_grid = moving_grid = fixed_arr = moving_arr = None
+        fixed_img = moving_img = fixed_mask = moving_mask = None
+        if linear_enabled:
+            fixed_grid = _working_grid(
+                fixed, target_working_spacing, max_working_dim, support_bounds=fixed_support
+            )
+            moving_grid = _working_grid(
+                moving, target_working_spacing, max_working_dim, support_bounds=moving_support
+            )
+            self._admit_working_arrays(
+                4 * (math.prod(fixed_grid["shape_zyx"]) + math.prod(moving_grid["shape_zyx"])),
+                fixed, moving,
+            )
+            fixed_arr = _native_working_array(fixed, fixed_grid, normalize=True)
+            self._check_cancel()
+            moving_arr = _native_working_array(moving, moving_grid, normalize=True)
+            self._check_cancel()
+            fixed_img = _sitk_image(fixed_arr, fixed_grid)
+            moving_img = _sitk_image(moving_arr, moving_grid)
+            fixed_mask = _registration_foreground_mask(fixed_img, fixed_arr, use_foreground)
+            moving_mask = _registration_foreground_mask(moving_img, moving_arr, use_foreground)
+            self._diag(
+                f"Prepared working images: {moving.get('display_name')} → {fixed.get('display_name')}",
+                details=(
+                    f"target working spacing={target_working_spacing:g}; safety max axis={max_working_dim}; "
+                    f"fixed dims XYZ={fixed_grid['dims_xyz']}, spacing={tuple(round(float(v), 6) for v in fixed_grid['spacing'])}, safety scale={fixed_grid['safety_scale']:.6g}; "
+                    f"moving dims XYZ={moving_grid['dims_xyz']}, spacing={tuple(round(float(v), 6) for v in moving_grid['spacing'])}, safety scale={moving_grid['safety_scale']:.6g}; "
+                    f"foreground support={use_foreground}; fixed detector={fixed_support_details}; moving detector={moving_support_details}; "
+                    f"metric masks fixed={fixed_mask is not None}, moving={moving_mask is not None}"
+                ),
+            )
 
         requested_initial = str(settings.get("initial_alignment", "current") or "current")
         landmark_details = {}
-        if _is_landmark_initial_alignment(requested_initial):
-            _validate_landmark_9dof_pipeline(settings)
+        if requested_initial == "loaded_affine":
+            if "initial_affine" not in task:
+                raise RuntimeError("Loaded affine initialization is unavailable in this registration job.")
+            scene_m2f = invertible_affine4(task["initial_affine"], "Loaded initial affine")
+            initial_m2f = invertible_affine4(
+                _matrix4(working_space["target_to_operation"])
+                @ scene_m2f
+                @ np.linalg.inv(_matrix4(working_space["source_to_operation"])),
+                "Loaded initial affine in operation frame",
+            )
+            initial_label = "Loaded affine transform"
+            initial_affine_evidence = copy.deepcopy(task.get("initial_affine_evidence") or {})
+        elif is_landmark_initial_alignment(requested_initial):
+            initial_affine_evidence = {}
+            validate_landmark_initialization_settings(settings)
             dataset_id = str(moving.get("dataset_id") or "")
             records = list((settings.get("landmarks_by_dataset") or {}).get(dataset_id) or [])
             minimum_pairs = 4 if requested_initial == "landmarks_9dof" else 3
@@ -3080,20 +3026,15 @@ class RegistrationWorker(QtCore.QThread):
                 [record.get("moving_world") for record in records], source_mapping
             )
             landmark_weights = [record.get("weight", 1.0) for record in records]
+            initial_m2f, residuals, singular, fit_details = fit_landmark_initialization(
+                requested_initial, reference_landmarks, moving_landmarks, landmark_weights
+            )
             if requested_initial == "landmarks_9dof":
-                initial_m2f, residuals, fit_details = _landmark_9dof_moving_to_fixed(
-                    reference_landmarks, moving_landmarks, landmark_weights
-                )
                 initial_label = "Landmarks 9 DOF rigid + scale fit"
                 landmark_dof = 9
-                singular = fit_details.get("moving_spread_singular_values") or []
             else:
-                initial_m2f, residuals, singular = _landmark_rigid_moving_to_fixed(
-                    reference_landmarks, moving_landmarks, landmark_weights
-                )
                 initial_label = "Landmarks rigid fit"
                 landmark_dof = 6
-                fit_details = {}
             landmark_details = {
                 "landmark_count": int(len(records)),
                 "landmark_dof": int(landmark_dof),
@@ -3114,6 +3055,7 @@ class RegistrationWorker(QtCore.QThread):
                 ).tolist(),
             }
         else:
+            initial_affine_evidence = {}
             initial_m2f, initial_label = _initial_moving_to_fixed(fixed, moving, requested_initial)
         initial_overlap = _support_overlap_fraction(fixed, moving, initial_m2f)
         fallback_used = False
@@ -3123,7 +3065,7 @@ class RegistrationWorker(QtCore.QThread):
         # requested initialization has essentially no numerical overlap, use the
         # deterministic center translation as a safety initializer. This is not
         # applied when the requested/manual pose already overlaps.
-        if not _is_landmark_initial_alignment(requested_initial) and bool(settings.get("auto_overlap_recovery", True)) and initial_overlap < 1e-4:
+        if linear_enabled and not is_landmark_initial_alignment(requested_initial) and bool(settings.get("auto_overlap_recovery", True)) and initial_overlap < 1e-4:
             center_m2f, center_label = _initial_moving_to_fixed(fixed, moving, "centers")
             center_overlap = _support_overlap_fraction(fixed, moving, center_m2f)
             if center_overlap > initial_overlap + 1e-6:
@@ -3134,27 +3076,41 @@ class RegistrationWorker(QtCore.QThread):
 
         self._diag(
             f"Initial alignment validated: {initial_label}",
-            level="WARNING" if fallback_used else "INFO",
+            level="WARNING" if fallback_used or (not linear_enabled and initial_overlap < 1e-4) else "INFO",
             details=(
                 f"requested_overlap={float(initial_overlap):.6g}; final_overlap={float(fallback_overlap):.6g}; "
-                f"automatic_center_recovery={fallback_used}; moving→reference matrix={np.asarray(initial_m2f).round(6).tolist()}"
+                f"automatic_center_recovery={fallback_used}; "
+                f"seed_preserved={bool(not linear_enabled and initial_overlap < 1e-4)}; "
+                f"moving→reference matrix={np.asarray(initial_m2f).round(6).tolist()}"
             ),
         )
         stages = []
         previous_m2f = np.eye(4, dtype=float)
         cumulative_m2f = initial_m2f.copy()
         landmark_evidence = _landmark_qc_evidence(landmark_details, initial_m2f, thresholds)
+        if not linear_enabled and initial_overlap < 1e-4:
+            landmark_evidence.append({
+                "metric": "initial_support_overlap", "value": float(initial_overlap),
+                "warning_threshold": 1e-4, "status": "warning",
+                "message": "The selected warp-only initial alignment has negligible support overlap; its affine seed was preserved for the CMTK attempt.",
+            })
         stages.append(TransformStageResult(
             name=initial_label,
             kind="initial",
-            cumulative_moving_to_fixed=_matrix_to_json(cumulative_m2f),
-            incremental_moving_to_fixed=_matrix_to_json(cumulative_m2f),
+            cumulative_moving_to_fixed=_matrix4(cumulative_m2f).tolist(),
+            incremental_moving_to_fixed=_matrix4(cumulative_m2f).tolist(),
             ncc=None,
             execution_status="succeeded",
             qc_status=_qc_evidence_status(landmark_evidence) if landmark_evidence else "not-evaluated",
             user_decision="unapplied",
             details={
                 "mode": requested_initial,
+                **({
+                    "imported_affine": {
+                        **initial_affine_evidence,
+                        "resolved_moving_to_reference_matrix": _matrix4(initial_m2f).tolist(),
+                    },
+                } if requested_initial == "loaded_affine" else {}),
                 "support_overlap_fraction": float(fallback_overlap),
                 "requested_support_overlap_fraction": float(initial_overlap),
                 "automatic_center_fallback": bool(fallback_used),
@@ -3166,19 +3122,18 @@ class RegistrationWorker(QtCore.QThread):
         ))
         previous_m2f = cumulative_m2f.copy()
 
-        global_model = str(settings.get("global_model", "affine") or "affine").lower()
+        global_model = str(settings.get("global_model", "affine") or "affine").lower() if linear_enabled else ""
         try:
-            pipeline = _linear_stage_pipeline(global_model)
+            pipeline = _linear_stage_pipeline(global_model) if linear_enabled else []
         except ValueError as exc:
             raise RuntimeError(str(exc)) from exc
-        linear_engine = _linear_engine(settings)
-        if linear_engine == "cmtk" and self.cmtk_backend is None:
+        linear_engine = registration_linear_engine(settings) if linear_enabled else ""
+        if linear_enabled and linear_engine == "cmtk" and self.cmtk_backend is None:
             raise RuntimeError(
                 "CMTK is selected as the linear registration engine, but no validated CMTK backend is available. "
                 "Use MADI3D's CMTK setup/validation path and retry. No ITK fallback will be used."
             )
-        enabled_linear = list(pipeline) if linear_engine == "itk" else [("cmtk_linear", "CMTK global linear", True)]
-        deformable_enabled = bool(settings.get("deformable", False))
+        enabled_linear = (list(pipeline) if linear_engine == "itk" else [("cmtk_linear", "CMTK global linear", True)]) if linear_enabled else []
         stage_count = len(enabled_linear) + (1 if deformable_enabled else 0)
         task_span = 100.0 / max(1, task_total)
         task_base = task_index * task_span
@@ -3187,19 +3142,23 @@ class RegistrationWorker(QtCore.QThread):
         affine_scale_ready = global_model != "affine"
         prior_successful_similarity = None
 
-        shrink = list(settings.get("shrink_factors", [8, 4, 2, 1]))
-        retry_enabled = bool(settings.get("linear_retry_enabled", True))
-        retry_factor = max(0.05, min(0.9, float(settings.get("linear_retry_factor", 0.25))))
-        linear_attempt_factors = (1.0, retry_factor) if retry_enabled else (1.0,)
-        sampling = float(settings.get("sampling", 0.2))
-        bins = int(settings.get("histogram_bins", 48))
-        seed = int(settings.get("random_seed", 121212)) + int(task_index)
-        center = np.asarray(fixed_grid["origin"], dtype=float) + 0.5 * (
-            (np.asarray(fixed_grid["dims_xyz"], dtype=float) - 1.0)
-            * np.asarray(fixed_grid["spacing"], dtype=float)
-        )
+        if linear_enabled:
+            retry_enabled = bool(settings.get("linear_retry_enabled", True))
+            retry_factor = max(0.05, min(0.9, float(settings.get("linear_retry_factor", 0.25))))
+            linear_attempt_factors = (1.0, retry_factor) if retry_enabled else (1.0,)
+            sampling = float(settings.get("sampling", 0.2))
+            bins = int(settings.get("histogram_bins", 48))
+            seed = int(settings.get("random_seed", 121212)) + int(task_index)
+            center = np.asarray(fixed_grid["origin"], dtype=float) + 0.5 * (
+                (np.asarray(fixed_grid["dims_xyz"], dtype=float) - 1.0)
+                * np.asarray(fixed_grid["spacing"], dtype=float)
+            )
 
-        if linear_engine == "itk":
+        if linear_enabled and linear_engine == "itk":
+            # The ITK pyramid schedule is only read by the ITK optimizer, and an
+            # explicitly persisted malformed schedule must fail rather than run a
+            # different (default) resolution hierarchy.
+            shrink = _setting_schedule(settings, "shrink_factors", _SHRINK_FACTORS_DEFAULT)
             for kind, label, enabled in pipeline:
                 if not enabled:
                     continue
@@ -3217,8 +3176,8 @@ class RegistrationWorker(QtCore.QThread):
                     stages.append(TransformStageResult(
                         name=label,
                         kind=kind,
-                        cumulative_moving_to_fixed=_matrix_to_json(cumulative_m2f),
-                        incremental_moving_to_fixed=_matrix_to_json(np.eye(4)),
+                        cumulative_moving_to_fixed=_matrix4(cumulative_m2f).tolist(),
+                        incremental_moving_to_fixed=_matrix4(np.eye(4)).tolist(),
                         metric_value=None,
                         ncc=None,
                         iterations=0,
@@ -3331,7 +3290,7 @@ class RegistrationWorker(QtCore.QThread):
                                 "optimized_translation_xyz": [float(v) for v in tx.GetTranslation()],
                                 "center_xyz": [float(v) for v in tx.GetCenter()],
                                 "parameter_count_optimized_in_stage": len(tx.GetParameters()),
-                                "initialized_fixed_to_moving": _matrix_to_json(f2m_initial),
+                                "initialized_fixed_to_moving": _matrix4(f2m_initial).tolist(),
                             })
                         attempt_info.append({
                             "learning_rate": learning_rate,
@@ -3371,8 +3330,8 @@ class RegistrationWorker(QtCore.QThread):
                     stages.append(TransformStageResult(
                         name=label,
                         kind=kind,
-                        cumulative_moving_to_fixed=_matrix_to_json(previous_m2f),
-                        incremental_moving_to_fixed=_matrix_to_json(np.eye(4)),
+                        cumulative_moving_to_fixed=_matrix4(previous_m2f).tolist(),
+                        incremental_moving_to_fixed=_matrix4(np.eye(4)).tolist(),
                         metric_value=None,
                         ncc=None,
                         iterations=0,
@@ -3498,7 +3457,7 @@ class RegistrationWorker(QtCore.QThread):
                         f"(delta={similarity_delta.get('ncc')}); "
                         f"iterations={optimizer_iterations}; overlap={stage_start_overlap:.6g} -> {float(final_overlap):.6g}; "
                         f"det={sanity.get('determinant')}; principal stretches={sanity.get('principal_stretches')}; "
-                        f"{_linear_qc_text(sanity, precision=5)}; "
+                        f"{linear_qc_text(sanity, precision=5)}; "
                         f"condition={sanity.get('condition_number')}; warnings={quality_warnings or 'none'}; "
                         f"artifact error={artifact_error or 'none'}; QC failures={qc_failures or 'none'}; stop={stop_condition or 'n/a'}"
                     ),
@@ -3507,8 +3466,8 @@ class RegistrationWorker(QtCore.QThread):
                 stages.append(TransformStageResult(
                     name=label,
                     kind=kind,
-                    cumulative_moving_to_fixed=_matrix_to_json(cumulative_m2f),
-                    incremental_moving_to_fixed=_matrix_to_json(incremental),
+                    cumulative_moving_to_fixed=_matrix4(cumulative_m2f).tolist(),
+                    incremental_moving_to_fixed=_matrix4(incremental).tolist(),
                     metric_value=metric_value,
                     ncc=None if not math.isfinite(ncc) else float(ncc),
                     iterations=optimizer_iterations,
@@ -3549,7 +3508,7 @@ class RegistrationWorker(QtCore.QThread):
                     prior_successful_similarity = copy.deepcopy(similarity_before)
                     self.progress.emit(int(round(base + stage_span)), f"{label} failed; retained previous valid stage")
 
-        else:
+        elif linear_enabled:
             self._check_cancel()
             stage_number += 1
             base = task_base + (stage_number - 1) * stage_span
@@ -3583,11 +3542,7 @@ class RegistrationWorker(QtCore.QThread):
             stage_number += 1
             label = "CMTK nonlinear warp"
             base = task_base + (stage_number - 1) * stage_span
-            cmtk_settings, cmtk_mapping = _cmtk_warp_settings_from_registration(settings)
-            runtime_root = Path(tempfile.mkdtemp(prefix="madi3d-cmtk-registration-"))
-            reference_path = runtime_root / "reference.nrrd"
-            floating_path = runtime_root / "floating.nrrd"
-            workspace = runtime_root / "warp"
+            cmtk_settings, cmtk_mapping = cmtk_warp_settings(settings)
             self.progress.emit(int(round(base + stage_span * 0.05)), f"{label}: building independent nonlinear input grids")
 
             # Linear optimization is complete. Release the coarse ITK working
@@ -3616,6 +3571,11 @@ class RegistrationWorker(QtCore.QThread):
             moving_cmtk_world_grid = _cmtk_nonlinear_working_grid(
                 moving, moving_support, settings
             )
+            self._admit_working_arrays(
+                4 * (math.prod(fixed_cmtk_world_grid["shape_zyx"])
+                     + math.prod(moving_cmtk_world_grid["shape_zyx"])),
+                fixed, moving,
+            )
             fixed_cmtk_arr = _native_working_array(
                 fixed, fixed_cmtk_world_grid, normalize=False
             )
@@ -3632,6 +3592,10 @@ class RegistrationWorker(QtCore.QThread):
                 moving_cmtk_world_grid["origin"],
             )
 
+            runtime_root = Path(tempfile.mkdtemp(prefix="madi3d-cmtk-registration-"))
+            reference_path = runtime_root / "reference.nrrd"
+            floating_path = runtime_root / "floating.nrrd"
+            workspace = runtime_root / "warp"
             try:
                 # CMTK sees zero-origin lattices because its oriented NRRD loader
                 # normalizes RAS pose metadata. The nonlinear working-grid world
@@ -3664,14 +3628,14 @@ class RegistrationWorker(QtCore.QThread):
                 self._emit_finishing(f"{label}: CMTK warp running…")
 
                 def cmtk_stdout(text):
-                    chunk = str(text or "").rstrip()
+                    chunk = str(text or "")
                     if chunk:
-                        self._diag("CMTK stdout", details=chunk)
+                        self._diag("CMTK stdout", details=chunk, streamed=True)
 
                 def cmtk_stderr(text):
-                    chunk = str(text or "").rstrip()
+                    chunk = str(text or "")
                     if chunk:
-                        self._diag("CMTK stderr", level="WARNING", details=chunk)
+                        self._diag("CMTK stderr", details=chunk, streamed=True)
 
                 runner = CMTKRegistrationRunner(self.cmtk_backend)
                 artifacts = runner.run_warp(
@@ -3682,6 +3646,7 @@ class RegistrationWorker(QtCore.QThread):
                     floating_grid=moving_cmtk_grid,
                     workspace=workspace,
                     settings=cmtk_settings,
+                    on_command=self._cmtk_command,
                     on_stdout=cmtk_stdout,
                     on_stderr=cmtk_stderr,
                     cancel_check=lambda: bool(self._cancel or self.isInterruptionRequested()),
@@ -3706,6 +3671,9 @@ class RegistrationWorker(QtCore.QThread):
                         interpolation="linear",
                         output_type="float",
                         pad_out=0.0,
+                        on_command=self._cmtk_command,
+                        on_stdout=cmtk_stdout,
+                        on_stderr=cmtk_stderr,
                         cancel_check=lambda: bool(self._cancel or self.isInterruptionRequested()),
                         timeout=None,
                     )
@@ -3717,6 +3685,9 @@ class RegistrationWorker(QtCore.QThread):
                         interpolation="linear",
                         output_type="float",
                         pad_out=0.0,
+                        on_command=self._cmtk_command,
+                        on_stdout=cmtk_stdout,
+                        on_stderr=cmtk_stderr,
                         cancel_check=lambda: bool(self._cancel or self.isInterruptionRequested()),
                         timeout=None,
                     )
@@ -3734,6 +3705,7 @@ class RegistrationWorker(QtCore.QThread):
                         output_image=qc_jacobian_path,
                         correct_global=True,
                         threads=int(cmtk_settings.threads),
+                        on_command=self._cmtk_command,
                         on_stdout=cmtk_stdout,
                         on_stderr=cmtk_stderr,
                         cancel_check=lambda: bool(self._cancel or self.isInterruptionRequested()),
@@ -3803,8 +3775,8 @@ class RegistrationWorker(QtCore.QThread):
                 "native_direction": "reference_to_floating",
                 "madi_direction": "moving_to_reference",
                 "coordinate_frame": "working_grid_local_v1",
-                "linear_moving_to_reference_matrix": _matrix_to_json(cumulative_m2f),
-                "cmtk_linear_moving_to_reference_matrix": _matrix_to_json(cmtk_local_m2f),
+                "linear_moving_to_reference_matrix": _matrix4(cumulative_m2f).tolist(),
+                "cmtk_linear_moving_to_reference_matrix": _matrix4(cmtk_local_m2f).tolist(),
                 "reference_working_origin_world": [float(v) for v in fixed_cmtk_world_grid["origin"]],
                 "floating_working_origin_world": [float(v) for v in moving_cmtk_world_grid["origin"]],
                 "reference_working_grid": _working_grid_payload(fixed_cmtk_world_grid),
@@ -3847,8 +3819,13 @@ class RegistrationWorker(QtCore.QThread):
                     "inverse_consistency_weight": float(cmtk_settings.inverse_consistency_weight),
                     "omit_original_data": bool(cmtk_settings.omit_original_data),
                     "match_histograms": bool(cmtk_settings.match_histograms),
-                    "input_working_spacing": float(settings.get("cmtk_working_spacing", 0.75)),
-                    "input_max_grid_dim": int(settings.get("cmtk_max_grid_dim", 768)),
+                    "input_working_spacing": _setting_spacing(
+                        settings, "cmtk_working_spacing", _CMTK_INPUT_WORKING_SPACING_DEFAULT
+                    ),
+                    "input_max_grid_dim": _setting_count(
+                        settings, "cmtk_max_grid_dim", _CMTK_INPUT_MAX_GRID_DIM_DEFAULT,
+                        minimum=_MIN_WORKING_DIM,
+                    ),
                 },
                 "settings_mapping": copy.deepcopy(cmtk_mapping),
                 "deformation_qc": copy.deepcopy(deformation_qc),
@@ -3866,8 +3843,8 @@ class RegistrationWorker(QtCore.QThread):
                 "settings_mapping": copy.deepcopy(cmtk_mapping),
                 "artifact_scope": "runtime_temporary",
                 "coordinate_frame": "working_grid_local_v1",
-                "linear_moving_to_reference_matrix": _matrix_to_json(cumulative_m2f),
-                "cmtk_linear_moving_to_reference_matrix": _matrix_to_json(cmtk_local_m2f),
+                "linear_moving_to_reference_matrix": _matrix4(cumulative_m2f).tolist(),
+                "cmtk_linear_moving_to_reference_matrix": _matrix4(cmtk_local_m2f).tolist(),
                 "reference_working_grid": _working_grid_payload(fixed_cmtk_world_grid),
                 "floating_working_grid": _working_grid_payload(moving_cmtk_world_grid),
                 "input_image_source": "native_volume_direct_resample",
@@ -3891,8 +3868,8 @@ class RegistrationWorker(QtCore.QThread):
             stages.append(TransformStageResult(
                 name=label,
                 kind="cmtk_warp",
-                cumulative_moving_to_fixed=_matrix_to_json(cumulative_m2f),
-                incremental_moving_to_fixed=_matrix_to_json(np.eye(4)),
+                cumulative_moving_to_fixed=_matrix4(cumulative_m2f).tolist(),
+                incremental_moving_to_fixed=_matrix4(np.eye(4)).tolist(),
                 metric_value=None,
                 ncc=deformation_qc["warp_similarity"].get("ncc"),
                 iterations=0,
@@ -3915,7 +3892,7 @@ class RegistrationWorker(QtCore.QThread):
                     f"Jacobian median={deformation_qc['jacobian_local']['median']:.6g}; "
                     f"folding={100.0 * deformation_qc['jacobian_local']['nonpositive_fraction']:.6g}%; "
                     f"warnings={deformation_qc.get('warnings') or 'none'}; "
-                    f"manifest={artifacts.manifest_path}; command={list(artifacts.command)}"
+                    f"manifest={artifacts.manifest_path}"
                 ),
             )
             if deformation_qc.get("warnings"):
@@ -3926,6 +3903,11 @@ class RegistrationWorker(QtCore.QThread):
                 )
             self.progress.emit(int(round(base + stage_span)), f"{label} complete")
 
+        if not linear_enabled:
+            # Warp-only results identify the grids that actually fed nonlinear
+            # optimization; no coarse linear grids were created for this run.
+            fixed_grid = fixed_cmtk_world_grid
+            moving_grid = moving_cmtk_world_grid
         fixed_payload = _working_grid_payload(fixed_grid)
         moving_payload = _working_grid_payload(moving_grid)
         # Keep the fixed-grid keys at the top level for backward readers while
@@ -3957,8 +3939,8 @@ class RegistrationWorker(QtCore.QThread):
             target_actor_matrix=copy.deepcopy(working_space["target_initial_pose"]),
             registration_grid=registration_grid,
             working_space=copy.deepcopy(working_space),
-            source_geometry=_local_geometry_payload(original_moving),
-            target_geometry=_local_geometry_payload(original_fixed),
+            source_geometry=local_geometry_payload(original_moving),
+            target_geometry=local_geometry_payload(original_fixed),
             source_descriptor=copy.deepcopy(moving.get("descriptor") or {}),
             target_descriptor=copy.deepcopy(fixed.get("descriptor") or {}),
             stages=public_stages,
@@ -3973,10 +3955,54 @@ class RegistrationWorker(QtCore.QThread):
 
 
 # -----------------------------------------------------------------------------
-# Reformat worker - resampling only; VTK/project objects stay on the GUI thread.
+# Reformat worker - detached resampling/mesh preparation; live scene stays on GUI.
 # -----------------------------------------------------------------------------
 
+def reformat_application_evidence(task, interpolation, dtype_mode):
+    """Exact application settings shared by capture and detached execution."""
+    engine = str(task.get("engine") or "itk").lower()
+    application_evidence = {
+        "parameters": {"engine": engine, "interpolation": interpolation,
+                       "dtype_mode": dtype_mode},
+        "output_grid": copy.deepcopy(task.get("reference_geometry") or {}),
+        "source_geometry": copy.deepcopy(task.get("source_geometry") or {}),
+        "source_actor_matrix": copy.deepcopy(task.get("source_actor_matrix")),
+        "output_actor_matrix": copy.deepcopy(task["reference_actor_matrix"]),
+        "registration_stage": str(task.get("registration_stage") or ""),
+        "transform_application": "baked_into_output_local_coordinates",
+        "source_dependency_revision": copy.deepcopy(
+            (task.get("source_descriptor") or {}).get("dependency_revision")),
+    }
+    if task.get("transform_input_record_id"):
+        transform_binding = (
+            (task.get("registration_provenance") or {}).get(
+                "transform_binding"
+            )
+        )
+        if transform_binding:
+            application_evidence["transform_binding"] = copy.deepcopy(
+                transform_binding
+            )
+        native_bridges = {
+            key: copy.deepcopy(task[key])
+            for key in (
+                "cmtk_reference_to_working_matrix",
+                "cmtk_working_to_source_matrix",
+            )
+            if task.get(key) is not None
+        }
+        if native_bridges:
+            application_evidence["native_bridges"] = native_bridges
+    if (
+        not task.get("registration_operation_id")
+        and not task.get("transform_input_record_id")
+    ):
+        application_evidence["result_transform"] = copy.deepcopy(task.get("transform"))
+    return application_evidence
+
+
 class ReformatWorker(QtCore.QThread):
+    inputRequested = QtCore.Signal(object)
     progress = QtCore.Signal(int, str)
     diagnostic = QtCore.Signal(str, str, str)
     outputReady = QtCore.Signal(object)
@@ -3986,7 +4012,7 @@ class ReformatWorker(QtCore.QThread):
 
     def __init__(
         self, tasks, settings, cmtk_backend=None, volume_output_writer=None,
-        ffmpeg_executable=None, parent=None,
+        ffmpeg_executable=None, parent=None, *, serial_inputs=False,
     ):
         super().__init__(parent)
         self.tasks = list(tasks or [])
@@ -3995,9 +4021,15 @@ class ReformatWorker(QtCore.QThread):
         self.volume_output_writer = volume_output_writer
         self.ffmpeg_executable = os.fspath(ffmpeg_executable) if ffmpeg_executable else None
         self._cancel = False
+        self._serial_inputs = bool(serial_inputs)
+        self._input_lock = threading.Lock()
+        self._input_request = None
 
     def request_cancel(self):
         self._cancel = True
+        with self._input_lock:
+            if self._input_request is not None:
+                self._input_request["done"].set()
         try:
             self.requestInterruption()
         except Exception:
@@ -4006,6 +4038,98 @@ class ReformatWorker(QtCore.QThread):
     def _check_cancel(self):
         if self._cancel or self.isInterruptionRequested():
             raise InterruptedError("Reformat cancelled")
+
+    def _request_task(self, index, retained_bytes):
+        request = {"worker": self, "index": index, "done": threading.Event(),
+                   "task": None, "error": None, "cancelled": False,
+                   "retained_bytes": retained_bytes}
+        with self._input_lock:
+            self._input_request = request
+        try:
+            self._check_cancel()
+            self.inputRequested.emit(request)
+            request["done"].wait()
+            self._check_cancel()
+            if request["cancelled"]:
+                raise InterruptedError("Reformat input acquisition cancelled")
+            if request["error"] is not None:
+                raise RuntimeError(str(request["error"]))
+            return request.pop("task")
+        finally:
+            with self._input_lock:
+                self._input_request = None
+
+    @staticmethod
+    def _materialized_task_bytes(tasks):
+        """Count private captured/result backing once at an allocation barrier."""
+        backing = {}
+        for task in tasks:
+            for key in ("data", "points_local"):
+                if key == "data" and task.get("_borrowed_scene_inputs"):
+                    continue
+                array = task.get(key)
+                if not isinstance(array, np.ndarray):
+                    continue
+                while isinstance(array.base, np.ndarray):
+                    array = array.base
+                backing[id(array)] = int(array.nbytes)
+            mesh_input = task.get("mesh_input") or {}
+            polydata = mesh_input.get("polydata")
+            texture = mesh_input.get("texture")
+            image = texture.GetInput() if texture is not None else None
+            for data in (polydata, image):
+                if data is not None:
+                    backing[id(data)] = int(data.GetActualMemorySize()) * 1024
+            prepared = task.get("prepared_polydata")
+            if prepared is not None:
+                backing[id(prepared)] = int(prepared.GetActualMemorySize()) * 1024
+        return sum(backing.values())
+
+    @staticmethod
+    def _allocate_output(shape, dtype, *, disk_only, frame_count):
+        """Keep disk-only time-series output on operation-owned scratch storage."""
+        if not disk_only or frame_count <= 1:
+            return np.empty(shape, dtype=dtype), None
+        fd, path = tempfile.mkstemp(prefix="madi3d-reformat-output-", suffix=".dat")
+        try:
+            byte_count = math.prod(int(value) for value in shape) * np.dtype(dtype).itemsize
+            with os.fdopen(fd, "r+b") as stream:
+                stream.truncate(byte_count)
+            return None, path
+        except BaseException:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            Path(path).unlink(missing_ok=True)
+            raise
+
+    @staticmethod
+    def _write_output_frame(path, dtype, frame_shape, frame_index, frame):
+        frame_bytes = math.prod(int(value) for value in frame_shape) * np.dtype(dtype).itemsize
+        output = np.memmap(
+            path, mode="r+", dtype=dtype, shape=tuple(frame_shape),
+            offset=int(frame_index) * frame_bytes,
+        )
+        try:
+            output[:] = frame
+            output.flush()
+        finally:
+            output._mmap.close()
+
+    @staticmethod
+    def _release_output(array, scratch_path):
+        try:
+            if isinstance(array, np.memmap):
+                mmap_obj = getattr(array, "_mmap", None)
+                if mmap_obj is not None:
+                    try:
+                        mmap_obj.close()
+                    except OSError:
+                        pass
+        finally:
+            if scratch_path:
+                Path(scratch_path).unlink(missing_ok=True)
 
     def _diag(self, message, level="INFO", details=""):
         try:
@@ -4068,6 +4192,7 @@ class ReformatWorker(QtCore.QThread):
             self.cmtk_backend,
             task["cmtk_reference_to_working_matrix"],
             reference_bridge,
+            operation="reference-to-working Reformat bridge",
             reference_grid=task["cmtk_reference_grid"],
             floating_grid=task["cmtk_fixed_working_grid"],
             on_qc=lambda qc: (
@@ -4082,6 +4207,7 @@ class ReformatWorker(QtCore.QThread):
             self.cmtk_backend,
             task["cmtk_working_to_source_matrix"],
             source_bridge,
+            operation="working-to-source Reformat bridge",
             reference_grid=task["cmtk_moving_working_grid"],
             floating_grid=task["cmtk_source_grid"],
             on_qc=lambda qc: (
@@ -4108,7 +4234,7 @@ class ReformatWorker(QtCore.QThread):
                 floating_image=floating,
                 xforms=[
                     reference_bridge,
-                    task["cmtk_warp_xform"],
+                    *(task.get("cmtk_warp_xforms") or [task["cmtk_warp_xform"]]),
                     source_bridge,
                 ],
                 output_image=output,
@@ -4138,10 +4264,55 @@ class ReformatWorker(QtCore.QThread):
 
     def run(self):
         temp_root = None
+        retained_transform_artifacts = ExitStack()
         pending_outputs = []
         published_files = []
+        staged_arrays = []
         completed = False
+        retained_transform_paths = {}
         try:
+            def retain_transform(task):
+                transform_input = task.get("native_transform_input")
+                if transform_input is None:
+                    return
+                transform_id = str(
+                    getattr(transform_input, "content_record_id", "") or ""
+                )
+                if transform_id and transform_id in retained_transform_paths:
+                    task.update(retained_transform_paths[transform_id])
+                    return
+                from madi3d_app.registration.transform_import import materialize_transform_artifact
+
+                retained = retained_transform_artifacts.enter_context(
+                    materialize_transform_artifact(
+                        transform_input,
+                        resources=task.get("native_transform_resources"),
+                        cancel_check=lambda: self._cancel or self.isInterruptionRequested(),
+                    )
+                )
+                mapping_format = str((transform_input.mapping or {}).get("format") or "")
+                if mapping_format == "MADI3D ordered native transform":
+                    from madi3d_app.registration.transform_import import template_native_transform_stages
+                    task["cmtk_warp_xforms"] = template_native_transform_stages(
+                        transform_input, retained,
+                    )
+                    if transform_id:
+                        retained_transform_paths[transform_id] = {
+                            "cmtk_warp_xforms": task["cmtk_warp_xforms"]
+                        }
+                    return
+                if mapping_format == "CMTK native transform":
+                    warp_path = retained
+                else:
+                    from madi3d_app.integrations.cmtk.registration import verify_artifact_bundle
+                    warp_path = Path(verify_artifact_bundle(retained)["warp_xform"])
+                if warp_path is None or not warp_path.exists():
+                    raise RuntimeError(
+                        "The retained imported CMTK warp artifact is unavailable."
+                    )
+                task["cmtk_warp_xform"] = str(warp_path)
+                if transform_id:
+                    retained_transform_paths[transform_id] = {"cmtk_warp_xform": str(warp_path)}
             interpolation = str(self.settings.get("interpolation", "linear"))
             dtype_mode = str(self.settings.get("dtype", "preserve"))
             total_tasks = max(1, len(self.tasks))
@@ -4157,24 +4328,14 @@ class ReformatWorker(QtCore.QThread):
                 temp_root = Path(tempfile.mkdtemp(prefix="madi3d-cmtk-reformat-"))
                 cmtk_runner = CMTKRegistrationRunner(self.cmtk_backend)
             created = 0
-            for task_index, task in enumerate(self.tasks):
+            for task_index in range(len(self.tasks)):
                 self._check_cancel()
+                task = (self._request_task(task_index, self._materialized_task_bytes(pending_outputs)) if self._serial_inputs
+                        else self.tasks[task_index])
+                retain_transform(task)
                 task_kind = str(task.get("kind") or "volume").lower()
                 engine = str(task.get("engine") or "itk").lower()
-                application_evidence = {
-                    "parameters": {"engine": engine, "interpolation": interpolation,
-                                   "dtype_mode": dtype_mode},
-                    "output_grid": copy.deepcopy(task.get("reference_geometry") or {}),
-                    "source_geometry": copy.deepcopy(task.get("source_geometry") or {}),
-                    "source_actor_matrix": copy.deepcopy(task.get("source_actor_matrix")),
-                    "output_actor_matrix": copy.deepcopy(task["reference_actor_matrix"]),
-                    "registration_stage": str(task.get("registration_stage") or ""),
-                    "transform_application": "baked_into_output_local_coordinates",
-                    "source_dependency_revision": copy.deepcopy(
-                        (task.get("source_descriptor") or {}).get("dependency_revision")),
-                }
-                if not task.get("registration_operation_id"):
-                    application_evidence["result_transform"] = copy.deepcopy(task.get("transform"))
+                application_evidence = reformat_application_evidence(task, interpolation, dtype_mode)
                 if task_kind == "mesh":
                     if engine == "cmtk":
                         raise RuntimeError(
@@ -4189,24 +4350,50 @@ class ReformatWorker(QtCore.QThread):
                         source_world, task["transform"]["cumulative_moving_to_fixed"]
                     )
                     reference_local = _apply_points_affine(reference_world, reference_actor_inverse)
-                    pending_outputs.append({
+                    mesh_world_matrix = (
+                        _matrix4(task["transform"]["cumulative_moving_to_fixed"])
+                        @ _matrix4(task["source_actor_matrix"])
+                    )
+                    application_evidence["consumed_inputs"] = copy.deepcopy(
+                        task["mesh_input"]["consumed_inputs"]
+                    )
+                    payload = {
                         "kind": "mesh",
                         "reformat_task_index": task_index,
                         "registration_operation_id": task.get("registration_operation_id"),
                         "application_evidence": application_evidence,
                         "points_local": reference_local.astype(np.float64, copy=False),
+                        "mesh_input": task["mesh_input"],
+                        "mesh_world_matrix": mesh_world_matrix.tolist(),
                         "display_name": task["output_name"],
                         "source_descriptor": copy.deepcopy(task.get("source_descriptor") or {}),
                         "source_actor_id": task.get("source_actor_id"),
                         "reference_actor_matrix": copy.deepcopy(task["reference_actor_matrix"]),
                         "registration_id": str(task.get("registration_id") or ""),
                         "registration_stage": str(task.get("registration_stage") or ""),
+                        "transform_input_record_id": str(task.get("transform_input_record_id") or ""),
+                        "transform_content_reference": copy.deepcopy(
+                            task.get("transform_content_reference")
+                        ),
+                        "result_transform_id": str(task.get("result_transform_id") or ""),
+                        "registration_provenance": copy.deepcopy(
+                            task.get("registration_provenance") or {}
+                        ),
                         "source_name": str(task.get("display_name") or "Mesh"),
                         "reference_name": str(task.get("reference_name") or "Reference"),
                         "disk_output_path": str(task.get("disk_output_path") or ""),
                         "written_format": str(task.get("disk_output_format") or ""),
-                    })
+                    }
+                    from .output import prepare_reformatted_mesh
+                    published_files.extend(prepare_reformatted_mesh(
+                        payload, metadata=task.get("mesh_file_metadata"),
+                        prepare_scene=bool(task.get("emit_data", True)),
+                        cancel_check=lambda: self._cancel or self.isInterruptionRequested(),
+                    ))
+                    pending_outputs.append(payload)
                     created += 1
+                    self.tasks[task_index] = None
+                    del task, points_local, source_world, reference_world, reference_local
                     continue
 
                 data = np.asanyarray(task["data"])
@@ -4215,6 +4402,9 @@ class ReformatWorker(QtCore.QThread):
                 if frames.ndim != 4:
                     raise RuntimeError(f"Reformat expects Z,Y,X or T,Z,Y,X data, got {data.shape}.")
                 output = None
+                output_scratch = None
+                output_shape = None
+                output_dtype = None
                 total_frames = max(1, int(frames.shape[0]))
                 for frame_index in range(total_frames):
                     self._check_cancel()
@@ -4254,16 +4444,45 @@ class ReformatWorker(QtCore.QThread):
                     if total_frames == 1:
                         output = out_array
                     else:
-                        if output is None:
-                            output = np.empty((total_frames,) + tuple(out_array.shape), dtype=out_array.dtype)
-                        output[frame_index] = out_array
+                        if output is None and output_scratch is None:
+                            output_shape = tuple(out_array.shape)
+                            output_dtype = np.dtype(out_array.dtype)
+                            disk_only = (
+                                not bool(task.get("emit_data", True))
+                                and bool(str(task.get("disk_output_path") or "").strip())
+                            )
+                            output, output_scratch = self._allocate_output(
+                                (total_frames,) + output_shape,
+                                out_array.dtype,
+                                disk_only=disk_only,
+                                frame_count=total_frames,
+                            )
+                            if output_scratch:
+                                staged_arrays.append((output, output_scratch))
+                        if output_scratch:
+                            self._write_output_frame(
+                                output_scratch, output_dtype, output_shape,
+                                frame_index, out_array,
+                            )
+                        else:
+                            output[frame_index] = out_array
+                    del frame, out_array
                     fraction = (task_index + (frame_index + 1) / total_frames) / total_tasks
                     self.progress.emit(
                         max(0, min(99, int(round(99.0 * fraction)))),
                         f"Finished {task['display_name']} — frame {frame_index + 1}/{total_frames}",
                     )
                 if output is None:
-                    raise RuntimeError(f"Reformat produced no frames for {task['display_name']}.")
+                    if not output_scratch or output_shape is None or output_dtype is None:
+                        raise RuntimeError(f"Reformat produced no frames for {task['display_name']}.")
+                    output = np.memmap(
+                        output_scratch, mode="r", dtype=output_dtype,
+                        shape=(total_frames,) + output_shape,
+                    )
+                    staged_arrays = [
+                        (output if path == output_scratch else array, path)
+                        for array, path in staged_arrays
+                    ]
                 written_path = ""
                 provenance_warning = None
                 disk_output_path = str(task.get("disk_output_path") or "").strip()
@@ -4315,6 +4534,9 @@ class ReformatWorker(QtCore.QThread):
                                 "reference_input_record_id": str(
                                     task.get("reference_input_record_id") or ""
                                 ),
+                                "transform_input_record_id": str(
+                                    task.get("transform_input_record_id") or ""
+                                ),
                                 "source_acquisition_id": str(
                                     task.get("source_acquisition_id") or ""
                                 ),
@@ -4349,15 +4571,21 @@ class ReformatWorker(QtCore.QThread):
                                     task.get("supporting_operations") or ()
                                 ),
                                 "result_transform_id": (
-                                    str(task.get("registration_id") or "")
-                                    + ":"
-                                    + str(task.get("registration_stage") or "")
-                                    if task.get("registration_id")
-                                    and task.get("registration_stage")
-                                    else ""
+                                    str(task.get("result_transform_id") or "")
+                                    or (
+                                        str(task.get("registration_id") or "")
+                                        + ":"
+                                        + str(task.get("registration_stage") or "")
+                                        if task.get("registration_id")
+                                        and task.get("registration_stage")
+                                        else ""
+                                    )
                                 ),
                                 "result_transform": copy.deepcopy(
-                                    task.get("transform") if not task.get("registration_operation_id") else None
+                                    task.get("transform")
+                                    if not task.get("registration_operation_id")
+                                    and not task.get("transform_input_record_id")
+                                    else None
                                 ),
                                 "engine": engine,
                                 "interpolation": interpolation,
@@ -4448,6 +4676,7 @@ class ReformatWorker(QtCore.QThread):
                     "registration_provenance": copy.deepcopy(
                         task.get("registration_provenance") or {}
                     ),
+                    "result_transform": copy.deepcopy(task.get("result_transform")),
                     "coordinate_space_id": str(task.get("coordinate_space_id") or ""),
                     "registration_id": str(task.get("registration_id") or ""),
                     "registration_stage": str(task.get("registration_stage") or ""),
@@ -4460,6 +4689,10 @@ class ReformatWorker(QtCore.QThread):
                     "reference_input_record_id": str(
                         task.get("reference_input_record_id") or ""
                     ),
+                    "transform_input_record_id": str(
+                        task.get("transform_input_record_id") or ""
+                    ),
+                    "result_transform_id": str(task.get("result_transform_id") or ""),
                     "scientific_operation_inputs": task.get(
                         "scientific_operation_inputs"
                     ),
@@ -4519,6 +4752,14 @@ class ReformatWorker(QtCore.QThread):
                     payload["data"] = output
                 pending_outputs.append(payload)
                 created += 1
+                if output_scratch:
+                    self._release_output(output, output_scratch)
+                    staged_arrays = [
+                        staged for staged in staged_arrays
+                        if staged[1] != output_scratch
+                    ]
+                self.tasks[task_index] = None
+                del data, frames, task, output
             self._check_cancel()
             completed = True
             for payload in pending_outputs:
@@ -4530,6 +4771,9 @@ class ReformatWorker(QtCore.QThread):
         except Exception:
             self.failed.emit(traceback.format_exc())
         finally:
+            retained_transform_artifacts.close()
+            for array, scratch_path in staged_arrays:
+                self._release_output(array, scratch_path)
             if not completed:
                 for path in reversed(published_files):
                     path.unlink(missing_ok=True)

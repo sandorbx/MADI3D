@@ -32,7 +32,9 @@ from madi3d_app.integrations.cmtk.xform import (
     read_affine_xform,
     write_affine_xform,
 )
+from madi3d_app.volume import nrrd_stream
 from madi3d_app.volume.geometry import direction_matrix3, finite_tuple3
+from madi3d_app.volume.scalars import prepare_volume_scalar_array, volume_runtime_dtype
 
 
 _METRIC_FLAGS = {
@@ -54,6 +56,7 @@ _LINEAR_ARTIFACT_NAMES = {
     "linear-initial.xform",
     "linear.pending.list",
     "linear.xform",
+    "affine-initializer.xform",
     "cmtk-linear-stdout.log",
     "cmtk-linear-stderr.log",
 }
@@ -208,6 +211,15 @@ class CMTKLinearRegistrationResult:
     stdout: str = ""
     stderr: str = ""
     affine_serialization_qc: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class CMTKAffineInitializationResult:
+    output_xform: Path
+    moving_to_reference: np.ndarray = field(repr=False)
+    command: tuple[str, ...] = field(default_factory=tuple)
+    cmtk_version: str = ""
+    mode: str = ""
 
 
 @dataclass(frozen=True)
@@ -372,23 +384,8 @@ def cmtk_neutral_to_working_matrix(
     return matrix4(world_to_working @ neutral_to_world)
 
 
-def _nrrd_scalar_array(array_zyx):
-    array = np.asarray(array_zyx)
-    if np.iscomplexobj(array):
-        raise TypeError("Complex-valued CMTK staging images are not supported.")
-    if array.dtype == np.bool_:
-        array = array.astype(np.uint8)
-    elif array.dtype == np.int8:
-        array = array.astype(np.int16)
-    elif array.dtype == np.float16:
-        array = array.astype(np.float32)
-    elif array.dtype not in _NRRD_TYPES:
-        if np.issubdtype(array.dtype, np.integer) or np.issubdtype(array.dtype, np.floating):
-            array = array.astype(np.float32)
-        else:
-            raise TypeError(f"Unsupported CMTK staging dtype: {array.dtype}")
-    dtype = np.dtype(array.dtype).newbyteorder("<")
-    return np.ascontiguousarray(array, dtype=dtype)
+# Maximum source or serialized chunk; conversion scratch is also chunk-bounded.
+NRRD_WRITE_CHUNK_BYTES = 1024 * 1024
 
 
 def _nrrd_header(dims_xyz, geometry, *, nrrd_type: str, encoding: str) -> bytes:
@@ -429,21 +426,32 @@ def write_volume_nrrd(
 ) -> Path:
     """Stage one scalar Z,Y,X image with exact MADI physical geometry."""
     output = Path(path)
-    source = np.asarray(array_zyx)
-    if force_float32:
-        source = np.asarray(source, dtype=np.float32)
-    array = _nrrd_scalar_array(source)
-    array, dims_xyz, geometry = _validated_grid(array, grid)
+    source, dims_xyz, geometry = _validated_grid(array_zyx, grid)
+    dtype = (np.dtype(np.float32) if force_float32 else
+             volume_runtime_dtype(source.dtype)).newbyteorder("<")
     header = _nrrd_header(
-        dims_xyz, geometry, nrrd_type=_NRRD_TYPES[np.dtype(array.dtype).newbyteorder("=")],
+        dims_xyz, geometry, nrrd_type=_NRRD_TYPES[dtype.newbyteorder("=")],
         encoding="raw",
     )
+    chunk_elements = max(1, NRRD_WRITE_CHUNK_BYTES // max(source.dtype.itemsize, dtype.itemsize))
+    # reshape is a view only on this route. flat slicing bounds the copy for
+    # arbitrary strides, including planes wider than the serialization budget.
+    flat = source.reshape(-1) if source.flags.c_contiguous else source.flat
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_name(output.name + ".tmp")
     try:
         with temporary.open("wb") as handle:
             handle.write(header)
-            handle.write(array.tobytes(order="C"))
+            for start in range(0, source.size, chunk_elements):
+                chunk = flat[start:start + chunk_elements]
+                if force_float32:
+                    chunk = np.asarray(chunk, dtype=np.float32)
+                else:
+                    chunk = prepare_volume_scalar_array(chunk)
+                chunk = np.ascontiguousarray(chunk, dtype=dtype)
+                handle.write(memoryview(chunk).cast("B"))
+                # Do not overlap conversion scratch with the next source chunk.
+                del chunk
         os.replace(temporary, output)
     except BaseException:
         temporary.unlink(missing_ok=True)
@@ -495,14 +503,19 @@ def write_working_nrrd(
 
 
 def read_nrrd_zyx(path: os.PathLike | str):
-    """Read a scalar NRRD as MADI's Z,Y,X array order."""
+    """Read a scalar NRRD as MADI's Z,Y,X array order.
+
+    Payload bytes traverse the bounded reader in
+    :mod:`madi3d_app.volume.nrrd_stream`, so a gzip CMTK output decompresses
+    straight into the single decoded array instead of a whole-file buffer.
+    """
     try:
-        import nrrd
+        import nrrd  # noqa: F401 - the pinned reader the bounded boundary needs
     except Exception as exc:
         raise RuntimeError(
             "CMTK Reformat requires pynrrd to read the generated NRRD output."
         ) from exc
-    array, header = nrrd.read(os.fspath(path), index_order="C")
+    array, header = nrrd_stream.read_nrrd(os.fspath(path), index_order="C")
     array = np.asarray(array)
     if array.ndim != 3:
         raise CMTKError(
@@ -512,18 +525,7 @@ def read_nrrd_zyx(path: os.PathLike | str):
 
 
 def cmtk_output_type_for_dtype(dtype) -> str:
-    dtype = np.dtype(dtype)
-    if dtype == np.bool_:
-        dtype = np.dtype(np.uint8)
-    elif dtype == np.int8:
-        dtype = np.dtype(np.int16)
-    elif dtype == np.float16:
-        dtype = np.dtype(np.float32)
-    elif dtype not in _CMTK_OUTPUT_TYPES:
-        if np.issubdtype(dtype, np.integer) or np.issubdtype(dtype, np.floating):
-            dtype = np.dtype(np.float32)
-        else:
-            raise TypeError(f"Unsupported CMTK output dtype: {dtype}")
+    dtype = prepare_volume_scalar_array(np.empty(0, dtype=dtype)).dtype
     return _CMTK_OUTPUT_TYPES[dtype]
 
 
@@ -537,6 +539,7 @@ def build_reformatx_args(
     interpolation: str = "linear",
     output_type: Optional[str] = None,
     pad_out: float = 0.0,
+    threads: Optional[int] = None,
 ) -> list[str]:
     """Build argv for CMTK ``reformatx`` using an ordered transform chain."""
     interpolation_key = str(interpolation or "linear").lower()
@@ -553,6 +556,8 @@ def build_reformatx_args(
         "--interpolation", _REFORMAT_INTERPOLATION[interpolation_key],
         "--pad-out", _number(pad_out),
     ]
+    if threads is not None:
+        args += ["--threads", str(_exact_int("CMTK threads", threads, minimum=1))]
     if output_type:
         output_value = str(output_type).lower()
         allowed = {"char", "byte", "short", "ushort", "int", "uint", "float", "double"}
@@ -564,10 +569,14 @@ def build_reformatx_args(
         "--floating", backend.translate_path(os.fspath(floating_image)),
         backend.translate_path(os.fspath(reference_image)),
     ]
-    args += [
-        backend.translate_path(os.fspath(value))
-        for value in transform_values
-    ]
+    for value in transform_values:
+        if isinstance(value, tuple):
+            value, inverse = value
+            if not isinstance(inverse, (bool, np.bool_)):
+                raise ValueError("CMTK transform inverse flags must be boolean.")
+            if inverse:
+                args.append("--inverse")
+        args.append(backend.translate_path(os.fspath(value)))
     return args
 
 
@@ -909,6 +918,24 @@ def verify_artifact_bundle(bundle_dir: os.PathLike | str) -> dict:
     }
 
 
+def _windows_bundle_root_limit(source: dict) -> int:
+    # Win32 MAX_PATH includes the terminating NUL. Directory creation also
+    # needs room for an 8.3 filename. Reserve space for the actual copied tree.
+    file_limit, directory_limit = 259, 248
+    limit = file_limit - len("/manifest.json")
+    if source["stdout_log"] or source["stderr_log"]:
+        limit = file_limit - len("/cmtk-stdout.log")
+    warp = source["warp_xform"]
+    if warp.is_dir():
+        limit = min(limit, directory_limit - len("/warp.xform"))
+        for child in warp.rglob("*"):
+            relative = Path("warp.xform") / child.relative_to(warp)
+            units = len(os.fspath(relative).encode("utf-16-le", "surrogatepass")) // 2
+            member_limit = directory_limit if child.is_dir() else file_limit
+            limit = min(limit, member_limit - 1 - units)
+    return limit
+
+
 def persist_artifact_bundle(
     source_bundle: os.PathLike | str,
     destination_dir: os.PathLike | str,
@@ -916,11 +943,25 @@ def persist_artifact_bundle(
     """Copy only portable CMTK transform artifacts into project-owned storage."""
     source = verify_artifact_bundle(source_bundle)
     destination = Path(destination_dir).resolve()
+    root_limit = _windows_bundle_root_limit(source) if os.name == "nt" else None
+
+    def check_path(path: Path) -> None:
+        if (
+            root_limit is not None
+            and len(str(path).encode("utf-16-le", "surrogatepass")) // 2 > root_limit
+        ):
+            raise CMTKError(
+                "The CMTK transform bundle path is too long for Windows. "
+                f"Choose a shorter output directory or filename: {destination}"
+            )
+
+    check_path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(
-        prefix=destination.name + ".tmp-", dir=os.fspath(destination.parent)
+        prefix=".cmtk-", dir=os.fspath(destination.parent)
     ))
     try:
+        check_path(temporary)
         shutil.copy2(source["affine_xform"], temporary / "affine.xform")
         warp_target = temporary / "warp.xform"
         if source["warp_xform"].is_dir():
@@ -932,7 +973,7 @@ def persist_artifact_bundle(
             path = source.get(key)
             if path is not None and Path(path).is_file():
                 shutil.copy2(path, temporary / name)
-        verified = verify_artifact_bundle(temporary)
+        verify_artifact_bundle(temporary)
         if destination.exists():
             if destination.is_dir():
                 shutil.rmtree(destination)
@@ -957,7 +998,13 @@ class CMTKRegistrationRunner:
 
     REQUIRED_TOOLS = ("mat2dof", "dof2mat", "warp", "describe", "reformatx")
     LINEAR_REQUIRED_TOOLS = ("mat2dof", "dof2mat", "registration", "describe")
-    REFORMAT_REQUIRED_TOOLS = ("reformatx",)
+    # Reformat does not send a stored transform straight to ``reformatx``. Each
+    # frame first serializes two CMTK-space bridge affines with ``mat2dof`` and
+    # verifies each one through ``dof2mat``, so all three executables are genuine
+    # Reformat dependencies.
+    REFORMAT_REQUIRED_TOOLS = ("reformatx", "mat2dof", "dof2mat")
+    # Jacobian QC runs ``reformatx`` alone; it neither writes nor reads an affine.
+    JACOBIAN_REQUIRED_TOOLS = ("reformatx",)
 
     def __init__(self, backend, *, executor=run_cmtk_streaming):
         self.backend = backend
@@ -1035,6 +1082,111 @@ class CMTKRegistrationRunner:
             )
         return process_error(proc)
 
+    def run_affine_initializer(
+        self,
+        *,
+        reference_image: os.PathLike | str,
+        floating_image: os.PathLike | str,
+        workspace: os.PathLike | str,
+        mode: str = "centers_of_mass",
+        pull_chain=(),
+        threads: int = 1,
+        on_command: Optional[Callable[[tuple[str, ...]], None]] = None,
+        on_stdout: Optional[Callable[[str], None]] = None,
+        on_stderr: Optional[Callable[[str], None]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
+        timeout: Optional[float] = None,
+    ) -> CMTKAffineInitializationResult:
+        """Create a native CMTK affine initializer for one image pair.
+
+        ``centers_of_mass`` uses CMTK's native image-moment initializer.
+        ``previous_mapping_affine_fit`` asks CMTK to fit one affine to the
+        supplied reference-to-floating pull chain. The latter is an explicit
+        affine approximation to a possibly nonlinear mapping, not the full
+        mapping used for final resampling.
+        """
+        mode = str(mode or "").strip().lower()
+        if mode not in {"centers_of_mass", "previous_mapping_affine_fit"}:
+            raise ValueError(f"Unsupported CMTK affine initializer mode: {mode}")
+        reference = Path(reference_image).resolve()
+        floating = Path(floating_image).resolve()
+        if not reference.is_file():
+            raise FileNotFoundError(f"CMTK reference image does not exist: {reference}")
+        if not floating.is_file():
+            raise FileNotFoundError(f"CMTK floating image does not exist: {floating}")
+        thread_count = _exact_int("CMTK threads", threads, minimum=1)
+
+        chain = []
+        for value in tuple(pull_chain or ()):
+            if isinstance(value, tuple):
+                if len(value) != 2:
+                    raise ValueError("Each pull transform must be a path or (path, inverse) pair.")
+                path, inverse = value
+                if not isinstance(inverse, (bool, np.bool_)):
+                    raise ValueError("Pull transform inverse flags must be boolean.")
+            else:
+                path, inverse = value, False
+            path = Path(path).resolve()
+            if not path.exists():
+                raise FileNotFoundError(f"CMTK pull transform does not exist: {path}")
+            chain.append((path, bool(inverse)))
+        if mode == "centers_of_mass" and chain:
+            raise ValueError("The centers-of-mass initializer does not accept a pull chain.")
+        if mode == "previous_mapping_affine_fit" and not chain:
+            raise ValueError("Fitting a previous mapping requires a non-empty pull chain.")
+
+        tool = "make_initial_affine" if mode == "centers_of_mass" else "fit_affine_xform"
+        work = Path(workspace).resolve()
+        work.mkdir(parents=True, exist_ok=True)
+        output = work / "affine-initializer.xform"
+        _clear_linear_artifact(work, output.name)
+        try:
+            _tool_details, cmtk_version = self._validate_tools((tool,))
+            if mode == "centers_of_mass":
+                args = ["--centers-of-mass",
+                        self.backend.translate_path(os.fspath(reference)),
+                        self.backend.translate_path(os.fspath(floating)),
+                        self.backend.translate_path(os.fspath(output))]
+            else:
+                args = ["--threads", str(thread_count), "--affine", "--output",
+                        self.backend.translate_path(os.fspath(output)),
+                        self.backend.translate_path(os.fspath(reference))]
+                for path, inverse in chain:
+                    if inverse:
+                        args.append("--inverse")
+                    args.append(self.backend.translate_path(os.fspath(path)))
+
+            result = self.executor(
+                self.backend,
+                tool,
+                args,
+                on_command=on_command,
+                on_stdout=on_stdout,
+                on_stderr=on_stderr,
+                cancel_check=cancel_check,
+                timeout=timeout,
+                check=True,
+            )
+            if not output.is_file() or output.stat().st_size <= 0:
+                raise CMTKError(
+                    f"CMTK {tool} returned without writing a valid affine initializer: {output}"
+                )
+            self._validate_transform(output)
+            moving_to_reference = matrix4(
+                read_affine_xform(self.backend, output, direction="madi", timeout=60)
+            )
+            return CMTKAffineInitializationResult(
+                output_xform=output,
+                moving_to_reference=np.asarray(moving_to_reference, dtype=np.float64).copy(),
+                command=tuple(result.command),
+                cmtk_version=cmtk_version,
+                mode=mode,
+            )
+        except BaseException:
+            if getattr(self.backend, "managed_processes_finished", True):
+                _clear_linear_artifact(work, output.name)
+            raise
+
     def run_linear(
         self,
         *,
@@ -1045,6 +1197,7 @@ class CMTKRegistrationRunner:
         floating_grid: dict,
         workspace: os.PathLike | str,
         settings: CMTKLinearSettings,
+        on_command: Optional[Callable[[tuple[str, ...]], None]] = None,
         on_stdout: Optional[Callable[[str], None]] = None,
         on_stderr: Optional[Callable[[str], None]] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
@@ -1126,6 +1279,7 @@ class CMTKRegistrationRunner:
                     self.backend,
                     "registration",
                     args,
+                    on_command=on_command,
                     on_stdout=stdout_tee,
                     on_stderr=stderr_tee,
                     cancel_check=cancel_check,
@@ -1171,11 +1325,12 @@ class CMTKRegistrationRunner:
             )
             _clear_linear_artifact(work, "linear.pending.list")
         except BaseException:
-            for name in ("linear-initial.xform", "linear.pending.list", "linear.xform"):
-                try:
-                    _clear_linear_artifact(work, name)
-                except Exception:
-                    pass
+            if getattr(self.backend, "managed_processes_finished", True):
+                for name in ("linear-initial.xform", "linear.pending.list", "linear.xform"):
+                    try:
+                        _clear_linear_artifact(work, name)
+                    except Exception:
+                        pass
             raise
 
         return CMTKLinearRegistrationResult(
@@ -1206,6 +1361,7 @@ class CMTKRegistrationRunner:
         output_image: os.PathLike | str,
         correct_global: bool = True,
         threads: int = 1,
+        on_command: Optional[Callable[[tuple[str, ...]], None]] = None,
         on_stdout: Optional[Callable[[str], None]] = None,
         on_stderr: Optional[Callable[[str], None]] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
@@ -1232,7 +1388,7 @@ class CMTKRegistrationRunner:
             if output.is_dir():
                 raise CMTKError(f"Refusing to replace directory with Jacobian map: {output}")
             output.unlink()
-        self._validate_tools(self.REFORMAT_REQUIRED_TOOLS)
+        self._validate_tools(self.JACOBIAN_REQUIRED_TOOLS)
         args = build_jacobian_args(
             self.backend,
             reference,
@@ -1245,6 +1401,7 @@ class CMTKRegistrationRunner:
             self.backend,
             "reformatx",
             args,
+            on_command=on_command,
             on_stdout=on_stdout,
             on_stderr=on_stderr,
             cancel_check=cancel_check,
@@ -1275,6 +1432,8 @@ class CMTKRegistrationRunner:
         interpolation: str = "linear",
         output_type: Optional[str] = None,
         pad_out: float = 0.0,
+        threads: Optional[int] = None,
+        on_command: Optional[Callable[[tuple[str, ...]], None]] = None,
         on_stdout: Optional[Callable[[str], None]] = None,
         on_stderr: Optional[Callable[[str], None]] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
@@ -1287,7 +1446,11 @@ class CMTKRegistrationRunner:
             if isinstance(xforms, (str, os.PathLike))
             else list(xforms or ())
         )
-        transforms = [Path(value).resolve() for value in transform_values]
+        transforms = [
+            (Path(value[0]).resolve(), value[1]) if isinstance(value, tuple)
+            else Path(value).resolve()
+            for value in transform_values
+        ]
         output = Path(output_image).resolve()
         if not reference.is_file():
             raise FileNotFoundError(f"CMTK reference image does not exist: {reference}")
@@ -1296,6 +1459,8 @@ class CMTKRegistrationRunner:
         if not transforms:
             raise ValueError("CMTK reformat requires at least one transform.")
         for transform in transforms:
+            if isinstance(transform, tuple):
+                transform = transform[0]
             if not transform.exists():
                 raise FileNotFoundError(f"CMTK transform does not exist: {transform}")
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -1307,11 +1472,13 @@ class CMTKRegistrationRunner:
         args = build_reformatx_args(
             self.backend, reference, floating, transforms, output,
             interpolation=interpolation, output_type=output_type, pad_out=pad_out,
+            threads=threads,
         )
         result = self.executor(
             self.backend,
             "reformatx",
             args,
+            on_command=on_command,
             on_stdout=on_stdout,
             on_stderr=on_stderr,
             cancel_check=cancel_check,
@@ -1335,6 +1502,7 @@ class CMTKRegistrationRunner:
         floating_grid: dict,
         workspace: os.PathLike | str,
         settings: CMTKWarpSettings,
+        on_command: Optional[Callable[[tuple[str, ...]], None]] = None,
         on_stdout: Optional[Callable[[str], None]] = None,
         on_stderr: Optional[Callable[[str], None]] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
@@ -1432,6 +1600,7 @@ class CMTKRegistrationRunner:
                     self.backend,
                     "warp",
                     args,
+                    on_command=on_command,
                     on_stdout=stdout_tee,
                     on_stderr=stderr_tee,
                     cancel_check=cancel_check,
@@ -1532,7 +1701,9 @@ class CMTKRegistrationRunner:
             tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             atomic_replace(tmp, manifest)
 
-        except BaseException:
+        except BaseException as exc:
+            if execution_warp_path is not None and not getattr(self.backend, "managed_processes_finished", True):
+                exc.retained_native_workspaces = (execution_warp_path,)
             for name in (
                 "affine.pending.xform",
                 "warp.pending.xform",
@@ -1541,13 +1712,14 @@ class CMTKRegistrationRunner:
                 "manifest.json",
                 "manifest.json.tmp",
             ):
-                try:
-                    _clear_artifact(work, name)
-                except Exception:
-                    pass
+                if getattr(self.backend, "managed_processes_finished", True):
+                    try:
+                        _clear_artifact(work, name)
+                    except Exception:
+                        pass
             raise
         finally:
-            if execution_warp_path is not None:
+            if execution_warp_path is not None and getattr(self.backend, "managed_processes_finished", True):
                 try:
                     self.backend.remove_execution_temp_dir(execution_warp_path)
                 except Exception as cleanup_exc:

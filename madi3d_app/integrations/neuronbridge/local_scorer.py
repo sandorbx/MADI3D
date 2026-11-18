@@ -1,6 +1,6 @@
 """Positive CDS, translated from Janelia's pinned mipsearch.js (BSD-3-Clause).
 
-See docs/licenses/neuronbridge-services.txt. No image conversion, GUI or I/O.
+See LICENSES/neuronbridge-services.txt. No image conversion, GUI or I/O.
 The ratio gaps deliberately retain the reference's signed boundary values and
 strict component comparisons, including its treatment of equal components.
 """
@@ -120,9 +120,12 @@ def pixel_gaps(query_rgb, candidate_rgb):
 
 
 def shifts(xy_shift):
-    # Janelia includes (0,0) in each radius, with x outermost and y innermost.
-    return tuple((x, y) for radius in range(2, xy_shift + 1, 2)
-                 for x in (-radius, 0, radius) for y in (-radius, 0, radius)) if xy_shift else ((0, 0),)
+    # Keep Janelia's first-occurrence order without rescoring identical offsets.
+    if not xy_shift:
+        return ((0, 0),)
+    offsets = ((x, y) for radius in range(2, xy_shift + 1, 2)
+               for x in (-radius, 0, radius) for y in (-radius, 0, radius))
+    return tuple(dict.fromkeys(offsets))
 
 
 @dataclass(frozen=True)
@@ -132,6 +135,15 @@ class Score:
     overlap_fraction: float
     mirrored: bool
     shift: tuple[int, int] | None
+
+
+def query_foreground(rgb, threshold, profile=BRAIN):
+    height, width = rgb.shape[:2]
+    foreground = np.any(rgb > threshold, axis=2)
+    for anchor, x, y, w, h in profile.score_exclusions:
+        left = x if anchor == "left" else width - x - w
+        foreground[max(0, y):min(height, y + h), max(0, left):min(width, left + w)] = False
+    return foreground
 
 
 class PreparedQuery:
@@ -145,16 +157,56 @@ class PreparedQuery:
         checkpoint(cancel)
         self.parameters, self.shape = parameters, rgb.shape
         height, width = rgb.shape[:2]
-        foreground = np.any(rgb > parameters.query_threshold, axis=2)
-        for anchor, x, y, w, h in (self.profile or BRAIN).score_exclusions:
-            left = x if anchor == "left" else width - x - w
-            foreground[max(0, y):min(height, y + h), max(0, left):min(width, left + w)] = False
+        foreground = query_foreground(rgb, parameters.query_threshold, self.profile or BRAIN)
         self.positions = np.flatnonzero(foreground).astype(np.int32)
         if not len(self.positions):
             raise ValueError("The query has no foreground above its threshold outside the label regions.")
         pixels = rgb.reshape(-1, 3)[self.positions]
         self.sectors, self.ratios = _sectors(pixels)
         self.foreground_count = len(self.positions)
+        self.query_index = np.full(height * width, -1, dtype=np.int32)
+        self.query_index[self.positions] = np.arange(self.foreground_count, dtype=np.int32)
+        # Scoring reads these arrays without modifying the prepared query.
+        for array in (self.positions, self.sectors, self.ratios, self.query_index):
+            array.setflags(write=False)
+
+    def score_sparse(self, candidate_positions, candidate_rgb, cancel=None):
+        """Score trusted sparse pixels candidate-first with bounded temporaries."""
+        parameters = self.parameters
+        height, width = self.shape[:2]
+        transforms = tuple((mirror, dx, dy)
+                           for mirror in ((False, True) if parameters.mirror else (False,))
+                           for dx, dy in shifts(parameters.xy_shift))
+        counts = [0] * len(transforms)
+        for start in range(0, len(candidate_positions), PIXEL_BLOCK):
+            checkpoint(cancel)
+            pixels = candidate_rgb[start:start + PIXEL_BLOCK]
+            active = np.any(pixels > parameters.candidate_threshold, axis=1)
+            positions = candidate_positions[start:start + PIXEL_BLOCK][active].astype(np.int32)
+            sectors = ratios = None
+            x, y = positions % width, positions // width
+            for index, (mirror, dx, dy) in enumerate(transforms):
+                checkpoint(cancel)
+                qx = (width - 1 - x if mirror else x) - dx
+                qy = y - dy
+                valid = (qx >= 0) & (qx < width) & (qy >= 0) & (qy < height)
+                slots = np.flatnonzero(valid)
+                query = self.query_index[qy[valid] * width + qx[valid]]
+                overlap = query >= 0
+                query, slots = query[overlap], slots[overlap]
+                if len(query):
+                    # Blocks with no foreground overlap need no color math;
+                    # otherwise compute candidate colors once for all transforms.
+                    if sectors is None:
+                        sectors, ratios = _sectors(pixels[active])
+                    gaps = _gaps(self.sectors[query], self.ratios[query], sectors[slots], ratios[slots])
+                    counts[index] += int(np.count_nonzero(gaps <= parameters.color_tolerance_percent / 100.))
+        best, chosen, mirrored = 0, None, False
+        for count, (mirror, dx, dy) in zip(counts, transforms):
+            if count > best:
+                best, chosen, mirrored = count, (dx, dy), mirror
+        checkpoint(cancel)
+        return Score(best, self.foreground_count, best / self.foreground_count, mirrored, chosen)
 
     def score(self, candidate, cancel=None):
         validate_rgb(candidate, self.profile)

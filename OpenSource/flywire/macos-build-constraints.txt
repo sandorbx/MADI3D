@@ -1,0 +1,7 @@
+# gevent 26.9.0 and cryptography 50.0.2 isolated build dependencies on macOS.
+setuptools==82.0.1
+Cython==3.2.4
+cffi==2.1.1
+greenlet==3.5.6
+pycparser==3.11
+maturin==1.14.1

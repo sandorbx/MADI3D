@@ -8,6 +8,8 @@ from .records import (
     ChannelSelection,
     CSVProvenance,
     Diagnostic,
+    GradientExecution,
+    GradientObservation,
     ImageIdentity,
     MatchOccurrence,
     HitMetric,
@@ -17,11 +19,12 @@ from .records import (
     SearchSession,
     SourceIdentity,
     SourceParameter,
+    gradient_membership_digest,
 )
 
 __all__ = [
     "SCHEMA_VERSION", "AssetIdentity", "BiologicalIdentity", "ChannelSelection",
-    "CSVProvenance", "Diagnostic", "ImageIdentity", "MatchOccurrence", "HitMetric",
+    "CSVProvenance", "Diagnostic", "GradientExecution", "GradientObservation", "ImageIdentity", "MatchOccurrence", "HitMetric",
     "NeuronBridgeRecordError", "ResultField", "SearchResults", "SearchSession",
-    "SourceIdentity", "SourceParameter", "parse_neuronbridge_csv", "read_neuronbridge_csv",
+    "SourceIdentity", "SourceParameter", "gradient_membership_digest", "parse_neuronbridge_csv", "read_neuronbridge_csv",
 ]
